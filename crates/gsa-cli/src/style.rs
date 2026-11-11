@@ -108,13 +108,26 @@ pub fn resolve(
     }
 }
 
+/// True when `TERM` names a terminal that cannot do colour or cursor
+/// control: unset, empty, `dumb`, or `unknown`.
+///
+/// `unknown` is what `sudo` substitutes for an UNSET `TERM` (`env -u TERM
+/// sudo …` reports `TERM=unknown`), so a serial console or a `systemd-run`
+/// session used to get the full colour ladder and the cursor-driving
+/// dashboard on a terminal that implements neither, leaving a scrambled
+/// screen after every frame (blind-review 2026-11-11, keyboard-accessibility).
+pub fn term_is_dumb() -> bool {
+    match std::env::var("TERM") {
+        Ok(term) => term.is_empty() || term == "dumb" || term == "unknown",
+        Err(_) => true,
+    }
+}
+
 /// Resolve and pin the seam once, at dispatch, beside `output::set_mode`.
 pub fn init(choice: ColorChoice) {
     let human = crate::output::is_human();
     let tty = std::io::stdout().is_terminal();
-    let term_dumb = std::env::var("TERM")
-        .map(|term| term.is_empty() || term == "dumb")
-        .unwrap_or(true);
+    let term_dumb = term_is_dumb();
     let no_color = std::env::var_os("NO_COLOR")
         .map(|value| !value.is_empty())
         .unwrap_or(false);
@@ -186,14 +199,106 @@ pub fn styled(role: Role, text: impl Into<String>) -> String {
     paint(role, &text).into_owned()
 }
 
+/// The width of the terminal the user is READING (stdout's tty), in columns:
+/// `$COLUMNS` first (the explicit override), then `stty` against the
+/// controlling terminal.
+///
+/// `stty size` inherits fd 0, so a redirected stdin (`< /dev/null`, `xargs`,
+/// `vim :!`) made every probe miss the real terminal and the layout fell back
+/// to 80 columns — the table then soft-wrapped into two on a 40-column screen
+/// (blind-review 2026-11-11, keyboard-accessibility). `tput cols` is not
+/// consulted either: this app captures its own stdout, so tput cannot see a
+/// terminal and answers its 80-column default.
+pub fn terminal_width() -> Option<usize> {
+    if let Ok(cols) = std::env::var("COLUMNS") {
+        if let Ok(n) = cols.trim().parse::<usize>() {
+            if n > 0 {
+                return Some(n);
+            }
+        }
+    }
+    for device in ["/dev/tty", "/proc/self/fd/1"] {
+        let Ok(out) = std::process::Command::new("stty")
+            .arg("-F")
+            .arg(device)
+            .arg("size")
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        if let Some(cols) = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .nth(1)
+            .and_then(|cols| cols.parse::<usize>().ok())
+            .filter(|cols| *cols > 0)
+        {
+            return Some(cols);
+        }
+    }
+    None
+}
+
+/// The DISPLAY CELLS one character occupies: 0 for a combining mark, 2 for
+/// an East Asian Wide/Fullwidth character, 1 otherwise.
+///
+/// Counting `chars()` budgeted every CJK glyph as one column, so a `-Qi`
+/// description wrapped to 40 columns rendered 60–70 cells and overflowed
+/// every terminal (blind-review 2026-11-11, keyboard-accessibility). The
+/// ranges are the East Asian Width `W`/`F` classes plus the combining-mark
+/// blocks; no dependency is pulled in for them.
+fn cell_width(ch: char) -> usize {
+    let cp = ch as u32;
+    // Combining marks: the mark hangs off the previous cell.
+    if (0x0300..=0x036F).contains(&cp)
+        || (0x0483..=0x0489).contains(&cp)
+        || (0x0591..=0x05BD).contains(&cp)
+        || (0x0610..=0x061A).contains(&cp)
+        || (0x064B..=0x065F).contains(&cp)
+        || (0x1AB0..=0x1AFF).contains(&cp)
+        || (0x1DC0..=0x1DFF).contains(&cp)
+        || (0x20D0..=0x20FF).contains(&cp)
+        || (0xFE20..=0xFE2F).contains(&cp)
+    {
+        return 0;
+    }
+    // East Asian Wide (W) and Fullwidth (F).
+    if (0x1100..=0x115F).contains(&cp)
+        || (0x2E80..=0x303E).contains(&cp)
+        || (0x3041..=0x33FF).contains(&cp)
+        || (0x3400..=0x4DBF).contains(&cp)
+        || (0x4E00..=0x9FFF).contains(&cp)
+        || (0xA000..=0xA4CF).contains(&cp)
+        || (0xA960..=0xA97F).contains(&cp)
+        || (0xAC00..=0xD7A3).contains(&cp)
+        || (0xF900..=0xFAFF).contains(&cp)
+        || (0xFE10..=0xFE19).contains(&cp)
+        || (0xFE30..=0xFE6F).contains(&cp)
+        || (0xFF00..=0xFF60).contains(&cp)
+        || (0xFFE0..=0xFFE6).contains(&cp)
+        || (0x1B000..=0x1B001).contains(&cp)
+        || (0x1F200..=0x1F251).contains(&cp)
+        || (0x1F300..=0x1F64F).contains(&cp)
+        || (0x1F900..=0x1F9FF).contains(&cp)
+        || (0x20000..=0x3FFFD).contains(&cp)
+    {
+        return 2;
+    }
+    1
+}
+
 /// Visible columns: escape sequences (CSI, and the two-byte `ESC x` forms a
-/// terminal may echo) consume no width.
+/// terminal may echo) consume no width, and a wide glyph takes its real two
+/// cells (see [`cell_width`]).
 pub fn visible_width(text: &str) -> usize {
     let mut width = 0;
     let mut chars = text.chars();
     while let Some(ch) = chars.next() {
         if ch != '\x1b' {
-            width += 1;
+            width += cell_width(ch);
             continue;
         }
         match chars.next() {
@@ -341,11 +446,13 @@ pub fn split_visible(text: &str, budget: usize) -> (String, String) {
             }
             continue;
         }
-        if visible == budget {
+        // A wide glyph that does not fit whole goes to the tail: half a
+        // glyph is not a cell budget the terminal honours.
+        if visible + cell_width(ch) > budget {
             return (head, text[offset..].to_string());
         }
         head.push(ch);
-        visible += 1;
+        visible += cell_width(ch);
     }
     (head, String::new())
 }
@@ -376,11 +483,11 @@ fn truncate_visible(text: &str, budget: usize, tail: &str) -> String {
             }
             continue;
         }
-        if visible == budget {
+        if visible + cell_width(ch) > budget {
             break;
         }
         out.push(ch);
-        visible += 1;
+        visible += cell_width(ch);
     }
     out.push_str(tail);
     if saw_escape {
@@ -415,6 +522,22 @@ mod tests {
             assert_eq!(paint(Role::Fail, "FAILED"), "FAILED");
             assert!(!enabled());
         }
+    }
+
+    #[test]
+    fn a_wide_glyph_costs_two_cells_and_a_combining_mark_none() {
+        // Counting chars overflowed every budget by 2x on CJK text.
+        assert_eq!(visible_width("中文"), 4);
+        assert_eq!(visible_width("ab中"), 4);
+        assert_eq!(visible_width("e\u{0301}"), 1);
+        // fit/pad budget in cells.
+        assert!(visible_width(&fit("中文中文", 5)) <= 4);
+        assert_eq!(pad("中", 3), "中 ");
+        assert_eq!(pad_left("中", 3), " 中");
+        // A split never keeps half a glyph.
+        let (head, rest) = split_visible("文中中", 3);
+        assert_eq!((head.as_str(), rest.as_str()), ("文", "中中"));
+        assert_eq!(visible_width(&head), 2);
     }
 
     #[test]

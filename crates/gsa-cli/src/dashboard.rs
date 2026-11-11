@@ -27,12 +27,10 @@ use crate::render::fmt_dur;
 use crate::style::{self, Role};
 
 /// The dashboard gate (fish `_OUTPUT_INTERACTIVE`): stdout is a terminal and
-/// `TERM` is set and is not `dumb`.
+/// `TERM` names one that implements cursor control (`dumb`/`unknown`/unset
+/// do not — one predicate, `style::term_is_dumb`).
 pub fn tty_enabled() -> bool {
-    std::io::stdout().is_terminal()
-        && std::env::var("TERM")
-            .map(|term| !term.is_empty() && term != "dumb")
-            .unwrap_or(false)
+    std::io::stdout().is_terminal() && !style::term_is_dumb()
 }
 
 /// Strip terminal controls before log text reaches the box (fish
@@ -71,36 +69,12 @@ fn fit(text: &str, width: usize) -> String {
     crate::style::fit(text, width)
 }
 
-/// The terminal width: `stty size` (the real terminal, read from fd 0),
-/// then `COLUMNS`, then 80 — floored at 20. `tput cols` is NOT consulted:
-/// this app captures its own stdout, so tput cannot see a terminal and
-/// answers its 80-column default even on a 40-column pty. Probed once per
-/// view (a mid-run resize refits on the next run; recorded deviation in
-/// docs/gsa-contract.md §L).
+/// The terminal width, floored at 20: the ONE probe in `style` (stdout's
+/// tty, never fd 0 — a redirected stdin lost the real size) with the
+/// dashboard's 80-column fallback. Probed once per view (a mid-run resize
+/// refits on the next run; recorded deviation in docs/gsa-contract.md §L).
 pub(crate) fn terminal_width() -> usize {
-    let width = std::process::Command::new("stty")
-        .arg("size")
-        // `output()` would give stty a null stdin, and stty reads the
-        // terminal from fd 0 — the width must come from the real tty.
-        .stdin(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .and_then(|out| {
-            let text = String::from_utf8_lossy(&out.stdout);
-            text.split_whitespace()
-                .nth(1)
-                .and_then(|cols| cols.parse::<usize>().ok())
-        })
-        .filter(|cols| *cols > 0)
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .filter(|cols| *cols > 0)
-        })
-        .unwrap_or(80);
-    width.max(20)
+    crate::style::terminal_width().unwrap_or(80).max(20)
 }
 
 fn now_epoch() -> u64 {
@@ -331,15 +305,38 @@ impl View {
         } else {
             ("RUNNING", '→', Role::Info)
         };
-        let mut rows = vec![format!(
-            "{} {}/{} started | {} done | {} failed | {}",
-            style::styled(Role::Bold, "Progress:"),
-            self.progress.dispatched(),
-            total,
-            succeeded,
-            failed,
-            style::styled(role, format!("{icon} {state}"))
-        )];
+        // The STATE is the one field a reader cannot infer from the others,
+        // so width pressure drops the redundant words and never the state:
+        // `fit()`-truncating the tail turned `✗ FAILED` into `✗ F...` (or cut
+        // it entirely), and a console user saw a failing run look fine
+        // (blind-review 2026-11-11, keyboard-accessibility).
+        let label = style::styled(Role::Bold, "Progress:");
+        let state_text = style::styled(role, format!("{icon} {state}"));
+        let dispatched = self.progress.dispatched();
+        // One cell stays unused (the terminal's pending-wrap state); a box
+        // view (width 0) is fitted by its own frame.
+        let budget = if self.width >= 20 {
+            self.width - 1
+        } else {
+            usize::MAX
+        };
+        let mut progress = format!(
+            "{label} {dispatched}/{total} started | {succeeded} done | {failed} failed | {state_text}"
+        );
+        if style::visible_width(&progress) > budget {
+            progress = format!(
+                "{label} {dispatched}/{total} | {succeeded} done | {failed} failed | {state_text}"
+            );
+        }
+        if style::visible_width(&progress) > budget {
+            progress = format!("{label} {dispatched}/{total} | {state_text}");
+        }
+        if style::visible_width(&progress) > budget {
+            // Below ~25 columns the label itself is the redundant word: the
+            // state leads, the counts follow.
+            progress = format!("{state_text} {dispatched}/{total}");
+        }
+        let mut rows = vec![progress];
         for (i, lane) in self.lanes.iter().enumerate() {
             match &lane.pkg {
                 Some(pkg) => {
@@ -462,6 +459,41 @@ mod tests {
         assert!(fitted.ends_with("..."), "truncated rows say so: {fitted:?}");
         let fitted = fit(&long, 160);
         assert_eq!(fitted.chars().count(), 159, "one cell unused at 160 cols");
+    }
+
+    #[test]
+    fn a_narrow_progress_row_keeps_the_state_word() {
+        // A 40-column terminal at 2/3 with one failure: truncating the row
+        // tail cut `✗ FAILED` to `1 f...` (blind-review 2026-11-11).
+        let mut view = View::new(
+            false,
+            PathBuf::new(),
+            vec![id("p1"), id("p2"), id("p3")],
+            1,
+            Vec::new(),
+        );
+        view.width = 40;
+        let mut out = Vec::new();
+        view.handle(&started(0), "→ p1", &mut out);
+        view.handle(&started(1), "→ p2", &mut out);
+        view.handle(
+            &settled("p1", RowStatus::Succeeded, Some(0)),
+            "✓ p1 (1s)",
+            &mut out,
+        );
+        view.handle(
+            &settled("p2", RowStatus::Failed, Some(1)),
+            "✗ p2 (1s)",
+            &mut out,
+        );
+        let row = &view.rows_at(105)[0];
+        assert!(row.contains('✗') && row.contains("FAILED"), "{row:?}");
+        assert!(style::visible_width(row) <= 39, "{row:?}");
+        // The 20-column floor still keeps the state and the counts.
+        view.width = 20;
+        let row = &view.rows_at(105)[0];
+        assert!(row.contains("FAILED") && row.contains("2/3"), "{row:?}");
+        assert!(style::visible_width(row) <= 19, "{row:?}");
     }
 
     #[test]

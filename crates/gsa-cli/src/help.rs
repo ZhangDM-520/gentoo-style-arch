@@ -226,29 +226,11 @@ fn width() -> usize {
     }
 }
 
-/// Terminal width, fish-precedence chain: `$COLUMNS` (explicit user override),
-/// then `tput cols`, then None. A spawn here is fine — help renders once.
+/// Terminal width through the ONE probe (`style::terminal_width`): stdout's
+/// tty, `$COLUMNS` first. `tput cols` is not consulted — a captured stdout
+/// makes it answer its 80-column default even on a 40-column pty.
 fn terminal_width() -> Option<usize> {
-    if let Ok(cols) = std::env::var("COLUMNS") {
-        if let Ok(n) = cols.trim().parse::<usize>() {
-            if n > 0 {
-                return Some(n);
-            }
-        }
-    }
-    let out = std::process::Command::new("tput")
-        .arg("cols")
-        .output()
-        .ok()?;
-    let n = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<usize>()
-        .ok()?;
-    if n > 0 {
-        Some(n)
-    } else {
-        None
-    }
+    crate::style::terminal_width()
 }
 
 /// Greedy word wrap; embedded `\n` are hard breaks. A word longer than the

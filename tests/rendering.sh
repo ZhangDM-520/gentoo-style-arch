@@ -244,3 +244,35 @@ printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/e/listing.txt"
 column=$(awk '/ packages$/{print index($0, "packages")}' "$fixture/e/listing.txt" | sort -u | wc -l)
 [ "$column" -eq 1 ] \
     || fail "e: -Sl puts 'packages' in more than one column: $(cat "$fixture/e/listing.txt")"
+
+# ── f. a redirected stdin still fits the TERMINAL's width ─────────────────
+# `stty size` read fd 0, so `< /dev/null` (xargs, vim :!, a cron-ish runner)
+# laid an 80-column table onto a 40-column screen and every row soft-wrapped
+# (blind-review 2026-11-11, keyboard-accessibility).
+mkdir -p "$fixture/f"
+cat >"$fixture/f/run.sh" <<RUN
+#!/usr/bin/env bash
+set -eu
+stty cols 40 rows 24
+export PATH="$bin:\$PATH" GSA_CONF="$conf" GSA_STATE_DIR="$state"
+exec "$engine" -Q < /dev/null
+RUN
+chmod +x "$fixture/f/run.sh"
+TERM=xterm script -qec "$fixture/f/run.sh" /dev/null >"$fixture/f/out.raw" 2>&1
+tr -d '\r' <"$fixture/f/out.raw" >"$fixture/f/out.txt"
+while read -r width; do
+    [ "$width" -le 39 ] || fail "f: a redirected stdin rendered a $width-column row on a 40-column pty"
+done < <(visible_widths <"$fixture/f/out.txt")
+
+# ── g. TERM=unknown is the dumb rung, not colour + cursor control ─────────
+# `sudo` substitutes `unknown` for an UNSET TERM (`env -u TERM sudo …`), and
+# a serial console/systemd-run session has exactly that: it used to get the
+# full palette and the animated dashboard (blind-review 2026-11-11).
+mkdir -p "$fixture/g"
+run_pty "$fixture/g" 120 \
+    "export PATH=\"$bin:\$PATH\" GSA_CONF=\"$conf\" GSA_STATE_DIR=\"$state\"
+export TERM=unknown" 
+if grep -q $'\x1b\[' "$fixture/g/out.txt"; then
+    fail "g: TERM=unknown emitted an escape (colour or cursor control): $(cat "$fixture/g/out.txt")"
+fi
+assert_one_width "$fixture/g/out.txt" 'g (TERM=unknown)'

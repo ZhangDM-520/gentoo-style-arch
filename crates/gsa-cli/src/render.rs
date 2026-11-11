@@ -1162,11 +1162,20 @@ fn run_prose(
             // Blank-line separation (H3): the QA span is its own section.
             out.push('\n');
             if findings.is_empty() {
-                out.push_str(&style::styled(Role::Ok, "QA report (report-only): clean\n"));
+                // The newline stays OUTSIDE the paint: a copied row must not
+                // carry an unterminated colour into the next line
+                // (blind-review 2026-11-11, keyboard-accessibility).
+                out.push_str(&format!(
+                    "{}\n",
+                    style::styled(Role::Ok, "QA report (report-only): clean")
+                ));
             } else {
-                out.push_str(&style::styled(
-                    Role::Warn,
-                    format!("QA report (report-only): {} finding(s)\n", findings.len()),
+                out.push_str(&format!(
+                    "{}\n",
+                    style::styled(
+                        Role::Warn,
+                        format!("QA report (report-only): {} finding(s)", findings.len()),
+                    )
                 ));
                 for line in findings {
                     out.push_str(&format!("· {line}\n"));
