@@ -99,6 +99,12 @@ fn engine_command(ws: &Path, extra: &[(&str, &str)]) -> Command {
         std::env::var("PATH").unwrap()
     ));
     cmd.arg(format!("SRCDEST={}", ws.join("srcdest").display()));
+    // The fetch phase installs the lane makepkg composite under the build
+    // root BEFORE any lane exists. Without a per-test root the ROOT engine
+    // resolves the default one (a leftover root-owned `lane-makepkg-*.conf`
+    // in a shared tmp dir then breaks `gsa-fetch`'s own unprivileged unit
+    // test — measured 2026-11-11).
+    cmd.arg(format!("GSA_BUILD_DIR={}", ws.join("build").display()));
     cmd.arg(format!(
         "GSA_FAKE_FETCH_LOG={}",
         ws.join("fetch.log").display()
