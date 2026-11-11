@@ -404,8 +404,18 @@ pub fn home_from_passwd(passwd: &str, uid: u32) -> Option<PathBuf> {
 /// else `$HOME`, else the passwd home of the effective uid. Errors name the
 /// remedy instead of guessing a directory.
 pub fn build_user_home() -> Result<PathBuf, String> {
-    if let Ok(uid) = std::env::var("SUDO_UID") {
-        if let Ok(uid) = uid.trim().parse::<u32>() {
+    // A root `SUDO_UID` is not a build user (makepkg refuses root), so the
+    // home must not silently become `/root`: fall through to `HOME`, and the
+    // privilege gate refuses the run before any layout is resolved.
+    let sudo_uid = std::env::var("SUDO_UID")
+        .ok()
+        .map(|uid| uid.trim().to_string())
+        // Root is not a build user (makepkg refuses root): a `sudo -E`
+        // re-exec carrying SUDO_UID=0 must fall through to HOME, never
+        // silently make `/root` the build cache (blind-review 2026-11-11).
+        .filter(|uid| uid != "0");
+    if let Some(uid) = sudo_uid {
+        if let Ok(uid) = uid.parse::<u32>() {
             let passwd = std::fs::read_to_string("/etc/passwd")
                 .map_err(|e| format!("cannot read /etc/passwd to resolve SUDO_UID's home: {e}"))?;
             if let Some(home) = home_from_passwd(&passwd, uid) {

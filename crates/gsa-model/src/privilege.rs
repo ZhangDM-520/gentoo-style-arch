@@ -48,9 +48,20 @@ pub fn build_user() -> Option<BuildUser> {
 }
 
 /// The parse seam (testable without touching process env).
+///
+/// `uid 0` is NOT a build user: makepkg refuses to run as root, so a
+/// `SUDO_UID=0`/`SUDO_GID=0`/`SUDO_USER=root` triplet (a nested entrypoint or
+/// `sudo -E` re-exec) must fall back to the after-the-build-user verdict —
+/// the pre-dispatch privilege refusal naming the missing build user — rather
+/// than dropping to root and failing at the first `makepkg` as a generic
+/// `build-failed` with the cause only in the package log (blind-review
+/// 2026-11-11, ci-fleet-operator).
 fn build_user_from_env(uid: &str, gid: &str, name: Option<String>) -> Option<BuildUser> {
     let uid: u32 = uid.parse().ok()?;
     let gid: u32 = gid.parse().ok()?;
+    if uid == 0 {
+        return None;
+    }
     let name = name
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| uid.to_string());
@@ -171,6 +182,10 @@ mod tests {
         assert!(build_user_from_env("root", "root", None).is_none());
         assert!(build_user_from_env("-1", "0", None).is_none());
         assert!(build_user_from_env("1000", "", None).is_none());
+        // uid 0 is root, and makepkg refuses to run as root: a `sudo -E`
+        // re-exec carrying SUDO_UID=0 has NO build user, so the run must
+        // refuse before dispatch instead of dropping to root.
+        assert!(build_user_from_env("0", "0", Some("root".into())).is_none());
     }
 
     #[test]

@@ -21,6 +21,10 @@ set -euo pipefail
 #   g. a real `-B` run under sudo prints the ONE banner line and its makepkg
 #      child runs as the build user (docs/plans/plan-gsa-isolation.md test (c); the
 #      cache-placement half of that scenario lands with W4's build_dir).
+#   h. a `SUDO_*` triplet naming ROOT is not a build user (a nested
+#      entrypoint or `sudo -E` re-exec): the run refuses pre-dispatch with
+#      the build-user guidance instead of dropping to root and failing at
+#      the first makepkg as a generic build-failed.
 #
 # Sections c–e use real `sudo -n` (passwordless by the host contract) with
 # `env PATH="$PATH" …` so the stubs and knobs survive sudo's secure_path and
@@ -279,6 +283,37 @@ if [ -z "$only" ] || [ "$only" = g ]; then
             fail "g: the archive must land in the build cache: $(ls -R "$fixture/g" 2>&1)"
         [ ! -e "$ws/packages/misc/pkg1/pkg1-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "g: the archive must not land beside the recipe"
+    )
+fi
+
+# ── h. SUDO_* naming root is not a build user ───────────────────────────
+if [ -z "$only" ] || [ "$only" = h ]; then
+    (
+        ws="$fixture/h/ws"
+        state="$fixture/h/state"
+        log="$fixture/h/makepkg.log"
+        make_ws "$ws"
+        make_stubs "$fixture/h/bin"
+        set +e
+        FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env \
+            SUDO_UID=0 SUDO_GID=0 SUDO_USER=root \
+            PATH="$fixture/h/bin:$PATH" \
+            GSA_STATE_DIR="$state" \
+            GSA_BUILD_DIR="$fixture/h/cache" \
+            GSA_FAKE_MAKEPKG_LOG="$log" \
+            "$engine" -B pkg1 --state-dir "$state" 2>&1)
+        FIXTURE_RC=$?
+        set -e
+        [ "$FIXTURE_RC" -eq 3 ] \
+            || fail "h: SUDO_UID=0 must refuse pre-dispatch (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        case $FIXTURE_OUTPUT in
+        *'needs a build user'*) ;;
+        *) fail "h: the refusal must name the missing build user: $FIXTURE_OUTPUT" ;;
+        esac
+        if grep -q 'build-failed' <<<"$FIXTURE_OUTPUT"; then
+            fail "h: the failure must not surface as a post-build build-failed: $FIXTURE_OUTPUT"
+        fi
+        [ ! -e "$log" ] || fail "h: a refused run must not build"
     )
 fi
 
