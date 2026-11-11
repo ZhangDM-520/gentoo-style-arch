@@ -52,7 +52,7 @@ pub fn list_rows(state: &StateRoot) -> Result<Vec<Row>, String> {
             )
         })
         .collect();
-    if let Some(run) = unfinished_run(state) {
+    for run in unfinished_runs(state) {
         rows.push(Row::new(
             run.id.clone(),
             if run.live { "in-progress" } else { "died" },
@@ -85,38 +85,58 @@ pub struct Unfinished {
     pub settled: usize,
 }
 
-fn unfinished_run(state: &StateRoot) -> Option<Unfinished> {
-    let mut run = unfinished_dir(state)?;
-    // The run lock is the exact answer (the supervisor holds it for the
-    // whole run); the `run.open` pid is the fallback when the lock file is
-    // absent or unreadable (a state root seeded without one).
-    run.live = match gsa_sched::lock::run_lock_held(state.path()) {
-        Some(held) => held,
-        None => {
-            run.pid
-                .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
-                == Some(true)
-        }
-    };
-    Some(run)
+fn unfinished_runs(state: &StateRoot) -> Vec<Unfinished> {
+    let held = gsa_sched::lock::run_lock_held(state.path());
+    let mut runs = unfinished_dirs(state);
+    for run in &mut runs {
+        // The run lock is the exact answer (the supervisor holds it for the
+        // whole run); the `run.open` pid is the fallback when the lock file
+        // is absent or unreadable (a state root seeded without one).
+        run.live = match held {
+            Some(held) => held,
+            None => {
+                run.pid
+                    .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+                    == Some(true)
+            }
+        };
+    }
+    runs
 }
 
 /// The on-disk half of [`unfinished_run`], without a liveness verdict: the
 /// `-Mh --prune` path holds the run lock itself, so a live run cannot be
 /// present there and the probe would only see its own hold.
-fn unfinished_dir(state: &StateRoot) -> Option<Unfinished> {
-    let runs = state.path().join("runs");
-    let id = std::fs::read_to_string(runs.join("current"))
-        .ok()?
-        .trim()
-        .to_string();
-    if id.is_empty() {
-        return None;
+fn unfinished_dirs(state: &StateRoot) -> Vec<Unfinished> {
+    let runs_dir = state.path().join("runs");
+    let Ok(entries) = std::fs::read_dir(&runs_dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|id| {
+            let dir = runs_dir.join(id);
+            dir.join("run.open").exists() && !dir.join("run.closed").exists()
+        })
+        .collect();
+    // `runs/current` names the live/last run: list it first, then the rest in
+    // name order (a died run outlives the run that replaced it as `current`).
+    if let Ok(current) = std::fs::read_to_string(runs_dir.join("current")) {
+        let current = current.trim().to_string();
+        if let Some(pos) = ids.iter().position(|id| *id == current) {
+            let id = ids.remove(pos);
+            ids.insert(0, id);
+        }
     }
-    let dir = runs.join(&id);
-    if !dir.is_dir() || dir.join("run.closed").exists() {
-        return None;
-    }
+    ids.iter()
+        .filter_map(|id| unfinished_dir(state, id))
+        .collect()
+}
+
+fn unfinished_dir(state: &StateRoot, id: &str) -> Option<Unfinished> {
+    let dir = state.path().join("runs").join(id);
     let open = std::fs::read_to_string(dir.join("run.open")).ok()?;
     let mut pid = None;
     let mut epoch = None;
@@ -141,7 +161,7 @@ fn unfinished_dir(state: &StateRoot) -> Option<Unfinished> {
         }
     }
     Some(Unfinished {
-        id,
+        id: id.to_string(),
         live: false,
         pid,
         epoch,
@@ -226,18 +246,17 @@ fn retire_unfinished(state: &StateRoot, apply: bool, rows: &mut Vec<Row>) -> Res
     // No liveness probe here: `-Mh --prune` already HOLDS the run lock (a
     // live run would have refused the verb with `run-in-flight`), so an
     // unfinished directory present under this lock is a dead one.
-    let Some(run) = unfinished_dir(state) else {
-        return Ok(());
-    };
-    rows.push(Row::new(
-        run.id.clone(),
-        if apply { "pruned" } else { "prune" },
-        "died-run markers",
-    ));
-    if apply {
-        let dir = state.path().join("runs").join(&run.id);
-        std::fs::remove_dir_all(&dir)
-            .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
+    for run in unfinished_dirs(state) {
+        rows.push(Row::new(
+            run.id.clone(),
+            if apply { "pruned" } else { "prune" },
+            "died-run markers",
+        ));
+        if apply {
+            let dir = state.path().join("runs").join(&run.id);
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
+        }
     }
     Ok(())
 }

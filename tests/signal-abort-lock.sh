@@ -795,9 +795,25 @@ run_engine "$fixture" -B --leaf --no-prefetch --lanes 1 --jobs 1 p3
 } >"$state/next.out"
 [[ $FIXTURE_RC -eq 0 ]] ||
     fail "the run after a dead dispatcher failed: rc=$FIXTURE_RC" "$state/next.out"
-if ls "$state/runs"/*/p1.result >/dev/null 2>&1; then
-    fail "the dead run's stale result survived the sweep:" "$(ls "$state/runs" 2>/dev/null)"
-fi
+# A run that died before it could record itself keeps its lane markers: they
+# are the only evidence a recovery user has, so the sweep dates the death
+# instead of deleting it (`run.died`, contract §J.1), `-Mh` reports it, and
+# `-Mh --prune` retires it (blind-review finding, 2026-11-11).
+dead_dir=$(find "$state/runs" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+[ -n "$dead_dir" ] || fail "the dead run's directory vanished: $(ls "$state/runs" 2>/dev/null)"
+[ -f "$dead_dir/p1.result" ] ||
+    fail "the dead run's result must survive the sweep:" "$(ls "$dead_dir" 2>/dev/null)"
+[ -f "$dead_dir/run.died" ] ||
+    fail "the sweep must date the death (run.died):" "$(ls "$dead_dir" 2>/dev/null)"
+run_engine "$fixture" -Mh --state-dir "$state"
+[[ $FIXTURE_RC -eq 0 ]] || fail "-Mh over a died run failed: rc=$FIXTURE_RC" "$state/mh.out"
+printf '%s\n' "$FIXTURE_OUTPUT" >"$state/mh.out"
+grep -Eq "^$(basename "$dead_dir") died " "$state/mh.out" ||
+    fail "-Mh must list the died run: $(cat "$state/mh.out")"
+run_engine "$fixture" -Mh --prune --state-dir "$state"
+[[ $FIXTURE_RC -eq 0 ]] || fail "-Mh --prune over a died run failed: rc=$FIXTURE_RC" "$state/mh.out"
+[ ! -e "$dead_dir" ] ||
+    fail "-Mh --prune must retire the died run's directory: $(ls "$state/runs" 2>/dev/null)"
 if grep < <(find "$state/runs" -name '*.tmp.*' -print -quit) -q .; then
     fail "a stale temp name survived the sweep"
 fi
