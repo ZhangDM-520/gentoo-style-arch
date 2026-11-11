@@ -250,6 +250,24 @@ if [ -z "$only" ] || [ "$only" = b ]; then
             grep -F "$probe" <<<"$flat" >/dev/null \
                 || fail "b: the installed-only block is missing '$probe': $FIXTURE_OUTPUT"
         done
+        # Recipe metadata is DATA: an ESC sequence or a CR in `pkgdesc` must
+        # not repaint the terminal, split the line, or reach `--machine`
+        # (blind review, 2026-11-11).
+        add_package "$ws" escape "$(printf 'pkgver=1.0.0\npkgrel=1\narch=(any)\npkgdesc="\033[31mRED-ALERT\rline-two keeps going"')"
+        for mode in "" "--machine"; do
+            GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi escape $mode
+            [ "$FIXTURE_RC" -eq 0 ] \
+                || fail "b: -Qi escape$mode rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+            if printf '%s' "$FIXTURE_OUTPUT" | LC_ALL=C grep -q $'\033'; then
+                fail "b: an escape byte reached the output (-Qi escape $mode): $FIXTURE_OUTPUT"
+            fi
+            if printf '%s' "$FIXTURE_OUTPUT" | LC_ALL=C grep -q $'\r'; then
+                fail "b: a CR reached the output (-Qi escape $mode): $FIXTURE_OUTPUT"
+            fi
+            grep -F 'RED-ALERT line-two keeps going' <<<"$(tr -s ' ' <<<"$FIXTURE_OUTPUT")" >/dev/null \
+                || fail "b: the description text was mangled (-Qi escape $mode): $FIXTURE_OUTPUT"
+        done
+
         # A name that is neither a recipe nor installed keeps the hint.
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi nosuchpkg
         [ "$FIXTURE_RC" -eq 2 ] \

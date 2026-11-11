@@ -136,6 +136,50 @@ pub fn paint(role: Role, text: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{}{text}{RESET}", role.open()))
 }
 
+/// One line of DATA (recipe metadata, a package description, an owned path)
+/// with terminal control and line-breaking characters removed: ESC and the
+/// other C0 controls are dropped (except TAB, which the wrappers turn into a
+/// space), and CR/LF become a single space. Applied to VALUES only — never to
+/// a rendered line, whose styling is our own escape sequences.
+///
+/// Without this, a `pkgdesc` carrying `ESC[31m` repainted the terminal and a
+/// `CR` rewound the line — one line becoming two for every line-oriented
+/// reader — and the same bytes reached `--machine`, the channel that must
+/// never carry colour (blind review, 2026-11-11).
+pub fn sanitize_data(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_space = false;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            // A whole escape SEQUENCE goes, not just the ESC byte: leaving
+            // `[31m` behind is residue that reads as data.
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    for next in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(_) | None => {}
+            },
+            '\t' | '\r' | '\n' => {
+                if !last_space {
+                    out.push(' ');
+                    last_space = true;
+                }
+            }
+            c if (c as u32) < 0x20 || c == '\x7f' => {}
+            c => {
+                out.push(c);
+                last_space = c == ' ';
+            }
+        }
+    }
+    out.trim_end().to_string()
+}
+
 /// `paint` for a call site that is building a `String` anyway.
 pub fn styled(role: Role, text: impl Into<String>) -> String {
     let text = text.into();

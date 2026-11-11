@@ -143,6 +143,14 @@ fn row_role(status: RowStatus) -> Role {
 /// the human rendering (`None`: no wrapping, so a captured `-Qi` stays
 /// byte-identical); the caller probes it once per block, never per field.
 fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
+    field_role(label, value, None, width)
+}
+
+/// [`field_w`] with an explicit role for the value (the two identity rows are
+/// bold, and the version warns when it moves). The RAW text comes in and is
+/// sanitised here, before any painting: a caller must never pre-paint, or an
+/// engine escape sequence and an injected one would be indistinguishable.
+fn field_role(label: &str, value: &str, role: Option<Role>, width: Option<usize>) -> String {
     // The label cell keeps its 18-column alignment, but a label longer than
     // a narrow terminal is CUT: the colon must stay on the label's own line
     // (a 20-column `-Qi` otherwise emitted a 22-column line).
@@ -159,12 +167,22 @@ fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
     if value.is_empty() {
         return format!("{label_cell}:");
     }
+    // Values are DATA (recipe metadata, DB text): a control character or a
+    // CR in them must never repaint the terminal or split the line — and the
+    // machine channel must never carry an escape byte at all.
+    let clean = style::sanitize_data(value);
+    let clean = clean.as_str();
+    if clean.is_empty() {
+        // The value was nothing BUT control characters: an empty value reads
+        // as absence rather than a blank cell.
+        return format!("{label_cell}: {}", style::paint(Role::Dim, "(none)"));
+    }
     // Absence is dim; everything else stays plain (a bold 20-item dependency
-    // list is noise). The two identity fields are painted by their caller.
-    let painted = if is_absent(value) {
-        style::paint(Role::Dim, value)
-    } else {
-        Cow::Borrowed(value)
+    // list is noise) unless the caller names a role.
+    let painted = match role {
+        Some(role) => style::paint(role, clean),
+        None if is_absent(clean) => style::paint(Role::Dim, clean),
+        None => Cow::Borrowed(clean),
     };
     let mut out = String::with_capacity(label_cell.len() + painted.len() + 2);
     out.push_str(&label_cell);
@@ -322,7 +340,7 @@ pub fn render_package_info(
     let wrap = output::is_human().then(crate::dashboard::terminal_width);
     let f = |label: &str, value: &str| field_w(label, value, wrap);
     let mut out = String::new();
-    out.push_str(&f("Name", &style::paint(Role::Bold, pkgname)));
+    out.push_str(&field_role("Name", pkgname, Some(Role::Bold), wrap));
     out.push('\n');
     // A recipe version that differs from the INSTALLED one means the next
     // install moves the package; yellow says so without changing a word.
@@ -333,7 +351,7 @@ pub fn render_package_info(
         Some(value) if !is_absent(value) && !same_version(value, version) => Role::Warn,
         _ => Role::Bold,
     };
-    out.push_str(&f("Version", &style::paint(version_role, version)));
+    out.push_str(&field_role("Version", version, Some(version_role), wrap));
     out.push('\n');
     out.push_str(&f(
         "Description",
