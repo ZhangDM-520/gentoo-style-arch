@@ -899,7 +899,12 @@ pub(crate) fn plan_only(
         }
     };
     extend_selection(&mut selection, &wave.additions);
-    let intensity = crate::resolve_intensity(project)?;
+    // The plan validates the SAME argv the run does: a bad `--lanes`,
+    // `--jobs`, `--intensity` or env twin is a usage error here too (the
+    // plan used to accept it and then the real run refused it), and the
+    // record's `intensity` scalar is the value the run would actually use.
+    let budget = resolve_budget(inv, project, selection.listed.len())?;
+    let intensity = budget.intensity.to_string();
     // The note counts the POST-PROMPT closure: the prompt filters the
     // selection before the ordinary pipeline runs (§C.4), so its drops are
     // not consumer expansion and not part of the selected count.

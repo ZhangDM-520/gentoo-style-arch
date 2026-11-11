@@ -191,4 +191,30 @@ if grep < <(find "$fixture/state-failure" -name '*.tmp.*' -print -quit) -q .; th
     fail "a lane publication temp name remained after failure drain"
 fi
 
+# ─── The --dry-run PLAN validates the same argv the run does (§B.8) ────────
+# The plan is a rendering of what the run WOULD do, so a budget value the
+# real run refuses (`--lanes abc`) is a usage error here too, and the
+# record's `intensity` scalar is the resolved value the run would use
+# (blind-review finding, 2026-11-11: the plan accepted both silently).
+PATH="$fixture/bin:$PATH" \
+    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
+    run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
+        --lanes abc "${ids[0]}"
+plan_bad=$FIXTURE_OUTPUT
+if [[ $FIXTURE_RC -ne 2 ]]; then
+    fail "a plan with an unparseable --lanes must be a usage error (rc 2), got rc=$FIXTURE_RC:
+$plan_bad"
+fi
+PATH="$fixture/bin:$PATH" \
+    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
+    run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
+        --intensity max "${ids[0]}"
+plan_ok=$FIXTURE_OUTPUT
+[[ $FIXTURE_RC == 0 ]] || fail "a valid --dry-run plan failed rc=$FIXTURE_RC:
+$plan_ok"
+if [[ $(rr2_scalar intensity <<<"$plan_ok") != max ]]; then
+    fail "the plan recorded intensity $(rr2_scalar intensity <<<"$plan_ok") — the run override --intensity max never reached it:
+$plan_ok"
+fi
+
 printf 'scheduler intensity fixture: PASS\n'
