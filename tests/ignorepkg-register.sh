@@ -1387,4 +1387,41 @@ db_install() {
     printf 'N8c: -s + -fi forces the transaction with every name covered OK (fish-driven)\n'
 )
 
+# ─── T. concurrent registrations never lose a name ──────────────────────────
+# The conf read-modify-write had no inter-process lock (the only mutex was
+# per state root): N parallel installs each read the same closure and each
+# wrote its own name, so success reports outnumbered surviving names
+# (blind-review 2026-11-11, data-center-ops). The lock is the conf's own
+# directory, so this drives the hidden seam from ONE workspace in parallel.
+(
+    fail() {
+        printf 'ignorepkg-register concurrent: %s\n' "$1" >&2
+        exit 1
+    }
+    ws_c=$tmp/ws-concurrent
+    make_register_ws "$ws_c"
+    conf_c=$tmp/concurrent/pacman.conf
+    mkdir -p "$tmp/concurrent"
+    make_conf "$conf_c"
+    export PATH="$ws_c/bin:$PATH"
+    export GSA_STATE_DIR="$ws_c/state"
+    export GSA_FAKE_DB_PATH="$ws_c/state/var/pacman"
+    export GSA_FAKE_SUDO_LOG="$ws_c/sudo.log"
+    mkdir -p "$GSA_FAKE_DB_PATH"
+    pids=()
+    for i in $(seq 1 8); do
+        ( run_engine "$ws_c" --install-register "$conf_c" concurrent "conc-$i" \
+            >"$tmp/concurrent/out-$i" 2>&1 ) &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || true
+    done
+    for i in $(seq 1 8); do
+        conf_covers "$conf_c" "conc-$i" ||
+            fail "conc-$i vanished from the closure after 8 concurrent registrations: $(cat "$conf_c")"
+    done
+    printf 'concurrent: 8 parallel registrations all survive\n'
+)
+
 printf 'ignorepkg-register fixture: PASS\n'

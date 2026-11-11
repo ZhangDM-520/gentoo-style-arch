@@ -17,9 +17,16 @@
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+extern "C" {
+    fn flock(fd: RawFd, operation: i32) -> i32;
+}
+
+const LOCK_EX: i32 = 2;
 
 use gsa_recipe::pkginfo::Pkginfo;
 
@@ -400,12 +407,50 @@ pub fn is_expressible_name(name: &str) -> bool {
         })
 }
 
+/// Serialize every read-modify-write of one pacman.conf across PROCESSES.
+///
+/// Registration can run from several state roots at once (the transaction
+/// mutex is per state root, and the conf is shared HOST state), so concurrent
+/// installs each read the same closure and each wrote only its own name: 7
+/// concurrent runs reported "appended 1 name(s)" and 4 names survived
+/// (blind-review 2026-11-11, data-center-ops). The lock is the conf's
+/// directory (a stable inode; the kernel releases it if the writer dies).
+fn conf_write_lock(conf: &Path) -> Result<std::fs::File, String> {
+    // The conf's DIRECTORY is the lock: it is a stable inode that survives
+    // the rename, needs no sidecar residue in /etc, and an idle conf
+    // directory owns exactly one write seam. (The conf file itself is
+    // replaced by the atomic rename, so a waiter blocked on the old inode
+    // would proceed on a dead file.)
+    let parent = conf
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let dir = std::fs::File::open(parent).map_err(|error| {
+        format!(
+            "cannot open {} for the registration lock ({error}) — nothing changed",
+            parent.display()
+        )
+    })?;
+    if unsafe { flock(dir.as_raw_fd(), LOCK_EX) } != 0 {
+        return Err(format!(
+            "cannot lock {} ({}) — nothing changed",
+            parent.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(dir)
+}
+
 pub fn register_ignorepkg(
     conf: &Path,
     subject: &str,
     names: &[String],
     db_root: &Path,
 ) -> Result<RegisterReport, String> {
+    // The database wait first (never while holding the conf lock: it can
+    // last 300 s), then the conf lock for the whole read-modify-write.
+    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
+    let _conf_lock = conf_write_lock(conf)?;
     let text = std::fs::read_to_string(conf).map_err(|e| {
         format!(
             "register-ignorepkg: cannot read {} ({e}) — nothing changed",
@@ -463,9 +508,6 @@ pub fn register_ignorepkg(
             ));
         }
     }
-
-    // The conf rewrite is deferred until the pacman database lock clears.
-    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
 
     // ~10 names per cumulative `IgnorePkg =` line, in sorted order.
     let mut new_lines: Vec<String> = Vec::new();
@@ -667,6 +709,10 @@ pub fn prune_ignorepkg(
     names: &[String],
     db_root: &Path,
 ) -> Result<PruneReport, String> {
+    // The database wait first (never while holding the conf lock: it can
+    // last 300 s), then the conf lock for the whole read-modify-write.
+    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
+    let _conf_lock = conf_write_lock(conf)?;
     let text = std::fs::read_to_string(conf).map_err(|e| {
         format!(
             "prune-ignorepkg: cannot read {} ({e}) — nothing changed",
@@ -691,9 +737,6 @@ pub fn prune_ignorepkg(
             backup: None,
         });
     }
-
-    // The conf rewrite is deferred until the pacman database lock clears.
-    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
 
     // Rewrite: the same section tracking as walk_conf; only in-[options]
     // `IgnorePkg =` assignments change, and only by dropping names.
