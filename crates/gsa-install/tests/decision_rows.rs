@@ -942,7 +942,7 @@ fn a_same_path_rebuild_installs_against_the_newest_index_row() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
-fn unreadable_pkginfo_is_skipped_when_names_establish_and_refuses_when_they_do_not() {
+fn unreadable_pkginfo_always_refuses_and_never_probes() {
     let dir = scratch("unreadable");
     let garbage = dir.join("foo-1.0-1-x86_64.pkg.tar.zst");
     std::fs::write(&garbage, b"this is not a zstd tar archive").unwrap();
@@ -960,7 +960,10 @@ fn unreadable_pkginfo_is_skipped_when_names_establish_and_refuses_when_they_do_n
     );
     assert_eq!(rows_rc(&rows), 1);
 
-    // Names establishable from the second authority → skip, never probed.
+    // Names establishable from the second authority → REFUSED, still never
+    // probed. The skip this used to pin settled rc 0 "success" while nothing
+    // installed — rule 71: an unreadable file is not an absent one (blind
+    // review, 2026-11-11).
     let recipe = dir.join("recipe");
     std::fs::create_dir_all(&recipe).unwrap();
     std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
@@ -974,9 +977,9 @@ fn unreadable_pkginfo_is_skipped_when_names_establish_and_refuses_when_they_do_n
     .unwrap();
     assert_eq!(
         rendered(&rows),
-        vec!["foo skip unreadable-pkginfo".to_string()]
+        vec![format!("foo refuse unreadable-pkginfo {}", garbage2.display())]
     );
-    assert_eq!(rows_rc(&rows), 0);
+    assert_eq!(rows_rc(&rows), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
