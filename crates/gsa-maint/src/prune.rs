@@ -517,12 +517,21 @@ pub fn strength1(ctx: &MaintCtx<'_>, recipes: &[String], apply: bool) -> Vec<Row
         for target in archive_targets(&dir, ctx.root.to_path_buf()) {
             mine.push((id.clone(), target));
         }
-        if let Some(meta) = ctx.db.get(id) {
-            if let Some(base) = pkgbase_of(&meta) {
-                for target in live_staging_targets(&layout, &base) {
-                    mine.push((id.clone(), target));
-                }
-            }
+        // The live per-pkgbase trees are named by the recipe's declared
+        // pkgbase, else by its recipe id — the SAME fallback the build side
+        // uses when no `.SRCINFO` is committed (`gsa-cli/src/build.rs`'s
+        // pkgbase seeding). A recipe without committed metadata therefore
+        // still owns `<builddir>/<id>`: skipping it left the whole
+        // `src`/`pkg` tree unpruned while `-Mc` reported success
+        // (blind-review 2026-11-11, distro-maintainer). Neither name is a
+        // guess about somebody else's tree.
+        let base = ctx
+            .db
+            .get(id)
+            .and_then(|meta| pkgbase_of(&meta))
+            .unwrap_or_else(|| id.to_string());
+        for target in live_staging_targets(&layout, &base) {
+            mine.push((id.clone(), target));
         }
         for (owner, target) in &pkgdest {
             if owner == id {

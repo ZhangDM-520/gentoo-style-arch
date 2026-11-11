@@ -1274,5 +1274,38 @@ if want k; then
     )
 fi
 
+# ─── l. -Mc prunes a recipe's live trees without committed metadata ───────
+if want l; then
+    (
+        set -euo pipefail
+        ws="$fixture/l/ws"
+        state="$fixture/l/state"
+        build="$fixture/l/build"
+        make_workspace "$ws" 1 auto low
+        maint_ws "$ws"
+        # A recipe with a PKGBUILD and NO committed `.SRCINFO` (mid-development
+        # or freshly added): its live trees are named by the recipe id, the
+        # same fallback the build side uses.
+        add_package "$ws" notree "$gsa_meta_any" git
+        mkdir -p "$build/build/notree/src" "$build/build/notree/pkg" "$build/pkg/notree"
+        export GSA_BUILD_DIR="$build"
+
+        run_engine "$ws" -Mc --dry-run --leaf --state-dir "$state" notree
+        [ "$FIXTURE_RC" = 0 ] || fail "l: -Mc --dry-run rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "$build/build/notree prune staging" >/dev/null \
+            || fail "l: the plan must name the live build tree: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "$build/pkg/notree prune staging" >/dev/null \
+            || fail "l: the plan must name the live pkg tree: $FIXTURE_OUTPUT"
+        [ -d "$build/build/notree" ] || fail "l: a dry run must delete nothing"
+
+        run_engine "$ws" -Mc --leaf --state-dir "$state" notree
+        [ "$FIXTURE_RC" = 0 ] || fail "l: -Mc rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ ! -e "$build/build/notree" ] \
+            || fail "l: -Mc must remove the live build tree of a recipe with no .SRCINFO"
+        [ ! -e "$build/pkg/notree" ] \
+            || fail "l: -Mc must remove the live pkg tree of a recipe with no .SRCINFO"
+    )
+fi
+
 # ─── the fixture never touched the real state root (§J.3) ──────────────────
 assert_varlib_unchanged
