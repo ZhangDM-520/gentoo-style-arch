@@ -627,13 +627,23 @@ fn run_upgrade_inner(
             let recipe_dir = root.join(&record.path);
             match discover_recipe(&recipe_dir) {
                 Ok(found) => {
+                    // Rule 71: an unreadable file is NOT an absent one. A
+                    // sweep that dropped a damaged archive installed the rest
+                    // and reported `success rc 0` — the shrunken set was
+                    // invisible in the record (blind-review 2026-11-11,
+                    // skeptic). The subject refuses whole: `-Ua` is one
+                    // transaction, so nothing lands and the record names the
+                    // archive.
+                    if !found.unreadable.is_empty() {
+                        items.push(Item::Rejected(unreadable_row(
+                            record.id.as_str(),
+                            &found.unreadable,
+                        )));
+                        continue;
+                    }
                     if found.candidates.is_empty() {
                         // Not eligible: the recipe has no archives at all
-                        // (`-Ua` installs the workspace's built archives). An
-                        // unreadable file here is NOT a refusal: `-Ua` sweeps
-                        // the whole workspace, and a stray or half-copied
-                        // archive must not abort it — the NAMED spelling
-                        // (`-U <ref>`) is where rule 71's loud refusal lives.
+                        // (`-Ua` installs the workspace's built archives).
                         continue;
                     }
                     if !found.missing.is_empty() || found.mixed_versions {
@@ -682,8 +692,10 @@ fn run_upgrade_inner(
                         // ZERO archives is the empty-list class (the `all`
                         // branch above skips it too): the expectation that
                         // makes `missing` non-empty must not relabel
-                        // "nothing was built" as a shrunken set.
-                        if found.candidates.is_empty() && !found.unreadable.is_empty() {
+                        // "nothing was built" as a shrunken set. An
+                        // unreadable archive refuses the subject whoever else
+                        // is readable (rule 71).
+                        if !found.unreadable.is_empty() {
                             items.push(Item::Rejected(unreadable_row(
                                 record.id.as_str(),
                                 &found.unreadable,

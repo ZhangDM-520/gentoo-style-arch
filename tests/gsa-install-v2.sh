@@ -1543,4 +1543,51 @@ STUB
     )
 fi
 
+if want n; then
+    # ─── 14. `-Ua` never drops a damaged archive silently (rule 71) ───────
+    # The `-Ua` sweep skipped an unreadable archive and installed the rest:
+    # `outcome: success rc 0`, the damaged recipe absent from `order:` and
+    # from every row, while `-U <ref>` refused it correctly (blind-review
+    # 2026-11-11, skeptic). A walker that silently shrinks its set is a
+    # fail-open gate.
+    (
+        set -euo pipefail
+        ws="$fixture/n/ws"
+        db="$fixture/n/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        ver="1.0-1"
+        for id in q1 q2 q3; do
+            add_package "$ws" "$id" "$gsa_meta_any" git
+            stage_pkginfo "$fixture/n/stage-$id" "$id" "$id" "$ver" 7
+            make_archive "$ws/packages/$id/$id-$ver-any.pkg.tar.zst" "$fixture/n/stage-$id"
+        done
+        truncate -s 40 "$ws/packages/q2/q2-$ver-any.pkg.tar.zst"
+        export GSA_FAKE_PACMAN_LOG="$fixture/n/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/n/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/n/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+
+        run_engine "$ws" -Ua --state-dir "$fixture/n/state" --config "$ws/pacman.conf"
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/n/output.txt"
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "n: -Ua with an unreadable archive must refuse rc 3, got $FIXTURE_RC:" "$fixture/n/output.txt"
+        plan_rows=$(record_section plan)
+        grep -Fq "q2 refused unreadable $ws/packages/q2/q2-$ver-any.pkg.tar.zst" <<<"$plan_rows" \
+            || fail "n: the refusal must name q2 and its archive, got:
+$plan_rows" "$fixture/n/output.txt"
+        grep -Fq 'q1 install' <<<"$plan_rows" \
+            || fail "n: the readable members keep their plan rows, got:
+$plan_rows" "$fixture/n/output.txt"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "n: a refused -Ua plan is pacman-free:" "$GSA_FAKE_PACMAN_LOG"
+        [ ! -s "$GSA_FAKE_SUDO_LOG" ] \
+            || fail "n: a refused -Ua plan must not probe sudo:" "$GSA_FAKE_SUDO_LOG"
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'
