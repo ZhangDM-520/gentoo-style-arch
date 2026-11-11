@@ -443,6 +443,23 @@ if want d; then
         [ "$FIXTURE_RC" = 0 ] || fail "-Ml --tail is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "loga log " "the tail pass names the log"
         has_row "$FIXTURE_OUTPUT" "TAIL-MARKER-NEW" "the tail carries the log's last lines"
+        # ONE ROW PER LINE: the tail exists to be read, and folding it into a
+        # single `⏎`-separated row made the verb the tool points at on failure
+        # unreadable (2026-11-11 blind-review finding).
+        has_row "$FIXTURE_OUTPUT" "loga tail line one" "the tail renders the log line by line"
+        has_row "$FIXTURE_OUTPUT" "loga tail TAIL-MARKER-NEW" "the tail renders every line as a row"
+        absent_row "$FIXTURE_OUTPUT" "⏎" "the tail never folds lines into one row"
+
+        # A log the listing shows stays tail-able even when its package is
+        # not in THIS workspace's topology (the listing is global, the ref
+        # layer is per-workspace) — 2026-11-11 blind-review finding.
+        printf 'orphan output\n' >"$logs/orphanlog.log"
+        run_engine "$ws" -Ml --state-dir "$state"
+        has_row "$FIXTURE_OUTPUT" "$logs/orphanlog.log" "a foreign log is listed"
+        run_engine "$ws" -Ml --tail orphanlog --state-dir "$state"
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "-Ml --tail of a listed foreign log is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "orphanlog tail orphan output" "the foreign log tails"
 
         # --keep N: keep the N NEWEST per stem (mtime order above), prune
         # the rest loudly; a ≤N stem is untouched and says `keep`.

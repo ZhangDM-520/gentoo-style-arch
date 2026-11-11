@@ -41,13 +41,22 @@ pub enum MaintVerb {
 /// no default action for the family.
 pub fn verb_of(inv: &Invocation) -> Result<MaintVerb, String> {
     let strength = 1 + inv.modifiers.iter().filter(|m| **m == 'c').count() as u8;
-    match inv.action {
+    verb_from_letter(inv.action, strength)
+}
+
+/// The letters a `-M` cluster can carry, in the §B.7 roster order.
+pub const VERB_LETTERS: [char; 9] = ['a', 'd', 'i', 'l', 'm', 'c', 's', 'w', 'h'];
+
+/// [`verb_of`] from its letter alone (the flag-ownership answer needs to ask
+/// every sibling which flags it accepts).
+pub fn verb_from_letter(action: Option<char>, prune_strength: u8) -> Result<MaintVerb, String> {
+    match action {
         Some('a') => Ok(MaintVerb::Audit),
         Some('d') => Ok(MaintVerb::Doctor),
         Some('i') => Ok(MaintVerb::IgnorePkg),
         Some('l') => Ok(MaintVerb::Logs),
         Some('m') => Ok(MaintVerb::Mirrors),
-        Some('c') => Ok(MaintVerb::Prune(strength)),
+        Some('c') => Ok(MaintVerb::Prune(prune_strength.max(1))),
         Some('s') => Ok(MaintVerb::Sets),
         Some('w') => Ok(MaintVerb::World),
         Some('h') => Ok(MaintVerb::History),
@@ -268,26 +277,59 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         }
         MaintVerb::Logs => {
             if let Some(spec) = &inv.tail {
-                match resolve_one(&sel_ctx, spec, err) {
-                    Ok(id) => {
-                        let path = state.path().join("logs").join(format!("{id}.log"));
-                        if path.is_file() {
-                            rows.push(Row::new(
-                                &id,
-                                "log",
-                                format!("{} bytes {}", file_size(&path), path.display()),
-                            ));
-                            match gsa_maint::hygiene::tail_lines(&path) {
-                                Ok(text) => {
-                                    rows.push(Row::new(&id, "tail", text.replace('\n', " ⏎ ")))
-                                }
-                                Err(message) => rows.push(Row::new(&id, "failed", message)),
-                            }
+                // The log listing is GLOBAL (one `logs/` tree per state root)
+                // while a workspace ref resolves over the CURRENT topology:
+                // a log the listing showed must stay tail-able, including one
+                // a sibling workspace built (2026-11-11 blind review). A bare
+                // name with no separator indexes `logs/<name>.log` directly;
+                // anything path-shaped still goes through ref resolution.
+                let direct = !spec.is_empty()
+                    && !spec.contains('/')
+                    && !spec.contains('\\')
+                    && spec != ".."
+                    && spec != ".";
+                let id = match resolve_one(&sel_ctx, spec, err) {
+                    Ok(id) => id,
+                    Err(exit) => {
+                        if direct
+                            && state
+                                .path()
+                                .join("logs")
+                                .join(format!("{spec}.log"))
+                                .is_file()
+                        {
+                            spec.clone()
                         } else {
-                            rows.push(Row::new(&id, "log-missing", path.display().to_string()));
+                            return Err(exit);
                         }
                     }
-                    Err(exit) => return Err(exit),
+                };
+                let path = state.path().join("logs").join(format!("{id}.log"));
+                if path.is_file() {
+                    rows.push(Row::new(
+                        &id,
+                        "log",
+                        format!("{} bytes {}", file_size(&path), path.display()),
+                    ));
+                    match gsa_maint::hygiene::tail_lines(&path) {
+                        // ONE ROW PER LOG LINE: a tail exists to be read, and
+                        // folding the whole file into one `⏎`-separated row
+                        // made the verb the tool points at on failure
+                        // unreadable (2026-11-11 blind review).
+                        Ok(text) => {
+                            let mut any = false;
+                            for line in text.lines() {
+                                any = true;
+                                rows.push(Row::new(&id, "tail", line.to_string()));
+                            }
+                            if !any {
+                                rows.push(Row::new(&id, "tail", "(empty log)"));
+                            }
+                        }
+                        Err(message) => rows.push(Row::new(&id, "failed", message)),
+                    }
+                } else {
+                    rows.push(Row::new(&id, "log-missing", path.display().to_string()));
                 }
             }
             if let Some(spec) = &inv.keep {
