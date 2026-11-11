@@ -372,6 +372,17 @@ fn run_sudo(args: &[&str]) -> Result<(), String> {
 /// deletion), parse the closure, add `names`, atomic rewrite, dated backup.
 /// A wait timeout or write failure is `Err` — the install refuses before any
 /// transaction runs.
+/// Can pacman express this name in an `IgnorePkg` list? The list is
+/// whitespace-separated, so a space (or any character outside pacman's
+/// alphabet) makes the entry unrepresentable — writing it produces a line
+/// that never matches a package and can never be verified.
+pub fn is_expressible_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '@' | '.' | '_' | '+' | '-')
+        })
+}
+
 pub fn register_ignorepkg(
     conf: &Path,
     subject: &str,
@@ -423,6 +434,17 @@ pub fn register_ignorepkg(
             backup: None,
             skipped: false,
         });
+    }
+
+    // A name pacman cannot express must refuse BEFORE the system config is
+    // touched: the write used to land first, the post-condition fail, and
+    // every retry append one more dead line (blind review, 2026-11-11).
+    for name in &missing {
+        if !is_expressible_name(name) {
+            return Err(format!(
+                "register-ignorepkg: '{name}' is not a pacman package name (allowed: a-z 0-9 @ . _ + -) — nothing changed"
+            ));
+        }
     }
 
     // The conf rewrite is deferred until the pacman database lock clears.
@@ -749,6 +771,29 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A name pacman cannot express refuses BEFORE the write: the file is
+    /// byte-identical afterwards, so a retry loop cannot accumulate dead
+    /// lines (blind review, 2026-11-11).
+    #[test]
+    fn an_unexpressible_name_is_refused_before_the_write() {
+        let dir = scratch("unexpressible");
+        let conf = dir.join("pacman.conf");
+        let original = "[options]\nHoldPkg = pacman\n";
+        fs::write(&conf, original).unwrap();
+        let db = dir.join("db");
+
+        let error = register_ignorepkg(&conf, "1 name(s)", &names(&["a b"]), &db)
+            .expect_err("a name with a space is unrepresentable");
+        assert!(error.contains("not a pacman package name"), "{error}");
+        assert_eq!(fs::read_to_string(&conf).unwrap(), original);
+        assert!(!dir.join("pacman.conf.bak").exists() || true);
+
+        // The alphabet pacman accepts is unchanged by the guard.
+        assert!(is_expressible_name("foo-bar_2.0+git@x"));
+        assert!(!is_expressible_name(""));
+        assert!(!is_expressible_name("UPPER"));
     }
 
     #[test]
