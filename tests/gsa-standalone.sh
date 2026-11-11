@@ -165,16 +165,33 @@ if [ -z "$only" ] || [ "$only" = c ]; then
         *'cannot be combined with workspace references'*) ;;
         *) fail "c: the mixed-target refusal is missing: $FIXTURE_OUTPUT" ;;
         esac
-        # A query verb refuses the standalone shape (v1: report verbs read a
-        # workspace) — never a staging note, never a state write.
+        # A query verb never stages a standalone workspace (v1: report verbs
+        # read a workspace): the token stays a workspace reference and the
+        # verb's OWN vocabulary answers it — never a staging note, never a
+        # state write, and never a "standalone" refusal naming the wrong
+        # subject (2026-11-11: `-Qp PKGBUILD` said "standalone targets are
+        # not supported by gsa -Qp" instead of what the probe found).
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
             -Qi "$fixture/c/shared/solo-recipe"
         [ "$FIXTURE_RC" -eq 2 ] || fail "c: query rc=$FIXTURE_RC want 2: $FIXTURE_OUTPUT"
         case $FIXTURE_OUTPUT in
-        *'standalone targets are not supported'*) ;;
-        *) fail "c: the unsupported-verb refusal is missing: $FIXTURE_OUTPUT" ;;
+        *'standalone targets are not supported'*)
+            fail "c: a query verb must not report the standalone shape: $FIXTURE_OUTPUT"
+            ;;
         esac
         [ ! -e "$state" ] || fail "c: a refused run must leave no state"
+        # -Qp takes ARCHIVE paths: a recipe path is answered by the probe,
+        # not by a standalone refusal.
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -Qp "$fixture/c/shared/solo-recipe/PKGBUILD"
+        case $FIXTURE_OUTPUT in
+        *'standalone targets'*)
+            fail "c: -Qp must answer the probe, never a standalone refusal: $FIXTURE_OUTPUT"
+            ;;
+        *'not-a-package-archive'*) ;;
+        *) fail "c: the probe must name the path it could not read: $FIXTURE_OUTPUT" ;;
+        esac
+        [ ! -e "$state" ] || fail "c: a query must leave no state"
     )
 fi
 

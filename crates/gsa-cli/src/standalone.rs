@@ -79,8 +79,10 @@ impl Staged {
 
 /// Which commands take standalone targets in v1: the workspace-consuming
 /// build/install/fetch/maintain surface and its `--dry-run` plan render
-/// (`Command::Plan`). Pure query/report verbs read a workspace and are
-/// documented as standalone-unsupported until a later phase.
+/// (`Command::Plan`). Pure query/report verbs read a workspace and never
+/// interpret a standalone shape at all: their own target vocabulary owns the
+/// token, so `-Qp PKGBUILD` reports what the PROBE found instead of a
+/// standalone refusal that names the wrong subject (2026-11-11).
 pub(crate) fn supports(command: &crate::Command) -> bool {
     matches!(
         command,
@@ -103,6 +105,13 @@ pub(crate) fn apply(
     command: &crate::Command,
 ) -> Result<Option<Staged>, String> {
     if inv.targets.is_empty() {
+        return Ok(None);
+    }
+    if !supports(command) {
+        // A query/report verb reads a workspace and has its own path
+        // vocabulary (`-Qp` probes archive paths): staging a standalone
+        // workspace for it would answer a question nobody asked and report
+        // the token as the wrong kind of thing.
         return Ok(None);
     }
     let kinds: Vec<Option<Kind>> = inv.targets.iter().map(|t| kind_of(t)).collect();
@@ -148,12 +157,6 @@ pub(crate) fn apply(
             "standalone targets ({}) cannot be combined with workspace references ({}) in one run",
             join_names(standalone.iter().map(|(t, _)| t.as_str())),
             join_names(workspace.iter().map(|t| t.as_str())),
-        ));
-    }
-    if !supports(command) {
-        return Err(format!(
-            "standalone targets are not supported by 'gsa {}': query and report verbs read a workspace (plan a standalone build with '--dry-run -B')",
-            inv.spelling()
         ));
     }
 

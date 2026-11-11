@@ -65,6 +65,18 @@ pub fn query_binpkg(
     Ok(())
 }
 
+/// A package archive starts with the zstd frame magic. Reading the four
+/// bytes keeps `-Qp`'s "this is not an archive" verdict cheap and exact.
+fn is_zstd_frame(path: &Path) -> bool {
+    use std::io::Read as _;
+    const MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+    let mut head = [0u8; 4];
+    match std::fs::File::open(path) {
+        Ok(mut file) => file.read_exact(&mut head).is_ok() && head == MAGIC,
+        Err(_) => false,
+    }
+}
+
 /// `gsa -Qp <archive…>` — archive probe (§B.3): read the archive's own
 /// `.PKGINFO` (rule 9's first name authority), match its binpkg index row,
 /// and report hash/size agreement (§J.4). One row per archive:
@@ -73,7 +85,9 @@ pub fn query_binpkg(
 ///
 /// `status` is `agrees` (row and bytes agree), `mismatch` (row found but
 /// hash/size or metadata disagree), `unindexed` (no row — never guessed
-/// from a filename), or `unreadable` (no `.PKGINFO` truth, rule 25(h)).
+/// from a filename), `unreadable` (no `.PKGINFO` truth, rule 25(h)), or
+/// `not-a-package-archive` (a path that is not a zstd frame at all — a
+/// PKGBUILD handed to the probe).
 /// Report-only: the probe never mutates and its rc is 0 unless the argv is
 /// bad (§G.1 rc 2).
 pub fn query_probe(
@@ -103,6 +117,13 @@ pub fn query_probe(
         let path = Path::new(arg);
         let row = index.find_archive(path);
         let index_field = if row.is_some() { "match" } else { "absent" };
+        // A package archive is a zstd frame; a PKGBUILD handed to `-Qp`
+        // (the blind-review confusion, 2026-11-11) is not, and saying so
+        // beats leaking the decoder's "Unknown frame descriptor".
+        if !is_zstd_frame(path) {
+            let _ = writeln!(out, "{arg} not-a-package-archive index={index_field}");
+            continue;
+        }
         let info = match read_pkginfo(path) {
             Ok(info) => info,
             Err(error) => {
