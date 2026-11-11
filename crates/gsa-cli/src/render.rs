@@ -146,22 +146,30 @@ fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
     field_role(label, value, None, width)
 }
 
+/// The label cell's column budget (see [`field_role`]): 18 at a comfortable
+/// width, half the terminal when narrow, never below 8.
+fn field_label_cols(width: Option<usize>) -> usize {
+    const COMFORTABLE: usize = 18;
+    const FLOOR: usize = 8;
+    match width {
+        Some(width) => COMFORTABLE.min(width / 2).max(FLOOR),
+        None => COMFORTABLE,
+    }
+}
+
 /// [`field_w`] with an explicit role for the value (the two identity rows are
 /// bold, and the version warns when it moves). The RAW text comes in and is
 /// sanitised here, before any painting: a caller must never pre-paint, or an
 /// engine escape sequence and an injected one would be indistinguishable.
 fn field_role(label: &str, value: &str, role: Option<Role>, width: Option<usize>) -> String {
-    // The label cell keeps its 18-column alignment, but a label longer than
-    // a narrow terminal is CUT: the colon must stay on the label's own line
-    // (a 20-column `-Qi` otherwise emitted a 22-column line).
-    let padded = format!("{label:<18}");
-    let cell_text = match width {
-        Some(width) => padded
-            .chars()
-            .take(width.saturating_sub(1))
-            .collect::<String>(),
-        None => padded,
-    };
+    // The label cell keeps its 18-column alignment at comfortable widths and
+    // SHRINKS with a narrow terminal (floor 8): a fixed 18-column cell at a
+    // 20-column terminal left zero columns for the value, so `Name : foo`
+    // could never share a line. A label longer than the cell is still cut —
+    // the colon must stay on the label's own line.
+    let cols = field_label_cols(width);
+    let padded = format!("{label:<cols$}");
+    let cell_text: String = padded.chars().take(cols).collect();
     let label_cell = style::styled(Role::Dim, cell_text);
     let start = style::visible_width(&label_cell) + 2;
     if value.is_empty() {
@@ -325,6 +333,14 @@ fn record_fields(record: &gsa_model::TopologyRecord) -> Vec<(String, String)> {
 /// the side-car record (abi-token, subscriptions in/out, retained binpkg
 /// instances, VCS baseline), and the topology record. `extra` carries the
 /// installed + side-car fields (the query owns their derivation).
+/// One `-Qi` field with the block's width policy: the installed-only block
+/// renders through this same seam, so its label cell shrinks with a narrow
+/// terminal exactly like the recipe block's.
+pub(crate) fn info_field(label: &str, value: &str) -> String {
+    let width = output::is_human().then(crate::dashboard::terminal_width);
+    field_w(label, value, width)
+}
+
 pub fn render_package_info(
     ctx: &Ctx<'_>,
     record: &gsa_model::TopologyRecord,

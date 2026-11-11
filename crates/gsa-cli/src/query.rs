@@ -984,17 +984,28 @@ pub fn query_info(
             let _ = writeln!(out);
         }
         first = false;
-        let _ = writeln!(out, "Name            : {}", pkg.name);
-        let _ = writeln!(out, "Version         : {}", pkg.version);
+        // The same field seam as the recipe block: a narrow terminal shrinks
+        // the label cell instead of leaving the value no column.
+        let _ = writeln!(out, "{}", render::info_field("Name", &pkg.name));
+        let _ = writeln!(out, "{}", render::info_field("Version", &pkg.version));
         let _ = writeln!(
             out,
-            "Recipe          : (not a house recipe — installed package only)"
+            "{}",
+            render::info_field("Recipe", "(not a house recipe — installed package only)")
         );
         if let Some(desc) = &pkg.desc {
-            let _ = writeln!(out, "Description     : {desc}");
+            let _ = writeln!(out, "{}", render::info_field("Description", desc));
         }
-        let _ = writeln!(out, "Provides        : {}", join_or_none(&pkg.provides));
-        let _ = writeln!(out, "Depends On      : {}", join_or_none(&pkg.depends));
+        let _ = writeln!(
+            out,
+            "{}",
+            render::info_field("Provides", &join_or_none(&pkg.provides))
+        );
+        let _ = writeln!(
+            out,
+            "{}",
+            render::info_field("Depends On", &join_or_none(&pkg.depends))
+        );
     }
     Ok(())
 }

@@ -1669,7 +1669,10 @@ dispatch; a failure parks a cone (§I).
    roles and the `--color`/`NO_COLOR` ladder, the machine channel never
    carries an escape, width is measured in VISIBLE columns (so a coloured
    row still fits `width - 1`), and no state is ever signalled by colour
-   alone. `tests/rendering.sh` pins all four. **The one exception to
+   alone. A narrow terminal refits rather than crops (2026-11-11, F1):
+   `-Qi`'s label cell is 18 columns at a comfortable width and shrinks to
+   half the terminal (floor 8) so a value keeps the label's line, and the
+   dashboard re-probes the width on every redraw, so a resize is followed. `tests/rendering.sh` pins all four. **The one exception to
    "presentation follows the terminal"**: `--color=always` is an explicit
    request for the human rendering, so it crosses a pipe too (the machine
    vocabulary has no colour to ask for); `--machine` still wins. `-Qb`

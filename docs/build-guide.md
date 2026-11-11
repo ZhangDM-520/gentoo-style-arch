@@ -752,6 +752,12 @@ gsa -Q --color=always     # ask for the human rendering and colour, even into a 
 NO_COLOR=1 gsa -Q         # the standard opt-out, same as --color=never
 ```
 
+A narrow terminal REFITS instead of cropping: `-Qi`'s label cell keeps 18
+columns at a comfortable width and shrinks with the terminal (half the width,
+floor 8) so a value shares the label's line, and the dashboard re-probes the
+width on every redraw — a mid-run resize is followed, not frozen at run
+start.
+
 The ladder, first match wins: `--machine` → the machine vocabulary, no
 colour, ever; `--color=never` → the terminal's own choice, plain; `always`
 → the human rendering WITH colour, even through a pipe (`gsa -Q

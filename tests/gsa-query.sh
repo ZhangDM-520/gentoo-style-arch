@@ -580,6 +580,11 @@ if [ -z "$only" ] || [ "$only" = k ]; then
         if awk 'length($0) > 21 { wide = 1 } END { exit !wide }' "$fixture/k/body"; then
             fail "k: a -Qi line ran past the 20-column terminal:" "$fixture/k/body"
         fi
+        # The label cell SHRINKS with the terminal (18 -> width/2, floor 8):
+        # a fixed 18-column cell left the value zero columns, so `Name` and
+        # its value could never share a line (F1).
+        grep -Eq '^Name +: foo$' "$fixture/k/body" \
+            || fail "k: the label cell did not shrink — 'Name : foo' is not one line:" "$fixture/k/body"
     )
 fi
 

@@ -389,6 +389,13 @@ impl View {
     }
 
     fn redraw(&mut self, out: &mut dyn Write) {
+        // A resized terminal must REFIT, not crop: re-probe the width on
+        // every redraw (one ioctl per tick), which also covers a SIGWINCH
+        // between ticks. Only an interactive view has a width — a captured
+        // stream is never fitted, so it never probes.
+        if self.interactive {
+            self.width = terminal_width();
+        }
         let rows = self.rows_at(now_epoch());
         if !self.box_active {
             let _ = write!(out, "\x1b[?25l");
@@ -541,6 +548,31 @@ mod tests {
         assert_eq!(rows[6], "  · idle");
         assert_eq!(rows[9], "- Event: ✓ p2 (1s)");
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_resize_refits_the_box() {
+        // A mid-run terminal resize used to keep the width sampled at run
+        // start, so the box cropped (or over-fitted) until the next run. The
+        // redraw re-probes; in a captured test the probe answers the
+        // 80-column fallback, which is exactly the point: the stale 200 is
+        // never reused.
+        let mut view = View::new(true, PathBuf::new(), vec![id("p1")], 1, Vec::new());
+        view.interactive = true;
+        view.width = 200;
+        let mut out = Vec::new();
+        view.handle(&started(0), "→ p1", &mut out);
+        out.clear();
+        view.redraw(&mut out);
+        assert_eq!(view.width, terminal_width());
+        assert!(view.width < 200, "the stale width survived the redraw");
+        let text = String::from_utf8(out).unwrap();
+        for line in text.split('\n').filter(|line| !line.is_empty()) {
+            assert!(
+                style::visible_width(line) <= view.width,
+                "a drawn row overflows the re-probed width: {line:?}"
+            );
+        }
     }
 
     #[test]
