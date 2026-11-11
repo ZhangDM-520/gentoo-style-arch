@@ -14,8 +14,8 @@ set -euo pipefail
 # where a summary carries a count (`audit <family> N finding(s)`,
 # `doctor report N finding(s)`) the fixture recomputes N from the row stream.
 #
-# Pinned here (nine ( subshell ) sections; run one alone with
-# GSA_MAINT_V2_ONLY=a…i):
+# Pinned here (ten ( subshell ) sections; run one alone with
+# GSA_MAINT_V2_ONLY=a…j):
 #   a. `-Ma` audit report is report-only (§E.4): rc 0 on a synthetic
 #      workspace that deliberately carries findings (unregistered recipe
 #      dir, legacy `.Stable/` path reference, stale `.tmp.` artifact); rows
@@ -1080,6 +1080,38 @@ source=("git+https://example.invalid/fmirror.git")' git
         fi
         chmod 755 "$state" "$state/locks" # release the modeled split for cleanup
         assert_varlib_unchanged
+    )
+fi
+
+if want j; then
+    # ─── j. a REPORT verb never fetches the recipe store ────────────────────
+    # `-Ma` run outside any workspace used to clone the whole recipe
+    # repository from the network and then die on the unwritable
+    # `recipes.last-fetch` stamp, reporting a permission failure as a usage
+    # error (2026-11-11 blind-review finding). `gsa -Sy` is the one refresh;
+    # a report verb answers the same workspace guidance `-Sl` does.
+    (
+        set -euo pipefail
+        nowhere="$fixture/j/nowhere"
+        recipes="$fixture/j/recipes"
+        mkdir -p "$nowhere" "$fixture/j/conf"
+        set +e
+        out=$(cd "$nowhere" && env \
+            GSA_CONF_DIR="$fixture/j/conf" \
+            GSA_RECIPES_DIR="$recipes" \
+            GSA_STATE_DIR="$fixture/j/state" \
+            GSA_BUILD_DIR="$fixture/j/build" \
+            "${GSA_TEST_GSA_BIN}" -Ma 2>&1)
+        rc=$?
+        set -e
+        [ "$rc" -eq 2 ] || fail "j: -Ma without a workspace is a usage error (rc 2), got rc=$rc:
+$out"
+        case $out in
+        *'cannot find a recipe workspace'*) ;;
+        *) fail "j: -Ma must answer the workspace guidance: $out" ;;
+        esac
+        [ ! -e "$recipes/.git" ] \
+            || fail "j: a report verb must never fetch the store into $recipes"
     )
 fi
 

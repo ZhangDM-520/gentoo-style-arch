@@ -185,7 +185,19 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         ));
     }
 
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    // A REPORT-ONLY maintain verb never fetches the recipe store: `gsa -Sy`
+    // is the one refresh, and a first-run `-Ma` used to clone the whole
+    // repository from the network and then die on the unwritable
+    // `recipes.last-fetch` stamp — a permission failure wearing a usage
+    // error's rc (2026-11-11 blind review). Read-only resolution answers the
+    // same guidance `-Sl` does when no workspace exists.
+    let read_only = matches!(privilege(inv), super::Privilege::ReadOnly);
+    let root = if read_only {
+        crate::resolve_root(false, inv.state_dir.as_deref())
+    } else {
+        crate::resolve_workspace(inv)
+    }
+    .map_err(Exit::Usage)?;
     let project = load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
     let graph = gsa_graph::Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
