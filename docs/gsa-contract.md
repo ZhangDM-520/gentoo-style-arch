@@ -129,7 +129,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | --- | --- | --- | --- |
 | `-Q` | query | list installed workspace packages with side-car columns | pacman local DB (read-only), side-car DB, committed `.SRCINFO` + topology |
 | `-S` | build + install | build the selection and install each package before its consumers compile | as `-Q`, plus recipe sources |
-| `-B` | build-only | build the selection to archives; nothing is installed | as `-S`, minus install |
+| `-B` | build-only | build the selection to archives; the engine installs nothing (makepkg's own dependency check still runs through the engine's pacman shim, so a missing house dependency fails the build) | as `-S`, minus install |
 | `-U` | install from archives | install named archives/refs from the binpkg index | side-car DB, archives on disk, pacman local DB |
 | `-M` | maintain | report/repair engine state and sets | side-car DB, state root, logs, recipes |
 

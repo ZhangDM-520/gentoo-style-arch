@@ -114,7 +114,7 @@ and a root shell without a build user is refused with guidance.",
     Section {
         head: "Command surface — build-only (-B …):",
         blocks: &[
-            ("gsa -B <targets…> [ranges…]", "build the selection to archives in the build cache (PKGDEST; nothing is installed, no pacman call)"),
+            ("gsa -B <targets…> [ranges…]", "build the selection to archives in the build cache (PKGDEST). The ENGINE installs nothing and opens no transaction, but makepkg's own dependency check still runs through the engine's pacman shim: a house dependency that is not installed fails the build loudly (and installing it is a separate `-S`/`-U` run)"),
             ("gsa -B --dry-run <targets…> [ranges…]", "the same plan shape for build-only"),
         ],
     },
