@@ -385,8 +385,11 @@ mod render_tests {
             .find("\nRUSTFLAGS=\"")
             .expect("the universal body assigns RUSTFLAGS");
         let site = body.find("/etc/gsa/gcc-makepkg.conf").unwrap();
-        let export = body.find("\nexport RUSTFLAGS\n").unwrap();
+        let export = body.find("\nexport RUSTFLAGS NINJAFLAGS\n").unwrap();
         assert!(set < site && site < export, "{body}");
-        assert!(body.ends_with("export RUSTFLAGS\n"), "{body}");
+        // NINJAFLAGS is the lane job count's other home: `ninja`/`cmake
+        // --build`/`meson compile` read it from the environment, and makepkg
+        // exports only its buildenv list (blind review, 2026-11-11).
+        assert!(body.ends_with("export RUSTFLAGS NINJAFLAGS\n"), "{body}");
     }
 }
