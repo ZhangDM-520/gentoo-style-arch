@@ -536,11 +536,11 @@ $rows"
         grep -Eq '^INFO build-run packages=0 ' <<<"$FIXTURE_OUTPUT" \
             || fail "an empty -Ua must report packages=0: $FIXTURE_OUTPUT"
         # The `-` placeholder is not a package in the CONTINUATION either:
-        # `remaining:` renders the empty spelling, and the restated command
-        # carries no trailing `-` (a paste used to exit 2 "unknown reference
-        # '-'"; blind-review finding, 2026-11-11).
-        [ "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" = "-" ] \
-            || fail "an empty -Ua's remaining line must be '-', got: $(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")"
+        # `remaining:` renders the row-derived empty set, and the restated
+        # command carries no trailing `-` (a paste used to exit 2 "unknown
+        # reference '-'"; blind-review finding, 2026-11-11).
+        [ -z "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" ] \
+            || fail "an empty -Ua's remaining line must be empty, got: $(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")"
         case " $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" in
         *" - ") fail "the continuation must not name the '-' placeholder: $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" ;;
         esac

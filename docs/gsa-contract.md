@@ -1063,9 +1063,9 @@ row: `empty-list` belongs to a genuinely empty candidate plan.
 Continuation lines: `command:` (the restated invocation), `remaining:` (space-
 separated package IDs — every row not `succeeded`, in row order: failed,
 parked, deferred, never-started, interrupted — a failed package must rebuild
-before its consumers; an empty set renders `-`, and the `-` placeholder
-subject of an empty-list plan is never named, so the command stays
-pasteable), `not-mirrored:` (argv-scoped: the run's OWN argv
+before its consumers; the `-` placeholder subject of an empty-list plan is
+never named, so the command stays pasteable, and an empty set renders an
+empty value — the line is the same projection the outcome rows derive), `not-mirrored:` (argv-scoped: the run's OWN argv
 spellings the restated command does not replay — a run that carried none
 renders `-`), `env-required:` (ambient variables the resume must set). Continuation
 arguments come from ONE flag-rule table with an explicit not-mirrored list;
