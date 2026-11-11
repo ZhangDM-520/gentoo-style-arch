@@ -1164,8 +1164,20 @@ EOF
     run_engine "$ws" -Sw --dry-run --leaf app
     [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = app ] ||
         fail "e: a leaf fetch must fetch exactly the named recipes: $(rr2_scalar order <<<"$FIXTURE_OUTPUT")"
-
-
+    # f. an UNREADABLE installed DB cannot answer "what is missing", so the
+    # fetch refuses instead of fetching a set the build will not reproduce
+    # (rule 71: an unreadable file is never read as an absent one).
+    : >"$fixture/prereq/db-not-a-dir"
+    export GSA_FAKE_DB_PATH="$fixture/prereq/db-not-a-dir"
+    run_engine "$ws" -Sw --dry-run app
+    [ "$FIXTURE_RC" = 3 ] ||
+        fail "f: an unreadable installed DB must refuse the fetch (rc 3), got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -F 'cannot read' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "f: the refusal must name the unreadable database: $FIXTURE_OUTPUT"
+    if grep -F 'added build-order prerequisite' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "f: an unreadable DB was guessed past (a prerequisite was added anyway): $FIXTURE_OUTPUT"
+    fi
+    export GSA_FAKE_DB_PATH="$db"
 
     printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact)\n'
 )

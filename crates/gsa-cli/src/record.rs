@@ -557,9 +557,10 @@ pub fn build_run_record(
     // A run with nothing left has NO replay: `remaining:` is empty and a
     // selection-less `gsa -S` is a usage error (§B.1), so the line is
     // omitted rather than emitting a command that cannot be pasted
-    // (owner decision 2026-11-11). A standalone run's subjects are its
-    // paths, not rows, so it keeps its replay until every row succeeded.
-    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
+    // (owner decision 2026-11-11). This holds for a standalone run too: its
+    // paths are the subjects of its FAILED rows, so a successful one has
+    // nothing left to replay.
+    if remaining.is_empty() {
         command.clear();
     }
 
@@ -625,7 +626,7 @@ pub fn build_fetch_record(
         .map(|row| row.pkg.clone())
         .collect();
     command.push_str(&selection_argv(inv, &remaining));
-    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
+    if remaining.is_empty() {
         command.clear();
     }
 
@@ -814,7 +815,7 @@ pub fn build_txn_record(
         .collect();
     command.push_str(&selection_argv(inv, &remaining));
     command.push_str(&mirror_pacman_args(inv));
-    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
+    if remaining.is_empty() {
         command.clear();
     }
 
@@ -1312,6 +1313,40 @@ mod tests {
         assert!(
             !record.continuation.command.contains("gsa-standalone"),
             "the continuation must not name a staged id: {}",
+            record.continuation.command
+        );
+    }
+
+    /// A run that fully succeeded has nothing to replay — including a
+    /// standalone one, whose subjects are the paths of its FAILED rows
+    /// (§H.2: `command:` is omitted when `remaining:` is empty).
+    #[test]
+    fn a_successful_standalone_run_omits_its_continuation() {
+        let mut inv = inv_for(Family::B);
+        inv.standalone_tokens = vec!["/w/recipe".to_string()];
+        let staged = RecipeId::new("gsa-standalone-1-2").unwrap();
+        let outcomes = vec![OutcomeRow {
+            pkg: staged.clone(),
+            status: RowStatus::Succeeded,
+            rc: Some(0),
+            dur: Some(1),
+            reason: "ok".to_string(),
+        }];
+        let outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_run_record(
+            &inv,
+            &["/w/recipe".to_string()],
+            &[],
+            None,
+            Vec::new(),
+            vec![staged],
+            outcomes,
+            &outcome,
+            None,
+        );
+        assert!(
+            record.continuation.command.is_empty(),
+            "a settled run has no replay: {}",
             record.continuation.command
         );
     }

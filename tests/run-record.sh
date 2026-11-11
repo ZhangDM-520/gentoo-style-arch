@@ -81,6 +81,7 @@ fail() {
 # ─── Stub-knob vocabulary (§D.2: declared in the change that adds them) ────
 rr2_stub_knob GSA_FAKE_DEFER_PACKAGE "run-record makepkg stub: package id whose build exits 99 (deferral)"
 rr2_stub_knob GSA_FAKE_ENGINE_PID "run-record engine wrapper: pidfile of the engine process to signal"
+rr2_stub_knob GSA_FAKE_GCC_LOG "run-record gcc stub: every invocation appended here (a dry run must leave it empty)"
 
 # ─── The engine under test: the INSTALLED binary (contract §L.10);
 # GSA_TEST_GSA_BIN is the explicit pre-install override (rr-v2.bash) ──────────────────────

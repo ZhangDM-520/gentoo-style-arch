@@ -961,9 +961,11 @@ subject (§H.2, same date).
 the §E.3 decision row exactly as above (`skip already-current <v>` /
 `skip not-newer <v>`), and the RUN RECORD's outcome row names the class under
 one key: `skipped-current already-current <v>` or `skipped-current not-newer
-<v>`. A record therefore answers "did the transaction run?" from one reason
-prefix — `ok` means it did, `skipped-current` means the plan stood down —
-without the reader knowing the skip vocabulary. Pinned by
+<v>`. A decision row that carries no evidence still names its class —
+`skipped-current already-current` with no version — so the key is never
+followed by an empty field. A record therefore answers "did the transaction
+run?" from one reason prefix — `ok` means it did, `skipped-current` means the
+plan stood down — without the reader knowing the skip vocabulary. Pinned by
 `tests/gsa-install-v2.sh` §d and `gsa-cli::install`'s unit tests.
 
 *Amendment (2026-10-14, gap G1 — the repair surface).* In-run repair
