@@ -495,8 +495,7 @@ pub fn skip_decision(
         // (older makepkg, a foreign archive) falls back to the mtime compare
         // `test PKGBUILD -nt archive` (nanosecond mtimes).
         let current_hash = freshness::pkgbuild_content_hash(recipe_dir);
-        let recipe_time = std::fs::metadata(recipe_dir.join("PKGBUILD"))
-            .and_then(|m| m.modified());
+        let recipe_time = std::fs::metadata(recipe_dir.join("PKGBUILD")).and_then(|m| m.modified());
         for archive in &discovery.archives {
             let recorded = gsa_recipe::pkginfo::buildinfo_field(archive, "pkgbuild_sha256sum");
             if let (Some(current), Some(built)) = (current_hash.as_deref(), recorded.as_deref()) {
