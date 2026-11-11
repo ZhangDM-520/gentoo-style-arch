@@ -546,12 +546,7 @@ toolchain identities, `abi-repair/` markers, and the `recipes.last-fetch`
 store-refresh stamp (contract §J.1). The canonical recipe store is **not**
 here (see below). Relocate the entire root with `--state-dir PATH`, `GSA_STATE_DIR`, or
 the gsa.conf `state_dir` key (contract §J.3: flag beats env beats config beats
-the built-in default). The value must be absolute (`/path` or `~/path`, the
-same rule `--build-dir` follows): a relative root would resolve against the
-caller's cwd, so one spelling would name a different tree per directory. A
-root containing whitespace is refused too — the lane's `PACMAN` shim path
-reaches makepkg through an unquoted `type -P`, so a space would break every
-build. When the resolved root is unwritable and no override is
+the built-in default). When the resolved root is unwritable and no override is
 given, the run fails early naming `--state-dir` as the remedy; there is never
 a silent fallback to a home or workspace-local directory:
 

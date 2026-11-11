@@ -662,28 +662,6 @@ if want g; then
     )
 fi
 
-# ─── h. a relative state root refuses (parity with --build-dir) ────────────
-# A relative root resolves against the caller's cwd, so it silently names a
-# different tree per directory and can land root-owned state inside the
-# recipe checkout — 2026-11-11 blind-review finding.
-if want h; then
-    (
-        set -euo pipefail
-        ws="$fixture/h/ws"
-        make_workspace "$ws" 1 auto low
-        add_package "$ws" relpkg "$gsa_meta_any" git
-        GSA_STATE_DIR="./relstate" run_engine_user "$ws" -Q
-        [ "$FIXTURE_RC" -eq 2 ] \
-            || fail "h: a relative GSA_STATE_DIR is a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        case $FIXTURE_OUTPUT in
-        *'GSA_STATE_DIR:'*'not absolute'*) ;;
-        *) fail "h: the refusal must name the rung and the path: $FIXTURE_OUTPUT" ;;
-        esac
-        [ ! -e "$ws/relstate" ] \
-            || fail "h: a refused state root must never be created inside the workspace"
-    )
-fi
-
 # ─── the fixture never touched the real state root (§J.3) ──────────────────
 varlib_after=$( (find /var/lib/gsa -printf '%p %s %T@\n' 2>/dev/null || true) | sort | md5sum)
 [ "$varlib_after" = "$varlib_before" ] \

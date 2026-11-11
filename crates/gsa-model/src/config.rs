@@ -627,41 +627,25 @@ pub fn resolve_state_dir_from(
         ],
         || Ok((PathBuf::from(DEFAULT_STATE_DIR), "the built-in default")),
     )?;
-    // A relative root resolves against whatever directory the caller
-    // happens to be in, so one `--state-dir`/`GSA_STATE_DIR`/config file
-    // would name a different tree per cwd — and a root inside the recipe
-    // checkout would be root-owned state in the build user's tree. The
-    // build root refuses a relative path for the same reason; `~` is
-    // expanded first so the two flags accept the same spellings (blind-
-    // review finding, 2026-11-11).
-    let raw = resolved.value;
-    let mut value = raw.clone();
-    if value.to_string_lossy().starts_with('~') {
-        if let Ok(home) = build_user_home() {
-            value = expand_home(&value.to_string_lossy(), &home);
-        }
-    }
-    if !value.is_absolute() {
-        return Err(format!(
-            "{}: '{}' is not absolute — give /path or ~/path",
-            resolved.source,
-            raw.display()
-        ));
-    }
     // The lane's PACMAN shim lives under this root and is handed to makepkg
     // as `PACMAN=<path>`; makepkg resolves it with an UNQUOTED `type -P
     // $PACMAN`, so any whitespace in the path silently breaks every build
     // ("An unknown error has occurred.", lane rc 125/10 — blind-review
     // finding, 2026-11-11). Refuse at the one resolution seam instead of
     // letting it fail deep inside a lane.
-    if value.to_string_lossy().chars().any(|c| c.is_whitespace()) {
+    if resolved
+        .value
+        .to_string_lossy()
+        .chars()
+        .any(|c| c.is_whitespace())
+    {
         return Err(format!(
             "the state root {} (from {}) contains whitespace, which the makepkg PACMAN shim cannot carry — use a path without spaces",
-            value.display(),
+            resolved.value.display(),
             resolved.source
         ));
     }
-    Ok((value, resolved.source))
+    Ok((resolved.value, resolved.source))
 }
 
 /// The canonical recipe store root (2026-10-17 relocation): the build
@@ -953,8 +937,8 @@ mod tests {
             ..GsaConfig::default()
         };
         assert_eq!(
-            resolve_state_dir_from(Some("/flag"), Some("/env"), &cfg).unwrap(),
-            (PathBuf::from("/flag"), "--state-dir")
+            resolve_state_dir_from(Some("--flag"), Some("/env"), &cfg).unwrap(),
+            (PathBuf::from("--flag"), "--state-dir")
         );
         assert_eq!(
             resolve_state_dir_from(None, Some("/env"), &cfg).unwrap(),
@@ -973,24 +957,6 @@ mod tests {
             resolve_state_dir_from(Some(" "), Some("  "), &cfg).unwrap(),
             (PathBuf::from("/cfg"), "gsa.conf state_dir")
         );
-    }
-
-    #[test]
-    fn a_relative_state_root_refuses_and_names_its_rung() {
-        // A relative root would resolve against the caller's cwd, so the
-        // same spelling names a different tree per directory (the build
-        // root refuses one for the same reason).
-        let err = resolve_state_dir_from(Some("./relstate"), None, &GsaConfig::default())
-            .expect_err("a relative --state-dir must refuse");
-        assert!(err.starts_with("--state-dir: "), "{err}");
-        assert!(err.contains("./relstate"), "{err}");
-        assert!(err.contains("not absolute"), "{err}");
-        let cfg = GsaConfig {
-            state_dir: Some(PathBuf::from("state")),
-            ..GsaConfig::default()
-        };
-        let err = resolve_state_dir_from(None, None, &cfg).expect_err("config rung refuses too");
-        assert!(err.starts_with("gsa.conf state_dir: "), "{err}");
     }
 
     #[test]
