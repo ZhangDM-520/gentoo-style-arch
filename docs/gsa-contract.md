@@ -916,6 +916,15 @@ subject (§H.2, same date).
 | `noop` | nothing to do and that is not a failure — `empty-list` under `-Ua` |
 | `parked` | **new**: the package is parked — `waits-on-failed` (cone-stop) or `waits-on-deferred` / a deferral reason (`anchoring-refused`, `upstream-unverified`, `source-unfetchable`). The seam neither installs nor refuses; the row records the park |
 
+*Amendment (2026-11-11, did pacman run?).* A checked same-version skip keeps
+the §E.3 decision row exactly as above (`skip already-current <v>` /
+`skip not-newer <v>`), and the RUN RECORD's outcome row names the class under
+one key: `skipped-current already-current <v>` or `skipped-current not-newer
+<v>`. A record therefore answers "did the transaction run?" from one reason
+prefix — `ok` means it did, `skipped-current` means the plan stood down —
+without the reader knowing the skip vocabulary. Pinned by
+`tests/gsa-install-v2.sh` §d and `gsa-cli::install`'s unit tests.
+
 *Amendment (2026-10-14, gap G1 — the repair surface).* In-run repair
 coverage (rule 25(d)) never adds a decision kind: when the ABI gate's
 `abi-consumer`/`abi-stock-pinner` refusal is suppressed because the consumer
@@ -1209,7 +1218,7 @@ Pinned by `tests/gsa-model` rendering tests and the resume fixtures.
 
 | Status | Lane code(s) | Reasons |
 | --- | --- | --- |
-| `succeeded` | 0 | `ok`, `skip-built`, `freshness-waived`, `abi-provider-waived` |
+| `succeeded` | 0 | `ok`, `skipped-current <evidence>`, `skip-built`, `freshness-waived`, `abi-provider-waived` |
 | `failed` | 1, 125 | `build-failed`, `install-failed`, `lane-lost`, `log-unwritable` |
 | `deferred` | 99 | `anchoring-refused`, `upstream-unverified`, `source-unfetchable` |
 | `parked` | 98 | `waits-on-failed`, `waits-on-deferred` (and `coupled-batch` if the open decision resolves that way) |

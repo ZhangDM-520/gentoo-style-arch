@@ -869,6 +869,10 @@ if want d; then
         record_section plan | awk -v want="pkg skip already-current $canon" '
             $0 == want { found = 1 } END { exit !found }' \
             || fail "the -U record must plan the same-version skip (§E.3):" "$fixture/d/checked.txt"
+        # §H.3: the OUTCOME row says the transaction did not run — one reason
+        # key over the evidence, so "did pacman run?" needs no vocabulary.
+        grep < <(record_section outcome) -Eq "^pkg succeeded 0 - skipped-current already-current " \
+            || fail "the outcome row must name the checked skip (skipped-current):" "$fixture/d/checked.txt"
         [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
             || fail "a skipped package must not transact:" "$GSA_FAKE_PACMAN_LOG"
 

@@ -131,7 +131,13 @@ pub fn install_step(rows: &[DecisionRow], txn: Option<&TxnOutcome>) -> InstallSt
             if rows.iter().any(|r| r.decision == Decision::Install) {
                 InstallStep::Done("ok".to_string())
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Skip) {
-                InstallStep::Done(nonempty_reason(&row.reason, "already-current"))
+                // §H.3: a checked skip keeps its evidence (`already-current
+                // <v>` / `not-newer <v>`) under one reason key, so a record
+                // answers "did pacman run" without knowing the vocabulary.
+                InstallStep::Done(format!(
+                    "skipped-current {}",
+                    nonempty_reason(&row.reason, "already-current")
+                ))
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Parked) {
                 InstallStep::Done(nonempty_reason(&row.reason, "parked"))
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Noop) {
@@ -201,7 +207,14 @@ pub fn txn_outcome_rows(rows: &[DecisionRow], txn: &TxnOutcome, dur: i64) -> Vec
                         reason,
                     }
                 }
-                Decision::Skip | Decision::Noop => OutcomeRow {
+                Decision::Skip => OutcomeRow {
+                    pkg,
+                    status: RowStatus::Succeeded,
+                    rc: Some(0),
+                    dur: None,
+                    reason: format!("skipped-current {}", row.reason),
+                },
+                Decision::Noop => OutcomeRow {
                     pkg,
                     status: RowStatus::Succeeded,
                     rc: Some(0),
@@ -2108,6 +2121,23 @@ mod tests {
     }
 
     #[test]
+    fn a_checked_skip_names_itself_in_the_outcome_reason() {
+        // §H.3: the run record answers "did pacman run" from one key. The
+        // evidence stays after it (`already-current <v>`, `not-newer <v>`),
+        // and the plan row keeps the §E.2 spelling unchanged.
+        let rows = vec![row("p", Decision::Skip, "already-current 1-1")];
+        match install_step(&rows, Some(&TxnOutcome::Ok)) {
+            InstallStep::Done(reason) => {
+                assert_eq!(reason, "skipped-current already-current 1-1")
+            }
+            other => panic!("expected done, got {other:?}"),
+        }
+        let outcomes = txn_outcome_rows(&rows, &TxnOutcome::Ok, 0);
+        assert_eq!(outcomes[0].reason, "skipped-current already-current 1-1");
+        assert_eq!(outcomes[0].status, RowStatus::Succeeded);
+    }
+
+    #[test]
     fn transaction_failures_map_to_install_failed_classes() {
         let rows = vec![row("a", Decision::Install, "ok")];
         match install_step(
@@ -2153,11 +2183,11 @@ mod tests {
                 &[row("a", Decision::Skip, "already-current")],
                 Some(&TxnOutcome::Ok)
             ),
-            InstallStep::Done("already-current".to_string())
+            InstallStep::Done("skipped-current already-current".to_string())
         );
         assert_eq!(
             install_step(&[row("a", Decision::Skip, "already-current")], None),
-            InstallStep::Done("already-current".to_string())
+            InstallStep::Done("skipped-current already-current".to_string())
         );
         match install_step_from_result(Err("disk on fire".to_string())) {
             InstallStep::Halt {
@@ -2184,7 +2214,7 @@ mod tests {
         let out = txn_outcome_rows(&rows, &TxnOutcome::Ok, 3);
         assert_eq!(out[0].reason, "ok");
         assert_eq!(out[0].dur, Some(3));
-        assert_eq!(out[1].reason, "already-current");
+        assert_eq!(out[1].reason, "skipped-current already-current");
         assert_eq!(out[2].status, RowStatus::Parked);
         let outcome = RunOutcome::compute(&out, false, false, false);
         assert_eq!((outcome.outcome, outcome.rc), ("deferral", 5));
