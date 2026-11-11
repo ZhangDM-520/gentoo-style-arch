@@ -182,7 +182,7 @@ pub fn check(root: &StateRoot, scan_dirs: &[PathBuf]) -> Result<HealthReport, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{register_instance, Retention};
+    use crate::index::{register_instance, BinpkgIndex, Retention};
     use gsa_model::{Group, RecipeId, TopologyRecord};
 
     fn scratch(name: &str) -> std::path::PathBuf {
@@ -246,6 +246,61 @@ mod tests {
         let report = check(&root, &[recipe_dir]).unwrap();
         assert!(report.clean(), "{:?}", report.findings);
         assert_eq!(report.index_rows, 1);
+    }
+
+    /// A lane that produced no discoverable archive must not advance
+    /// retention: the sweep used to tombstone the last GOOD instance and
+    /// delete its archive, leaving the state root with no live row
+    /// (blind review, 2026-11-11).
+    #[test]
+    fn an_empty_registration_never_sweeps_retention() {
+        let dir = scratch("empty-registration");
+        let root = StateRoot::open(&dir).unwrap();
+        let recipe_dir = dir.join("packages").join("leaf");
+        std::fs::create_dir_all(&recipe_dir).unwrap();
+        let archive = make_archive(&recipe_dir, "leaf", "1.0.0-1");
+        let mut err = Vec::new();
+        register_instance(
+            &root,
+            "leaf",
+            &[archive.clone()],
+            &retention(),
+            &std::collections::BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        // A second build that discovers nothing (a drifted .SRCINFO output
+        // name is the documented way this happens).
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[],
+            &retention(),
+            &std::collections::BTreeSet::new(),
+            None,
+            &mut err,
+        )
+        .unwrap();
+        assert!(outcome.rows.is_empty());
+        assert!(
+            outcome
+                .notes
+                .iter()
+                .any(|n| n.contains("produced no discoverable archive")),
+            "{:?}",
+            outcome.notes
+        );
+        assert!(
+            archive.exists(),
+            "the previous instance's archive must survive"
+        );
+        let index = BinpkgIndex::load(&root).unwrap();
+        assert!(
+            index.rows.iter().any(|r| r.recipe_id == "leaf"),
+            "the previous instance must stay live: {:?}",
+            index.rows.len()
+        );
     }
 
     #[test]

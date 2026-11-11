@@ -565,6 +565,19 @@ pub fn register_instance(
         rows.len()
     ));
     outcome.rows = rows;
+    // ZERO archives is "nothing built", never a fresh instance (the module
+    // pitfall: a completeness check must not bless the empty set). Advancing
+    // retention on an empty registration tombstoned the last GOOD instance
+    // and deleted its archive — a drifted `.SRCINFO` output name turned a
+    // healthy state root into one with no live row (blind review,
+    // 2026-11-11). The instance number was already consumed above; the
+    // sweep is what must not run.
+    if outcome.rows.is_empty() {
+        outcome.notes.push(format!(
+            "binpkg index: {recipe_id} produced no discoverable archive — no row, and retention is NOT swept (the previous instance stays live)"
+        ));
+        return Ok(outcome);
+    }
 
     // Retention enforcement (owner decision 2): sweep every recipe in the
     // index to its budget, newest instances kept, oldest instances pruned
