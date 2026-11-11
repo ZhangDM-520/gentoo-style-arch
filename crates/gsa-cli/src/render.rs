@@ -25,6 +25,19 @@ fn is_absent(value: &str) -> bool {
     )
 }
 
+/// `1.0-1` and `0:1.0-1` are the same version: normalise both to
+/// `epoch:pkgver-pkgrel` before comparing.
+fn same_version(left: &str, right: &str) -> bool {
+    let full = |version: &str| {
+        if version.split(':').count() > 1 {
+            version.to_string()
+        } else {
+            format!("0:{version}")
+        }
+    };
+    full(left) == full(right)
+}
+
 fn join_list(values: &[String]) -> String {
     if values.is_empty() {
         "(none)".to_string()
@@ -63,7 +76,20 @@ fn wrap_at(text: &str, start_column: usize, width: usize, indent: usize) -> Stri
             column += 1;
         }
         let room = width.saturating_sub(column);
-        if style::visible_width(&word) > room && room > 1 {
+        if room == 0 {
+            // The label alone fills the line: start the value on the next.
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            column = indent;
+            first = true;
+            rest = if rest.is_empty() {
+                word
+            } else {
+                format!("{word} {rest}")
+            };
+            continue;
+        }
+        if style::visible_width(&word) > room {
             // The token cannot fit on this line: keep what fits, carry the
             // rest to the next one (a URL has no spaces to break on).
             let (head, back) = style::split_visible(&word, room);
@@ -165,11 +191,13 @@ pub fn render_listing(ctx: &Ctx<'_>, listed: &[(usize, RecipeId)], whole_set: bo
         for group in Group::ROSTER {
             let count = ctx.project.topology.members(group).len();
             let label = style::styled(Role::Accent, format!("{}:", group.as_str()));
-            out.push_str(&format!(
-                "  {}{:>4} packages\n",
-                style::pad(&label, 13),
-                count
-            ));
+            let cell = format!("{count:>4}");
+            let cell = if count == 0 {
+                style::styled(Role::Dim, cell)
+            } else {
+                cell
+            };
+            out.push_str(&format!("  {}{cell} packages\n", style::pad(&label, 13)));
         }
     } else {
         out.push_str("Ranges index this list: e.g. '22..38' selects entries 22-38 above.\n");
@@ -217,7 +245,7 @@ fn sources_block(meta: &RecipeMeta, wrap: Option<usize>) -> String {
         };
         let name = source.name.map(|n| format!("{n}::")).unwrap_or_default();
         let tag = style::styled(Role::Dim, format!("[{label}]"));
-        let start_column = 4 + label.chars().count() + 3;
+        let start_column = 4 + label.chars().count() + 2 + 1 + name.chars().count();
         let location = match wrap {
             Some(width) if start_column + source.location.chars().count() > width => {
                 wrap_at(&source.location, start_column, width, 4)
@@ -254,6 +282,9 @@ pub fn render_package_info(
     record: &gsa_model::TopologyRecord,
     pkgname: &str,
     version: &str,
+    // The installed record's version (`None`: not installed) — passed in,
+    // never sniffed out of `extra` by its label spelling.
+    installed: Option<&str>,
     extra: &[(String, String)],
 ) -> String {
     let meta = ctx.db.get(record.id.as_str());
@@ -265,12 +296,11 @@ pub fn render_package_info(
     out.push('\n');
     // A recipe version that differs from the INSTALLED one means the next
     // install moves the package; yellow says so without changing a word.
-    let installed = extra
-        .iter()
-        .find(|(label, _)| label == "Installed-Version")
-        .map(|(_, value)| value.as_str());
+    // The installed record spells the version with its epoch (`0:1.0-1`);
+    // the recipe record may omit a zero epoch — compare normalised, or every
+    // row would warn (rule 27's `epoch:pkgver` form).
     let version_role = match installed {
-        Some(value) if !is_absent(value) && value != version => Role::Warn,
+        Some(value) if !is_absent(value) && !same_version(value, version) => Role::Warn,
         _ => Role::Bold,
     };
     out.push_str(&f("Version", &style::paint(version_role, version)));

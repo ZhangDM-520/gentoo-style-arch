@@ -564,7 +564,7 @@ fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
         show_built: true,
         show_instances: true,
     };
-    let layout = layout.fit(terminal, NAME_FLOOR, VERSION_FLOOR);
+    let layout = layout.fit(terminal, INSTANCES_W, NAME_FLOOR, VERSION_FLOOR);
     let width = layout.width(INSTANCES_W);
     // The last resort: a terminal narrower than every floor still gets a
     // rectangle — truncate the rendered row, never overflow it.
@@ -606,7 +606,9 @@ fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
                 }
                 if layout.show_instances {
                     line.push(' ');
-                    let count = side_car.instances.to_string();
+                    // Clamped to the cell: a count that cannot fit must
+                    // shorten (with `…`), never widen one row of the table.
+                    let count = style::truncate_end(&side_car.instances.to_string(), INSTANCES_W);
                     // One instance is the ordinary case — dim it. More than
                     // one is worth the eye; zero is a fact, not a shade.
                     let cell = if side_car.instances == 1 {
@@ -662,30 +664,33 @@ impl Layout {
         width
     }
 
-    /// The fit ladder: `instances`, then `built`, then the token halved, then
-    /// the version, then the name — the name is the last thing shortened,
-    /// because it is what a reader copies. Every rung is bounded by a floor;
-    /// [`installed_table`] hard-truncates anything that survives them all.
-    fn fit(mut self, terminal: usize, name_floor: usize, version_floor: usize) -> Layout {
-        const INSTANCES_W: usize = 4;
-        if self.width(INSTANCES_W) > terminal {
+    /// The fit ladder, in order: `instances`, then `built`, then the token
+    /// halved, then the version, then the name — the name is the last thing
+    /// shortened, because it is what a reader copies. Every rung is bounded
+    /// by a floor; [`installed_table`] hard-truncates anything that survives
+    /// them all, which a correct ladder only reaches on a terminal narrower
+    /// than the floors.
+    fn fit(
+        mut self,
+        terminal: usize,
+        instances_w: usize,
+        name_floor: usize,
+        version_floor: usize,
+    ) -> Layout {
+        if self.width(instances_w) > terminal {
             self.show_instances = false;
         }
-        if self.width(INSTANCES_W) > terminal && self.built > 0 {
+        if self.width(instances_w) > terminal && self.built > 0 {
             self.show_built = false;
         }
-        if self.width(INSTANCES_W) > terminal {
+        if self.width(instances_w) > terminal {
             self.abi = 4 + 4 + 1;
         }
-        while self.width(INSTANCES_W) > terminal && self.version > version_floor {
+        while self.width(instances_w) > terminal && self.version > version_floor {
             self.version -= 1;
         }
-        while self.width(INSTANCES_W) > terminal && self.name > name_floor {
+        while self.width(instances_w) > terminal && self.name > name_floor {
             self.name -= 1;
-        }
-        if self.show_built && self.width(INSTANCES_W) > terminal && self.built > 6 {
-            // A built version is diagnostic-only: shrink it before the floors.
-            self.built = 6;
         }
         self
     }
@@ -792,6 +797,7 @@ pub fn query_info(
             }
             first = false;
             let mut extra: Vec<(String, String)> = Vec::new();
+            let installed_version: Option<String> = db.get(&pkgname).map(|pkg| pkg.version.clone());
             match db.get(&pkgname) {
                 Some(pkg) => {
                     extra.push(("Installed-Version".to_string(), pkg.version.clone()));
@@ -852,7 +858,14 @@ pub fn query_info(
             let _ = write!(
                 out,
                 "{}",
-                render::render_package_info(ctx, record, &pkgname, &version, &extra)
+                render::render_package_info(
+                    ctx,
+                    record,
+                    &pkgname,
+                    &version,
+                    installed_version.as_deref(),
+                    &extra,
+                )
             );
         }
     }
@@ -1040,6 +1053,43 @@ mod table_tests {
     }
 
     #[test]
+    fn the_ladder_walks_every_rung_before_touching_the_name() {
+        let start = Layout {
+            name: 32,
+            version: 22,
+            built: 22,
+            abi: 13,
+            show_built: true,
+            show_instances: true,
+        };
+        // Room to spare: nothing is dropped.
+        assert_eq!(start.fit(120, 4, 8, 10), start);
+        // One rung: the two diagnostic columns go, the widths stay.
+        let fitted = start.fit(90, 4, 8, 10);
+        assert!(!fitted.show_instances && !fitted.show_built);
+        assert_eq!((fitted.name, fitted.version, fitted.abi), (32, 22, 13));
+        assert_eq!(fitted.width(4), 70);
+        // Then the token halves, then the version shrinks — still not the name.
+        let fitted = start.fit(60, 4, 8, 10);
+        assert_eq!((fitted.name, fitted.abi), (32, 9));
+        assert!(
+            (10..22).contains(&fitted.version),
+            "the version shrank to {} (the ladder stops as soon as it fits)",
+            fitted.version
+        );
+        assert!(fitted.width(4) <= 60);
+        // The name is the last thing shortened, and stops at its floor.
+        let fitted = start.fit(40, 4, 8, 10);
+        assert!(
+            (8..32).contains(&fitted.name),
+            "the name shrank to {} (the ladder stops as soon as it fits)",
+            fitted.name
+        );
+        assert!(fitted.width(4) <= 40, "{:?}", fitted);
+        assert!(fitted.version >= 10);
+    }
+
+    #[test]
     fn a_narrow_terminal_still_gets_one_rectangle() {
         // A 22+-character version is the case the first ladder missed: the
         // name floor alone could not pull the row under the terminal.
@@ -1059,6 +1109,14 @@ mod table_tests {
                 1,
                 "terminal {terminal} is not rectangular: {widths:?}"
             );
+            // 40 is above every floor: the LADDER must have done the work,
+            // not the last-resort truncation (which would hide a dead rung).
+            if terminal >= 40 {
+                assert!(
+                    !table.contains("..."),
+                    "terminal {terminal} fell through to the hard fit:\n{table}"
+                );
+            }
         }
     }
 

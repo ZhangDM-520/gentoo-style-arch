@@ -287,6 +287,13 @@ pub fn split_visible(text: &str, budget: usize) -> (String, String) {
             }
             if let Some((_, byte)) = next.take() {
                 head.push(byte);
+                // `ESC (` / `ESC )` / `ESC *` / `ESC +` take one more byte,
+                // exactly as `visible_width` counts them.
+                if matches!(byte, '(' | ')' | '*' | '+') {
+                    if let Some((_, extra)) = chars.next() {
+                        head.push(extra);
+                    }
+                }
             }
             continue;
         }

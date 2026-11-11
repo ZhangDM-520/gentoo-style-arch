@@ -137,7 +137,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 
 | Spelling | Action |
 | --- | --- |
-| `gsa -Q` | list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists. On a terminal this is a headerless TABLE — one visible width for every row: name (cap 32, middle-ellipsis), version (tail-ellipsis), `abi=` + 8 hex + `…`, `built=`, `instances=` (right-aligned); a version that differs from `built=` is `Warn`. The columns are the §B.3 fields, not their bytes: the fit ladder drops `instances`, then `built`, then halves the token, then shortens the version, then the name — a name is what a reader copies, so it goes last, and every row is truncated rather than overflowed. A captured stdout (or `--machine`) prints the flat row `name version abi=<full> built=<full> instances=N`, byte-stable (§L.9) |
+| `gsa -Q` | list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists. On a terminal this is a headerless TABLE — one visible width for every row: name (cap 32, middle-ellipsis), version (tail-ellipsis), `abi=` + 8 hex + `…`, `built=`, and a right-aligned `instances` count; a version that differs from `built=` is `Warn`. The columns are the §B.3 fields, not their bytes: the fit ladder drops `instances`, then `built`, then halves the token, then shortens the version, then the name — a name is what a reader copies, so it goes last, and every row is truncated rather than overflowed (one column is always left unused). A captured stdout prints the flat row `name version abi=<full> built=<full> instances=N`, byte-stable (§L.9); `--machine` forces that row, while `--color=always` instead asks for the human rendering (§L.9's one exception) |
 | `gsa -Qi <ref…>` | info: pacman fields plus the side-car record (abi-token, subscriptions in/out, retained binpkg instances, VCS baseline), recipe metadata and the topology record — the merged home of the retired `-Si` (2026-10-28, H8) |
 | `gsa -Qs <pattern…>` | search installed names/descriptions (pacman `-Qs` semantics) |
 | `gsa -Qg [name…]` | groups/sets and their members (all with counts by default) — the home of the retired `-Sg` (2026-10-28, H5/H7) |
@@ -1522,10 +1522,10 @@ dispatch; a failure parks a cone (§I).
    retired — presentation follows the terminal and never changes hands).
    Every event renders in BOTH vocabularies and the machine grammar is
    unit-pinned (`render::tests`), the box is fixture-pinned
-   (`tests/dashboard-pty.sh`), and the cosmetic shape — table geometry,
-   colour, width fitting — is pinned by `tests/rendering.sh` (the only
-   fixture allowed to assert on rendering geometry; prose WORDING stays
-   pinned in `tests/dashboard.sh` alone). A wording change breaks exactly those pins,
+   (`tests/dashboard-pty.sh`), and the colour ladder, the `-Q` table
+   geometry, the width fitting and the footer alignment are pinned by
+   `tests/rendering.sh` (the only fixture allowed to assert on rendering
+   geometry; prose WORDING stays pinned in `tests/dashboard.sh` alone). A wording change breaks exactly those pins,
    never the record grammar (§H/§L.2). **Colour belongs to the human
    vocabulary only** (2026-11-11): one seam (`gsa-cli::style`) owns the
    roles and the `--color`/`NO_COLOR` ladder, the machine channel never

@@ -530,8 +530,9 @@ split.
     glyph, so a `NO_COLOR` reader loses nothing. The machine rows (the record,
     the kv lines, the decision rows, `-Qb`'s wire row) are byte-stable; the
     human shapes — the `-Q` table, the `-Qg`/`-Sl` footers, `-Qi` wrapping —
-    may change, and `tests/rendering.sh` is the one fixture that pins their
-    geometry (prose WORDING stays pinned in `tests/dashboard.sh`).
+    may change; `tests/rendering.sh` pins the ladder, the `-Q` table
+    geometry, the width fitting and the footer alignment (prose WORDING stays
+    pinned in `tests/dashboard.sh`).
 
 ## 5 · Pitfalls
 

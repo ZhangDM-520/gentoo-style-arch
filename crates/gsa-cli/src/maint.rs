@@ -611,15 +611,19 @@ fn render_rows(rows: &[Row]) -> String {
 /// hunts for onto a role — `clean` green, `failed` red, a drift or a gap
 /// yellow — and leaves everything else plain.
 fn render_row(row: &Row) -> String {
-    // `-Ma`'s count row carries `N finding(s)` as its action (gsa-maint's
-    // audit vocabulary), so a count is yellow without a second counter here.
-    let role = match row.action.as_str() {
+    // gsa-maint puts the audit verdict in the REASON (`audit <family>` +
+    // `clean`/`N finding(s)`), a prune outcome in the ACTION; both fields are
+    // read here so `-Ma`, `-Md` and the mutating verbs agree.
+    let verdict = |text: &str| match text {
         "clean" => Some(style::Role::Ok),
         "failed" => Some(style::Role::Fail),
         "drift" | "missing" | "absent" => Some(style::Role::Warn),
-        action if action.ends_with("finding(s)") => Some(style::Role::Warn),
+        value if value.ends_with("finding(s)") && value != "0 finding(s)" => {
+            Some(style::Role::Warn)
+        }
         _ => None,
     };
+    let role = verdict(&row.action).or_else(|| verdict(&row.reason));
     let action = match role {
         Some(role) => style::styled(role, row.action.clone()),
         None => row.action.clone(),
