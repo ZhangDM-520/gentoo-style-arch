@@ -17,6 +17,7 @@ pub mod config;
 pub mod guard;
 pub mod makepkg_conf;
 pub mod privilege;
+pub mod proc;
 pub mod read;
 pub mod toolchain;
 

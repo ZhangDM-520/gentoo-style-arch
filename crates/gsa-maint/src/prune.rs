@@ -373,6 +373,18 @@ fn run_targets(
             rows.push(protect::keep_row(&shown, "symlink"));
             continue;
         }
+        // Another STATE ROOT's run may be working in the same build cache:
+        // the run-lock guard is per state root and cannot see it, so a live
+        // process inside the tree is the only proof of use (`-Mccc` from a
+        // second root deleted another run's in-flight staging — blind-review
+        // 2026-11-11, data-center-ops). Files are left to the archive guard
+        // above; only directories can host a build.
+        if target.path.is_dir() && !target.symlink {
+            if let Some(pid) = gsa_model::proc::tree_in_use(&target.path) {
+                rows.push(protect::keep_row(&shown, &format!("in-use pid {pid}")));
+                continue;
+            }
+        }
         if !apply {
             rows.push(Row::new(shown, "prune", target.kind));
             continue;

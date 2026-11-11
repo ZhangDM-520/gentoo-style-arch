@@ -410,10 +410,24 @@ pub fn drift_clean(recipe_dir: &Path, log: &mut Vec<String>) {
         }
     };
     for tree in &targets.trees {
-        if tree.exists() {
-            if let Err(error) = std::fs::remove_dir_all(tree) {
-                log.push(format!("cannot remove {}: {error}", tree.display()));
-            }
+        if !tree.exists() {
+            continue;
+        }
+        // The build cache may be shared by another state root's run, whose
+        // own run lock this process cannot see: a live process inside the
+        // tree is the only ownership proof, and removing it there kills an
+        // in-flight makepkg (blind-review 2026-11-11, data-center-ops). The
+        // identity is per state root, so a fresh root re-triggers this clean
+        // against a cache nobody there built.
+        if let Some(pid) = gsa_model::proc::tree_in_use(tree) {
+            log.push(format!(
+                "not cleaning {} — a live process (pid {pid}) is working inside it",
+                tree.display()
+            ));
+            continue;
+        }
+        if let Err(error) = std::fs::remove_dir_all(tree) {
+            log.push(format!("cannot remove {}: {error}", tree.display()));
         }
     }
     for file in targets.archives.iter().chain(targets.sidecars.iter()) {

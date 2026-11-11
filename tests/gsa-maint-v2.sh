@@ -1007,6 +1007,39 @@ source=("git+https://example.invalid/gsrc.git")' git
         [ -f "$ws/packages/prgamma/prgamma-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "an unselected recipe's archive must survive strength 1"
 
+        # ── a live process inside a tree keeps it ────────────────────────
+        # The build cache can be shared by another STATE ROOT's run, and the
+        # run lock is per state root: a `-Mccc` from a second root deleted
+        # another run's in-flight staging (blind-review 2026-11-11,
+        # data-center-ops). A live process with its cwd inside the tree is
+        # the ownership proof that survives the state-root boundary.
+        add_package "$ws" prdelta 'pkgver=1.0.0
+pkgrel=1
+arch=(any)'
+        mkdir -p "$ws/packages/prdelta/build"
+        printf 'in-flight\n' >"$ws/packages/prdelta/build/file"
+        (
+            cd "$ws/packages/prdelta/build" || exit 1
+            exec sleep 30
+        ) &
+        live=$!
+        for _ in $(seq 1 100); do
+            [ "$(readlink "/proc/$live/cwd" 2>/dev/null || true)" = "$ws/packages/prdelta/build" ] && break
+            sleep 0.05
+        done
+        run_engine "$ws" -Mc --state-dir "$state" prdelta
+        [ "$FIXTURE_RC" = 0 ] || fail "the in-use prune plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "$ws/packages/prdelta/build keep in-use pid" >/dev/null ||
+            fail "a tree a live process works in must be kept, not pruned: $FIXTURE_OUTPUT"
+        [ -d "$ws/packages/prdelta/build" ] ||
+            fail "the in-use staging tree was deleted while a process worked in it"
+        kill "$live" 2>/dev/null || true
+        wait "$live" 2>/dev/null || true
+        run_engine "$ws" -Mc --state-dir "$state" prdelta
+        [ "$FIXTURE_RC" = 0 ] || fail "the idle prune plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ ! -e "$ws/packages/prdelta/build" ] ||
+            fail "without a live process the staging tree is pruned"
+
         # ── strength 2 (-Mcc): every archive in the workspace ────────────
         run_engine "$ws" -Mcc --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "-Mcc is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
