@@ -184,7 +184,14 @@ if [ -z "$only" ] || [ "$only" = b ]; then
         ws="$fixture/b/ws"
         state="$fixture/b/state"
         make_workspace "$ws" 1 1 low
-        add_package "$ws" foo "$gsa_meta_any"
+        # A recipe with NO committed `.SRCINFO`: the recipe-section fields
+        # must come from the read-only PKGBUILD scan, never `(scan)`/`(none)`
+        # (blind-review finding, 2026-11-11).
+        b_meta=$(printf '%s\n' \
+            'pkgver=1.0.0' 'pkgrel=1' "arch=('x86_64')" \
+            'url="https://example.invalid/foo"' "license=('MIT' 'Apache-2.0')" \
+            "depends=('bar>=2')" 'makedepends=("$BUILDDEP")')
+        add_package "$ws" foo "$b_meta"
         make_local_db "$fixture/b/db"
         make_pacman_stubs "$ws/bin" "$fixture/b/db"
         export PATH="$ws/bin:$PATH"
@@ -206,6 +213,11 @@ if [ -z "$only" ] || [ "$only" = b ]; then
             'Subscriptions-In : (none)' \
             'Subscriptions-Out : (none)' \
             'Recipe-Id : foo' \
+            'URL : https://example.invalid/foo' \
+            'Architecture : x86_64' \
+            'Licenses : MIT, Apache-2.0' \
+            'Depends On : bar>=2' \
+            'Make Depends On : (dynamic)' \
             'Metadata-Source'; do
             grep -F "$probe" <<<"$flat" >/dev/null \
                 || fail "b: merged info is missing '$probe': $FIXTURE_OUTPUT"

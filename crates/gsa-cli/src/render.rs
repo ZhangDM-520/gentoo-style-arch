@@ -21,7 +21,12 @@ use crate::style::{self, Role};
 fn is_absent(value: &str) -> bool {
     matches!(
         value,
-        "(none)" | "(scan)" | "(not installed)" | "(no side-car row)"
+        "(none)"
+            | "(scan)"
+            | "(not installed)"
+            | "(no side-car row)"
+            | "(dynamic)"
+            | "(unreadable)"
     )
 }
 
@@ -317,32 +322,81 @@ pub fn render_package_info(
         // committed `.SRCINFO` fields, the pkgver() scan fact and the
         // sources block.
         let info = meta.srcinfo.as_ref();
-        let multi = |get: fn(&gsa_recipe::Srcinfo) -> Vec<String>| {
-            info.map(|i| join_list(&get(i)))
-                .unwrap_or_else(|| "(scan)".to_string())
+        // Without a committed `.SRCINFO` the fields come from the read-only
+        // PKGBUILD scan — a literal assignment is answered, a shell-dynamic
+        // one is `(dynamic)` (unknown is not absent, rule 71) and a key the
+        // PKGBUILD never sets is `(none)`.
+        let scan = ctx.db.scan_for(&record.id);
+        let scan_failed = scan.is_err();
+        let scan = scan.ok();
+        let scanned = |key: &str| -> Option<Vec<String>> {
+            // An unreadable PKGBUILD is not an absent value (rule 71): the
+            // cell says so instead of claiming the recipe declares nothing.
+            if scan_failed {
+                return Some(vec!["(unreadable)".to_string()]);
+            }
+            let scan = scan.as_ref()?;
+            let dynamic = scan.dynamic.contains(key);
+            let literal = match scan.vars.get(key) {
+                Some(gsa_recipe::ScanValue::Scalar(text)) => vec![text.clone()],
+                Some(gsa_recipe::ScanValue::Array(items)) => items.clone(),
+                None => Vec::new(),
+            };
+            match (literal.is_empty(), dynamic) {
+                (true, true) => Some(vec!["(dynamic)".to_string()]),
+                (_, true) => {
+                    let mut values = literal;
+                    values.push("(dynamic)".to_string());
+                    Some(values)
+                }
+                (true, false) => None,
+                (false, false) => Some(literal),
+            }
+        };
+        let multi = |key: &str, get: fn(&gsa_recipe::Srcinfo) -> Vec<String>| match info {
+            Some(i) => join_list(&get(i)),
+            None => scanned(key)
+                .map(|items| join_list(&items))
+                .unwrap_or_else(|| "(none)".to_string()),
         };
         out.push_str(&f(
             "URL",
-            info.and_then(|i| i.url.as_deref()).unwrap_or("(none)"),
+            info.and_then(|i| i.url.as_deref())
+                .map(str::to_string)
+                .or_else(|| scanned("url").map(|items| items.join(", ")))
+                .as_deref()
+                .unwrap_or("(none)"),
         ));
         out.push('\n');
-        out.push_str(&f("Architecture", &multi(|i| i.arch.clone())));
+        out.push_str(&f("Architecture", &multi("arch", |i| i.arch.clone())));
         out.push('\n');
-        out.push_str(&f("Licenses", &multi(|i| i.license.clone())));
+        out.push_str(&f("Licenses", &multi("license", |i| i.license.clone())));
         out.push('\n');
-        out.push_str(&f("Depends On", &multi(|i| i.depends.clone())));
+        out.push_str(&f("Depends On", &multi("depends", |i| i.depends.clone())));
         out.push('\n');
-        out.push_str(&f("Make Depends On", &multi(|i| i.makedepends.clone())));
+        out.push_str(&f(
+            "Make Depends On",
+            &multi("makedepends", |i| i.makedepends.clone()),
+        ));
         out.push('\n');
-        out.push_str(&f("Check Depends On", &multi(|i| i.checkdepends.clone())));
+        out.push_str(&f(
+            "Check Depends On",
+            &multi("checkdepends", |i| i.checkdepends.clone()),
+        ));
         out.push('\n');
-        out.push_str(&f("Opt Depends On", &multi(|i| i.optdepends.clone())));
+        out.push_str(&f(
+            "Opt Depends On",
+            &multi("optdepends", |i| i.optdepends.clone()),
+        ));
         out.push('\n');
-        out.push_str(&f("Provides", &multi(|i| i.provides.clone())));
+        out.push_str(&f("Provides", &multi("provides", |i| i.provides.clone())));
         out.push('\n');
-        out.push_str(&f("Conflicts With", &multi(|i| i.conflicts.clone())));
+        out.push_str(&f(
+            "Conflicts With",
+            &multi("conflicts", |i| i.conflicts.clone()),
+        ));
         out.push('\n');
-        out.push_str(&f("Replaces", &multi(|i| i.replaces.clone())));
+        out.push_str(&f("Replaces", &multi("replaces", |i| i.replaces.clone())));
         out.push('\n');
         out.push_str(&f(
             "pkgver() Function",
