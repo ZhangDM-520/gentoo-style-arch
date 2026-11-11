@@ -322,8 +322,18 @@ if [[ -n $root ]]; then
     [ "$FIXTURE_RC" = 0 ] || fail "the leaf dry run failed: $FIXTURE_OUTPUT"
     rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null \
         || fail "the leaf dry-run record is not strict format: 2 (§H.2): $FIXTURE_OUTPUT"
-    [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") == *'--leaf mesa-git'* ]] ||
-        fail "the leaf continuation does not mirror bare --leaf (§H.2 gap G4): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
+    # Bare `--leaf` — a token, never `--leaf=…`; the resolved budget flags
+    # ride between it and the targets, so the pin is membership, not
+    # adjacency.
+    leaf_cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
+    case " $leaf_cmd " in
+    *" --leaf "*) ;;
+    *) fail "the leaf continuation does not mirror bare --leaf (§H.2 gap G4): $leaf_cmd" ;;
+    esac
+    case " $leaf_cmd " in
+    *" mesa-git "*) ;;
+    *) fail "the leaf continuation drops the target: $leaf_cmd" ;;
+    esac
     [[ $FIXTURE_OUTPUT != *'--leaf=no'* && $FIXTURE_OUTPUT != *'--leaf=yes'* ]] ||
         fail "an engine output surface contains a banned --leaf=<value> spelling (§B.8 gap G4): $FIXTURE_OUTPUT"
 
@@ -419,6 +429,24 @@ if [[ -n $root ]]; then
     [ "$FIXTURE_RC" = 2 ] || fail "the reversed range 38..22 must be a usage error (§G.1), got $FIXTURE_RC"
     [[ $FIXTURE_OUTPUT == *'38..22'* ]] ||
         fail "the reversed range is not named: $FIXTURE_OUTPUT"
+
+    # A `..` inside a NAME is not a range (numeric grammar, §C.3): the token
+    # reaches path classification instead of answering with a range error
+    # (blind-review finding, 2026-11-11: every relative path spelling was
+    # swallowed by the range classifier).
+    run_engine "$root" -Sl @git
+    first_id=$(listing_rows <<<"$FIXTURE_OUTPUT" | awk 'NR == 1 { print $1 }')
+    [ -n "$first_id" ] || fail "the @git listing is empty: $FIXTURE_OUTPUT"
+    # The token reaches REFERENCE resolution (which does not normalize `..`
+    # — no traversal) instead of a range error, and the diagnosis names the
+    # token itself.
+    run_engine "$root" -Sl "packages/../packages/$first_id"
+    [ "$FIXTURE_RC" = 2 ] ||
+        fail "a '..' path spelling must reach reference resolution, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT == *"unknown reference 'packages/../packages/$first_id'"* ]] ||
+        fail "the '..' token is not diagnosed as a reference: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT != *'index ranges address'* ]] ||
+        fail "the '..' token was classified as a range: $FIXTURE_OUTPUT"
 
     # the anchor rule (§C.3): a bare range is a usage error — a range never
     # silently selects the whole set

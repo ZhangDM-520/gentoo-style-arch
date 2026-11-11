@@ -664,8 +664,20 @@ const HIDDEN_SEAMS: [&str; 12] = [
     "--print-completion",
 ];
 
+/// An INDEX range (contract §C.3): `N..M`, `N..`, `..M` — digits only. A
+/// token that merely contains `..` is a path (`../x.pkg.tar.zst`,
+/// `packages/../packages/foo`, `fix..stuff`): classifying it as a range
+/// swallowed every relative path spelling and answered with a range error
+/// (blind-review finding, 2026-11-11).
 fn is_range_token(token: &str) -> bool {
-    token.contains("..")
+    let Some((start, end)) = token.split_once("..") else {
+        return false;
+    };
+    if end.contains("..") {
+        return false;
+    }
+    let digits = |side: &str| side.is_empty() || side.chars().all(|c| c.is_ascii_digit());
+    digits(start) && digits(end) && !(start.is_empty() && end.is_empty())
 }
 
 /// Parse the action pass. Every failure is a usage-class message; the caller
@@ -1433,8 +1445,14 @@ mod tests {
 
     #[test]
     fn range_tokens_are_classified_by_shape() {
-        let inv = parse_ok(&["-Sl", "22..38", "22..", "..15", "mesa-git", "fix..stuff"]);
-        assert_eq!(inv.ranges, vec!["22..38", "22..", "..15", "fix..stuff"]);
+        let inv = parse_ok(&["-Sl", "22..38", "22..", "..15", "mesa-git"]);
+        assert_eq!(inv.ranges, vec!["22..38", "22..", "..15"]);
         assert_eq!(inv.targets, vec!["mesa-git"]);
+        // A `..` inside a NAME is a target, not a range: the documented
+        // grammar is numeric (§C.3), and a path spelling must reach path
+        // classification instead of a range error.
+        let inv = parse_ok(&["-Sl", "fix..stuff", "../pkg.tar.zst"]);
+        assert!(inv.ranges.is_empty(), "{:?}", inv.ranges);
+        assert_eq!(inv.targets, vec!["fix..stuff", "../pkg.tar.zst"]);
     }
 }
