@@ -121,7 +121,7 @@ fn run_build_with(
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
     // A standalone-target run staged its own workspace (plan W4); the rest
     // discover the recipe workspace as before.
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let root = crate::resolve_workspace(inv, err)?;
     let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
@@ -1012,7 +1012,7 @@ fn run_update_inner(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let root = crate::resolve_workspace(inv, err)?;
     let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;

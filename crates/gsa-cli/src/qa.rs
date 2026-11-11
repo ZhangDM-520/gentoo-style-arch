@@ -59,7 +59,7 @@ fn run_qa_check_inner(
         positional.push(arg.clone());
     }
     let args: &[String] = &positional;
-    let root = crate::find_root(state_flag).map_err(Exit::Usage)?;
+    let root = crate::find_root(state_flag).map_err(|failure| Exit::Usage(failure.message()))?;
     Ok(gsa_qa::seam::run_qa_check(
         args,
         &root,

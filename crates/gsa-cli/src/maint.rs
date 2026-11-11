@@ -202,11 +202,10 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // same guidance `-Sl` does when no workspace exists.
     let read_only = matches!(privilege(inv), super::Privilege::ReadOnly);
     let root = if read_only {
-        crate::resolve_root(false, inv.state_dir.as_deref())
+        crate::resolve_root(false, inv.state_dir.as_deref()).map_err(|e| Exit::Usage(e.message()))?
     } else {
-        crate::resolve_workspace(inv)
-    }
-    .map_err(Exit::Usage)?;
+        crate::resolve_workspace(inv, err)?
+    };
     let project = load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
     let graph = gsa_graph::Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;

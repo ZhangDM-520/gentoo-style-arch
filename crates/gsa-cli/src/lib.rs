@@ -113,7 +113,7 @@ pub fn help_text() -> String {
 /// the parse error answered a typo'd `gsa.conf` key with "(missing
 /// config/topology.conf)" and sent the reader after a file that was never the
 /// problem (blind review, 2026-11-11).
-fn find_root(state_flag: Option<&str>) -> Result<PathBuf, String> {
+fn find_root(state_flag: Option<&str>) -> Result<PathBuf, RootFailure> {
     resolve_root(false, state_flag)
 }
 
@@ -145,8 +145,37 @@ pub(crate) fn resolve_root_readonly() -> Option<PathBuf> {
         .then_some(store)
 }
 
-pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<PathBuf, String> {
-    let cfg = gsa_model::config::load()?;
+/// Why workspace discovery failed.
+pub(crate) enum RootFailure {
+    /// A usage-class failure the caller renders as rc 2.
+    Usage(String),
+    /// Reaching the store means CREATING the state root, and that is root's
+    /// work. A first run used to die here with a raw
+    /// `cannot create /var/lib/gsa: Permission denied` (rc 2) BEFORE the
+    /// privilege gate could say "rerun as sudo" (blind review, 2026-11-11):
+    /// the caller answers through the gate instead.
+    NeedsRoot,
+}
+
+impl RootFailure {
+    /// The usage-class message. A READ path that cannot create the root
+    /// simply has no store yet — the hint, never an EACCES.
+    fn message(self) -> String {
+        match self {
+            RootFailure::Usage(message) => message,
+            RootFailure::NeedsRoot => format!(
+                "cannot find a recipe workspace: {} (missing config/topology.conf)",
+                gsa_model::config::WORKSPACE_HINT
+            ),
+        }
+    }
+}
+
+pub(crate) fn resolve_root(
+    fetch: bool,
+    state_flag: Option<&str>,
+) -> Result<PathBuf, RootFailure> {
+    let cfg = gsa_model::config::load().map_err(RootFailure::Usage)?;
     if let Some(project) = &cfg.project {
         return Ok(project.clone());
     }
@@ -162,8 +191,21 @@ pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<Path
         }
         return Ok(root);
     }
-    let state = gsa_model::config::resolve_state_dir(state_flag)?;
-    let (store, note) = gsa_state::recipes::ensure_store(&state)?;
+    let state = gsa_model::config::resolve_state_dir(state_flag).map_err(RootFailure::Usage)?;
+    // The FIRST privileged act of a first run is creating the state root,
+    // and an unprivileged run used to die there with a raw EACCES (rc 2)
+    // before the privilege gate could answer (§B.10: unprivileged → early
+    // refusal, rc 3). Probe with the real operation: a writable root (a
+    // custom `--state-dir` under the user's home) is no privilege problem at
+    // all, and a successful probe is the creation the fetch needs anyway.
+    if fetch && gsa_model::privilege::effective_uid() != 0 {
+        if let Err(error) = std::fs::create_dir_all(&state) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                return Err(RootFailure::NeedsRoot);
+            }
+        }
+    }
+    let (store, note) = gsa_state::recipes::ensure_store(&state).map_err(RootFailure::Usage)?;
     if let Some(note) = note {
         eprintln!("gsa: note: {note}");
     }
@@ -175,14 +217,14 @@ pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<Path
             .recipe_url
             .clone()
             .unwrap_or_else(|| gsa_model::config::DEFAULT_RECIPE_URL.to_string());
-        let (store, head) = gsa_state::recipes::fetch(&state, &url)?;
+        let (store, head) = gsa_state::recipes::fetch(&state, &url).map_err(RootFailure::Usage)?;
         eprintln!("gsa: recipe store fetched: {} at {head}", store.display());
         return Ok(store);
     }
-    Err(format!(
+    Err(RootFailure::Usage(format!(
         "cannot find a recipe workspace: {} (missing config/topology.conf)",
         gsa_model::config::WORKSPACE_HINT
-    ))
+    )))
 }
 
 /// The pre-W3 discovery: walk up from the current directory until
@@ -202,10 +244,32 @@ fn cwd_workspace() -> Option<PathBuf> {
 /// The workspace a run operates on: the staged standalone workspace when
 /// `standalone::apply` staged one (docs/plans/plan-gsa-isolation.md W4), else the
 /// normal discovery with its on-demand store fetch.
-pub(crate) fn resolve_workspace(inv: &Invocation) -> Result<PathBuf, String> {
-    match &inv.standalone_root {
-        Some(root) => Ok(root.clone()),
+pub(crate) fn resolve_workspace(inv: &Invocation, err: &mut dyn Write) -> Result<PathBuf, Exit> {
+    let resolved = match &inv.standalone_root {
+        Some(root) => return Ok(root.clone()),
         None => resolve_root(true, inv.state_dir.as_deref()),
+    };
+    match resolved {
+        Ok(root) => Ok(root),
+        Err(RootFailure::Usage(message)) => Err(Exit::Usage(message)),
+        // The first mutating act is creating the state root; ask the ONE
+        // privilege seam for its wording and rc (`-S` unprivileged must be
+        // the documented rc 3 refusal, not a raw EACCES). A read-only
+        // invocation never reaches here (it passes `fetch: false`).
+        Err(RootFailure::NeedsRoot) => Err(crate::privilege_gate(
+            &inv.spelling(),
+            Privilege::Root {
+                needs_build_user: false,
+            },
+            true,
+            err,
+        )
+        .unwrap_or_else(|| {
+            Exit::Usage(format!(
+                "cannot find a recipe workspace: {} (missing config/topology.conf)",
+                gsa_model::config::WORKSPACE_HINT
+            ))
+        })),
     }
 }
 
@@ -611,7 +675,7 @@ fn execute(
         // A standalone-target run staged its own workspace (plan W4); the
         // report verbs' own discovery never fetches (read-only, §B.10).
         Some(root) => root.clone(),
-        None => find_root(inv.state_dir.as_deref()).map_err(cmd_error)?,
+        None => find_root(inv.state_dir.as_deref()).map_err(|e| cmd_error(e.message()))?,
     };
     let project = load_project(&root).map_err(|e| cmd_error(e.to_string()))?;
     let graph = Graph::build(&project.topology.records)

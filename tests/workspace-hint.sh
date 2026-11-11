@@ -110,6 +110,39 @@ mkdir -p "$fixture/empty"
     printf 'd: an explicitly named GSA_CONF must exist\n'
 )
 
+# ─── e. a first mutating run asks the privilege gate, not the OS ───────────
+# Reaching the store means CREATING the state root, and on a fresh host that
+# is the first privileged act. An unprivileged `-S` used to die there with
+# `cannot create /var/lib/gsa: Permission denied` (rc 2) before the gate could
+# say "rerun as sudo" — the exact first command a new host runs (blind
+# review, 2026-11-11). A read verb must still answer with the workspace hint
+# and create nothing.
+(
+    set -euo pipefail
+    ((EUID != 0)) || { printf 'e: skipped (a root battery run has no unprivileged case)\n'; exit 0; }
+    locked="$fixture/locked"
+    mkdir -p "$locked"
+    chmod 0555 "$locked"
+    GSA_CONF="$fixture/empty.conf" GSA_STATE_DIR="$locked/state" \
+        GSA_RECIPES_DIR="$locked/store" run_engine_user "$fixture/empty" -S @core
+    ((FIXTURE_RC == 3)) ||
+        fail "e: an unprivileged first run must refuse with rc 3 (§B.10), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT == *'you cannot perform this operation unless you are root'* ]] ||
+        fail "e: the refusal wording is missing: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT != *'cannot create'* ]] ||
+        fail "e: a raw OS error answered before the gate: $FIXTURE_OUTPUT"
+
+    GSA_CONF="$fixture/empty.conf" GSA_STATE_DIR="$locked/state" \
+        GSA_RECIPES_DIR="$locked/store" run_engine_user "$fixture/empty" -Sl
+    ((FIXTURE_RC == 2)) ||
+        fail "e: a read verb with no store must stay a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT == *"$hint_store"* ]] ||
+        fail "e: the read verb lost the shared hint: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT != *'cannot create'* ]] ||
+        fail "e: a read verb tried to create the state root: $FIXTURE_OUTPUT"
+    printf 'e: a first mutating run asks the privilege gate, not the OS\n'
+)
+
 # ─── the fetch child: its own preamble, the shared remedy ──────────────────
 (
     set -euo pipefail

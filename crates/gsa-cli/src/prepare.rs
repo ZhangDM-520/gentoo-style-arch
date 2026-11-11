@@ -906,7 +906,7 @@ fn run_sync_pass_inner(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let root = crate::resolve_workspace(inv, err)?;
     // W3 store semantics: `-Sy` refreshes the canonical store alongside the
     // version-sync pass. A `project` override (dev checkout) supersedes the
     // store and is never refreshed; a cwd workspace is the deprecated path

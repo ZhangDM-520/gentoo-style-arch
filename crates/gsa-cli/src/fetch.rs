@@ -41,7 +41,7 @@ fn run_fetch_only_inner(
         ));
     }
     // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let root = crate::resolve_workspace(inv, err)?;
     let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;

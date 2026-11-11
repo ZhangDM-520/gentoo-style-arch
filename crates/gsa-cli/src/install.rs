@@ -593,7 +593,7 @@ fn run_upgrade_inner(
     }
 
     // ── workspace, topology (usage class: rc 2) ─────────────────────────
-    let root = crate::resolve_workspace(inv).map_err(Exit::Usage)?;
+    let root = crate::resolve_workspace(inv, err)?;
     let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
@@ -680,8 +680,15 @@ fn run_upgrade_inner(
         for token in &inv.targets {
             let path = PathBuf::from(token);
             if path.is_file() {
+                // A NAMED archive path has no trustworthy recipe: whatever
+                // sits in the same directory proves nothing about bytes that
+                // could have come from anywhere. A `PKGBUILD` there used to
+                // stand the PGO payload scan down (a decoy installed an
+                // instrumented archive the engine refuses by name), and a
+                // stray `.SRCINFO` turned "cannot read this archive" into a
+                // clean skip (blind review, 2026-11-11).
                 items.push(Item::Direct(Candidate {
-                    recipe_dir: path.parent().map(|p| p.to_path_buf()),
+                    recipe_dir: None,
                     archive: path,
                 }));
                 continue;
@@ -1837,8 +1844,11 @@ fn run_install_decide_inner(
                 "malformed archive argument '{archive}'"
             )));
         }
+        // The seam takes archive PATHS (§D.1), so no recipe is knowable
+        // here either: the payload is the authority (see the `Item::Direct`
+        // note above).
         candidates.push(Candidate {
-            recipe_dir: path.parent().map(|p| p.to_path_buf()),
+            recipe_dir: None,
             archive: path,
         });
     }
@@ -1958,7 +1968,7 @@ fn run_register_ignorepkg_inner(
             .cloned()
             .unwrap_or_else(|| DEFAULT_CONF.to_string()),
     );
-    let root = crate::resolve_root(true, None).map_err(Exit::Usage)?;
+    let root = crate::resolve_root(true, None).map_err(|failure| Exit::Usage(failure.message()))?;
     let db = RecipeDb::load(&root, &[]).map_err(|error| Exit::Usage(error.to_string()))?;
     // Privilege gate (contract §B.10) AFTER the usage fences — §G.1 ranks
     // usage (2) above refusal (3).
