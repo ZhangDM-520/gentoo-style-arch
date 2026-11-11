@@ -583,6 +583,26 @@ fn log_start_offset(setup: &RunSetup, index: usize) -> u64 {
         .unwrap_or(0)
 }
 
+/// The run's own liveness/completion stamps in its run directory
+/// (contract §J.1): `run.open` carries the supervisor's pid and start epoch,
+/// `run.closed` appears only when the run reached its record. A SIGKILLed
+/// run leaves `run.open` alone — that is the evidence `sweep_orphans`
+/// preserves and `gsa -Mh` reports as a died run.
+fn write_run_stamp(setup: &RunSetup, closed: bool) -> std::io::Result<()> {
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dir = run_dir(setup);
+    if closed {
+        return std::fs::write(dir.join("run.closed"), format!("epoch={epoch}\n"));
+    }
+    std::fs::write(
+        dir.join("run.open"),
+        format!("pid={} epoch={epoch}\n", std::process::id()),
+    )
+}
+
 /// `runs/current` (ux lane state): a pointer file naming the live run id, so
 /// a detached reader (the dashboard's tails) reaches this run's
 /// `<pkg>.started` markers without knowing the id. Replaced atomically at
@@ -1127,6 +1147,11 @@ pub fn run(
     // before the first lane spawns. Observability, never behaviour — a
     // failure is loud (`note`) and does not stop the run.
     if let Err(error) = write_current_pointer(&setup) {
+        events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
+    }
+    // The run's own open stamp, for the reader that has no history row yet
+    // (a live run, or one killed before it could persist its record).
+    if let Err(error) = write_run_stamp(&setup, false) {
         events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
     }
 
@@ -1794,6 +1819,12 @@ pub fn run(
         machine.finalize_never_ready();
     }
 
+    // The run reached its record: `run.closed` is what tells a reader that
+    // the absence of a history row is not a death (a killed run never gets
+    // here, so its `run.open` stands alone).
+    if let Err(error) = write_run_stamp(&setup, true) {
+        events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
+    }
     let prefetch_warnings = prefetch.map(|pf| pf.warnings).unwrap_or_default();
     Ok(SupOutcome {
         rows: machine.rows(),
@@ -1877,6 +1908,23 @@ mod tests {
             events.iter().any(|e| matches!(e, SupEvent::Tick)),
             "the view heartbeat ticks while the lane runs: {:?}",
             events.len()
+        );
+        // The run's own stamps: opened at start (with this process's pid),
+        // closed only because the run reached its record. A killed run keeps
+        // `run.open` alone, which is what `-Mh` and the sweep read.
+        let open = std::fs::read_to_string(state_dir.join("runs").join(&run_id).join("run.open"))
+            .expect("run.open is written at run start");
+        assert!(
+            open.contains(&format!("pid={} ", std::process::id())),
+            "run.open names the supervisor's pid: {open:?}"
+        );
+        assert!(
+            state_dir
+                .join("runs")
+                .join(&run_id)
+                .join("run.closed")
+                .exists(),
+            "a run that reached its record writes run.closed"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

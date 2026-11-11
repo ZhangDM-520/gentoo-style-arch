@@ -734,6 +734,45 @@ $(diff -u "$fixture/g/emitted1" "$fixture/g/show1" || true)"
             fail "--show 2 is not byte-identical to run 2's emitted block:
 $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
 
+        # ── a run with no history row: in-progress, then died (§J.1) ─────
+        # The history alone cannot answer "was a run in flight when I lost
+        # the terminal?": the run's own stamps in runs/<id>/ are the answer
+        # (blind-review finding, 2026-11-11). Synthesized here so the state
+        # is exact — a real kill would race the battery.
+        live_state="$fixture/g/state-live"
+        /usr/bin/sudo -n mkdir -p "$live_state/runs/77-7"
+        ( exec -a gsa sleep 30 ) &
+        livepid=$!
+        printf 'pid=%s epoch=1700000000\n' "$livepid" |
+            /usr/bin/sudo -n tee "$live_state/runs/77-7/run.open" >/dev/null
+        printf 'pid=%s epoch=1700000000 log-offset=0\n' "$livepid" |
+            /usr/bin/sudo -n tee "$live_state/runs/77-7/histone.started" >/dev/null
+        printf '77-7\n' | /usr/bin/sudo -n tee "$live_state/runs/current" >/dev/null
+        run_engine "$ws" -Mh --state-dir "$live_state"
+        [ "$FIXTURE_RC" = 0 ] || fail "-Mh over a live run is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "77-7 in-progress epoch=1700000000 lanes=1 settled=0 markers=runs/77-7" \
+            "a live run is listed as in-progress, not 'no recorded runs'"
+        command kill "$livepid" 2>/dev/null || true
+        wait "$livepid" 2>/dev/null || true
+        run_engine "$ws" -Mh --state-dir "$live_state"
+        [ "$FIXTURE_RC" = 0 ] || fail "-Mh after the kill is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "77-7 died epoch=1700000000 lanes=1 settled=0 markers=runs/77-7" \
+            "a killed run is listed as died"
+        # A closed run is a recorded one: the stamp removes it from the list.
+        printf 'epoch=1700000100\n' |
+            /usr/bin/sudo -n tee "$live_state/runs/77-7/run.closed" >/dev/null
+        run_engine "$ws" -Mh --state-dir "$live_state"
+        case $FIXTURE_OUTPUT in
+        *77-7*) fail "a closed run must not be listed as unfinished: $FIXTURE_OUTPUT" ;;
+        esac
+        /usr/bin/sudo -n rm -f "$live_state/runs/77-7/run.closed"
+        # --prune retires the died run's markers (its bounded retention).
+        run_engine "$ws" -Mh --prune --state-dir "$live_state"
+        [ "$FIXTURE_RC" = 0 ] || fail "-Mh --prune over a died run is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "77-7 pruned died-run markers" "prune retires the died run"
+        [ ! -e "$live_state/runs/77-7" ] ||
+            fail "-Mh --prune must remove a died run's directory"
+
         # ── state override (§J.3): flag beats env; env alone relocates ──
         export GSA_STATE_DIR="$fixture/g/env-state"
         run_engine "$ws" -Mh --state-dir "$state"

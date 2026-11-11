@@ -210,3 +210,59 @@ fn tail_lines_reads_the_tail() {
     let error = hygiene::tail_lines(&logs.join("absent.log")).expect_err("missing log");
     assert!(error.contains("cannot read"), "{error}");
 }
+
+/// A run that never reached the history store is still answerable (contract
+/// §J.1 `runs/current` + `run.open`/`run.closed`): the run lock says whether
+/// it is alive, and the missing record says it will never be listed from the
+/// store. This is the recovery user's "was a run in flight?" answer.
+#[test]
+fn a_run_without_a_record_is_listed_as_in_progress_then_died() {
+    let fx = Fixture::new("history-unfinished");
+    let state = fx.state();
+    append_run(&state, &run_record("alpha", &[]));
+    let runs = state.path().join("runs");
+    let dir = runs.join("77-7");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("run.open"), "pid=1 epoch=1700\n").unwrap();
+    std::fs::write(
+        dir.join("alpha.started"),
+        "pid=9 epoch=1700 log-offset=0\n",
+    )
+    .unwrap();
+    std::fs::write(runs.join("current"), "77-7\n").unwrap();
+
+    // No lock file: the run.open pid is the fallback (pid 1 exists here).
+    let rows = history::list_rows(&state).unwrap();
+    common::assert_row_grammar(&rows);
+    assert_eq!(rows.len(), 2, "the recorded run plus the unfinished one");
+    assert_eq!(rows[1].subject, "77-7");
+    assert_eq!(rows[1].action, "in-progress");
+    assert!(rows[1].reason.contains("lanes=1"), "{}", rows[1].reason);
+
+    // A held run lock is the exact signal: release it and the run is dead.
+    std::fs::create_dir_all(state.path().join("locks")).unwrap();
+    let lock = gsa_sched::lock::acquire_run_lock_file(
+        &state.path().join("locks").join("run.lock"),
+        "test",
+    )
+    .unwrap();
+    assert_eq!(history::list_rows(&state).unwrap()[1].action, "in-progress");
+    drop(lock);
+    let rows = history::list_rows(&state).unwrap();
+    assert_eq!(rows[1].action, "died");
+    assert!(rows[1].reason.contains("markers=runs/77-7"), "{}", rows[1].reason);
+
+    // `-Mh --prune` retires a died run's kept evidence, never a live one.
+    let keep = history::prune(&state, false).unwrap();
+    assert!(keep.iter().any(|r| r.action == "prune"
+        && r.subject == "77-7"
+        && r.reason.contains("died-run markers")));
+    history::prune(&state, true).unwrap();
+    assert!(!dir.exists(), "the died run's directory is retired");
+
+    // A closed run recorded itself, so it never appears as unfinished.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("run.open"), "pid=1 epoch=1700\n").unwrap();
+    std::fs::write(dir.join("run.closed"), "epoch=1701\n").unwrap();
+    assert_eq!(history::list_rows(&state).unwrap().len(), 1);
+}

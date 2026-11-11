@@ -344,10 +344,25 @@ pub fn ensure_state_dirs(state_dir: &Path, err: &mut dyn Write) -> Result<(), St
     Ok(())
 }
 
+/// Is a run holding the lock right now? `Some(true)` = held (a live run),
+/// `Some(false)` = free, `None` = no lock file to probe (or unreadable).
+/// The probe never creates the file, so a read-only surface (`gsa -Mh`) can
+/// ask without mutating the state root; flock conflicts across separate open
+/// file descriptions, so the answer is exact even within one process.
+pub fn run_lock_held(state_dir: &Path) -> Option<bool> {
+    let file = std::fs::File::open(state_dir.join("locks").join("run.lock")).ok()?;
+    Some(!flock_exclusive_nonblocking(file.as_raw_fd()))
+}
+
 /// Startup/post-run orphan sweep (contract §K.3): remove stale run artifacts
 /// (`.tmp.*`, abandoned result/park files) from dead runs, and reap
 /// `--lane-job` / `--fetch-job` processes of dead runs whose result files
 /// are unowned. Unrelated `makepkg` processes are never touched.
+///
+/// A run that died before it could persist its record (no `run.closed`, but
+/// its `run.open` stamp is present) is EVIDENCE, not garbage: its lane
+/// markers survive and are stamped `run.died` once, so `gsa -Mh` can still
+/// report what was in flight. Only `-Mh --prune` retires those directories.
 pub fn sweep_orphans(state_dir: &Path, current_run: &str, err: &mut dyn Write) {
     let runs = state_dir.join("runs");
     let Ok(entries) = std::fs::read_dir(&runs) else {
@@ -359,6 +374,9 @@ pub fn sweep_orphans(state_dir: &Path, current_run: &str, err: &mut dyn Write) {
             continue;
         }
         let own_run = name == current_run;
+        let died = !own_run
+            && entry.path().join("run.open").exists()
+            && !entry.path().join("run.closed").exists();
         let Ok(files) = std::fs::read_dir(entry.path()) else {
             continue;
         };
@@ -366,16 +384,35 @@ pub fn sweep_orphans(state_dir: &Path, current_run: &str, err: &mut dyn Write) {
             let fname = file.file_name().to_string_lossy().into_owned();
             let stale = fname.contains(".tmp.")
                 || (!own_run
+                    && !died
                     && (fname.ends_with(".result")
                         || fname.ends_with(".park")
                         // lane-state markers (ux) are run-scoped exactly like
-                        // results: a dead run's `.started` proves nothing.
-                        || fname.ends_with(".started")));
+                        // results: a dead run's `.started` proves nothing —
+                        // unless the run itself died, in which case they are
+                        // the only record of what was in flight.
+                        || fname.ends_with(".started")
+                        // the run's own stamps: a finished run needs neither
+                        || fname == "run.open"
+                        || fname == "run.closed"));
             if stale {
                 let _ = std::fs::remove_file(file.path());
             }
         }
-        if !own_run {
+        if died {
+            let stamp = entry.path().join("run.died");
+            if !stamp.exists() {
+                let epoch = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let _ = std::fs::write(&stamp, format!("epoch={epoch}\n"));
+            }
+            let _ = writeln!(
+                err,
+                "gsa: note: run {name} died before it recorded itself; its lane markers are kept under runs/{name} (gsa -Mh reports it, gsa -Mh --prune retires it)"
+            );
+        } else if !own_run {
             let _ = std::fs::remove_dir(entry.path()); // only when empty
         }
     }
@@ -638,6 +675,43 @@ mod tests {
         assert!(
             own.join("c.result").exists(),
             "current run's result survives"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_died_run_keeps_its_markers_and_a_finished_one_is_swept() {
+        let dir = scratch("sweep-died");
+        let runs = dir.join("runs");
+        let died = runs.join("111-1");
+        let finished = runs.join("222-2");
+        let own = runs.join("333-3");
+        for run in [&died, &finished, &own] {
+            std::fs::create_dir_all(run).unwrap();
+        }
+        // 111-1 died: opened, never closed.
+        std::fs::write(died.join("run.open"), "pid=1 epoch=5\n").unwrap();
+        std::fs::write(died.join("a.started"), "pid=9 epoch=5 log-offset=0\n").unwrap();
+        std::fs::write(died.join("a.result"), "v2 a 0 1 ok\n").unwrap();
+        // 222-2 finished and recorded itself.
+        std::fs::write(finished.join("run.open"), "pid=2 epoch=5\n").unwrap();
+        std::fs::write(finished.join("run.closed"), "epoch=6\n").unwrap();
+        std::fs::write(finished.join("a.result"), "v2 a 0 1 ok\n").unwrap();
+        let mut err = Vec::new();
+        sweep_orphans(&dir, "333-3", &mut err);
+        assert!(
+            died.join("a.result").exists() && died.join("a.started").exists(),
+            "a died run's markers are evidence and must survive the sweep"
+        );
+        assert!(died.join("run.died").exists(), "the sweep dates the death");
+        assert!(
+            !finished.join("a.result").exists() && !finished.exists(),
+            "a finished run's markers are swept exactly as before"
+        );
+        assert!(
+            String::from_utf8_lossy(&err).contains("run 111-1 died"),
+            "the sweep says which run it kept and why: {}",
+            String::from_utf8_lossy(&err)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

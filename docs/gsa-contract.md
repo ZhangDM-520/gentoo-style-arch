@@ -1283,13 +1283,25 @@ event stream:
 | --- | --- |
 | `/var/lib/gsa/runs/current` | a pointer file naming the live run id (atomically replaced at run start; keeps naming the last run after it ends) |
 | `/var/lib/gsa/runs/<run-id>/<pkg>.started` | one line `pid=<pid> epoch=<secs> log-offset=<bytes>` per spawned lane — the log offset is sampled BEFORE the spawn, because `logs/<pkg>.log` is appended across runs and the offset is what makes a tail run-scoped |
+| `/var/lib/gsa/runs/<run-id>/run.open` | one line `pid=<supervisor pid> epoch=<secs>`, written at run start: the run's own liveness stamp |
+| `/var/lib/gsa/runs/<run-id>/run.closed` | one line `epoch=<secs>`, written only when the run reached its record |
+| `/var/lib/gsa/runs/<run-id>/run.died` | one line `epoch=<secs>`, stamped by the orphan sweep on a run that has `run.open` but no `run.closed` |
 
 Observability, never behaviour: a marker/pointer write failure is a loud
 `note` event and never stops a run (unlike §F.1's fail-closed park markers).
 The startup orphan sweep reaps a dead run's `.started` files with its `.result`
-/`.park` files. Pinned by `supervisor::tests::
-lane_state_markers_and_the_view_tick_land_during_a_run` and consumed by the
-dashboard tails (`tests/dashboard-pty.sh` section A).
+/`.park` files — EXCEPT for a run that died before it could persist its
+record (`run.open` without `run.closed`): that run's markers are evidence, so
+they survive and `run.died` dates the death. `gsa -Mh` lists such a run after
+the recorded ones as `in-progress` (its `run.open` pid is alive) or `died`,
+and `gsa -Mh --prune` retires the directory — a live run is never touched
+(blind-review finding, 2026-11-11: the history alone could not answer "was a
+run in flight when I lost the terminal?", and the next sweep destroyed the
+answer). Pinned by `supervisor::tests::
+lane_state_markers_and_the_view_tick_land_during_a_run`,
+`lock::tests::a_died_run_keeps_its_markers_and_a_finished_one_is_swept` and
+`tests/gsa-maint-v2.sh`; consumed by the dashboard tails
+(`tests/dashboard-pty.sh` section A).
 
 ### J.2 What stays with the build user (W4's relocation)
 

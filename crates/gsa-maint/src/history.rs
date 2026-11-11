@@ -28,9 +28,15 @@ pub fn records(state: &StateRoot) -> Result<(Vec<RunRecord>, Vec<CorruptLine>), 
 /// The run id is the record's 1-based position in the history (append
 /// order) — the store has no separate id field, and inventing one would be a
 /// format change (§L.2).
+///
+/// A run that never reached the store is listed AFTER the recorded ones, by
+/// its own `runs/<id>` name: `in-progress` while its supervisor is alive,
+/// `died` once it is not (contract §J.1's `run.open`/`run.closed`/`run.died`
+/// stamps). That is the recovery user's only answer to "was a run in flight
+/// when I lost the terminal?" — the history alone cannot answer it.
 pub fn list_rows(state: &StateRoot) -> Result<Vec<Row>, String> {
     let (records, _corrupt) = records(state)?;
-    Ok(records
+    let mut rows: Vec<Row> = records
         .iter()
         .enumerate()
         .map(|(idx, record)| {
@@ -45,7 +51,103 @@ pub fn list_rows(state: &StateRoot) -> Result<Vec<Row>, String> {
                 ),
             )
         })
-        .collect())
+        .collect();
+    if let Some(run) = unfinished_run(state) {
+        rows.push(Row::new(
+            run.id.clone(),
+            if run.live { "in-progress" } else { "died" },
+            format!(
+                "epoch={} lanes={} settled={} markers=runs/{}",
+                run.epoch
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                run.lanes,
+                run.settled,
+                run.id
+            ),
+        ));
+    }
+    Ok(rows)
+}
+
+/// The one run on disk with no history row: `runs/current` names it, its
+/// directory carries `run.open`, and no `run.closed` proves it finished
+/// (contract §J.1). `live` is the `run.open` supervisor pid answering in
+/// `/proc` with a `gsa` command line — a recycled pid that happens to be
+/// another `gsa` process is the only false positive, and it costs a reader
+/// one "in progress" claim that the missing record already contradicts.
+pub struct Unfinished {
+    pub id: String,
+    pub live: bool,
+    pub pid: Option<u32>,
+    pub epoch: Option<u64>,
+    pub lanes: usize,
+    pub settled: usize,
+}
+
+fn unfinished_run(state: &StateRoot) -> Option<Unfinished> {
+    let mut run = unfinished_dir(state)?;
+    // The run lock is the exact answer (the supervisor holds it for the
+    // whole run); the `run.open` pid is the fallback when the lock file is
+    // absent or unreadable (a state root seeded without one).
+    run.live = match gsa_sched::lock::run_lock_held(state.path()) {
+        Some(held) => held,
+        None => {
+            run.pid
+                .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
+                == Some(true)
+        }
+    };
+    Some(run)
+}
+
+/// The on-disk half of [`unfinished_run`], without a liveness verdict: the
+/// `-Mh --prune` path holds the run lock itself, so a live run cannot be
+/// present there and the probe would only see its own hold.
+fn unfinished_dir(state: &StateRoot) -> Option<Unfinished> {
+    let runs = state.path().join("runs");
+    let id = std::fs::read_to_string(runs.join("current"))
+        .ok()?
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        return None;
+    }
+    let dir = runs.join(&id);
+    if !dir.is_dir() || dir.join("run.closed").exists() {
+        return None;
+    }
+    let open = std::fs::read_to_string(dir.join("run.open")).ok()?;
+    let mut pid = None;
+    let mut epoch = None;
+    for field in open.split_whitespace() {
+        if let Some(value) = field.strip_prefix("pid=") {
+            pid = value.parse::<u32>().ok();
+        } else if let Some(value) = field.strip_prefix("epoch=") {
+            epoch = value.parse::<u64>().ok();
+        }
+    }
+    let Ok(files) = std::fs::read_dir(&dir) else {
+        return None;
+    };
+    let mut lanes = 0;
+    let mut settled = 0;
+    for file in files.flatten() {
+        let name = file.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".started") {
+            lanes += 1;
+        } else if name.ends_with(".result") {
+            settled += 1;
+        }
+    }
+    Some(Unfinished {
+        id,
+        live: false,
+        pid,
+        epoch,
+        lanes,
+        settled,
+    })
 }
 
 /// Re-render one stored record through the same
@@ -113,7 +215,31 @@ pub fn prune(state: &StateRoot, apply: bool) -> Result<Vec<Row>, String> {
     if apply && rows.iter().any(|r| r.action == "pruned") {
         compact(state, &records, &keep)?;
     }
+    retire_unfinished(state, apply, &mut rows)?;
     Ok(rows)
+}
+
+/// `runs/<id>`'s kept evidence is bounded like the history: `-Mh --prune`
+/// retires a DIED run's directory (its markers) once the reader has had its
+/// chance to see it. A live run is never touched — its markers are in use.
+fn retire_unfinished(state: &StateRoot, apply: bool, rows: &mut Vec<Row>) -> Result<(), String> {
+    // No liveness probe here: `-Mh --prune` already HOLDS the run lock (a
+    // live run would have refused the verb with `run-in-flight`), so an
+    // unfinished directory present under this lock is a dead one.
+    let Some(run) = unfinished_dir(state) else {
+        return Ok(());
+    };
+    rows.push(Row::new(
+        run.id.clone(),
+        if apply { "pruned" } else { "prune" },
+        "died-run markers",
+    ));
+    if apply {
+        let dir = state.path().join("runs").join(&run.id);
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| format!("cannot remove {}: {e}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// Rewrite `runs/history.jsonl` with exactly the kept records, atomically

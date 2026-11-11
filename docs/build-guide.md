@@ -790,7 +790,11 @@ dashboard has finished (so its ANSI renderer cannot garble it), and on the
 interrupt and preflight-refusal paths too. Since the 2026-10-14 cutover the
 same structure is also persisted into the state root's run history
 (`gsa -Mh`) — storage of one record, not a fourth derivation (contract
-§H.1).
+§H.1). A run that never got as far as persisting (killed, or still live)
+is listed by `gsa -Mh` after the recorded ones: `in-progress` while the run
+lock is held, `died` once it is not, with its kept lane markers under
+`runs/<run-id>/` (contract §J.1) — `gsa -Mh --prune` retires a died run's
+directory.
 
 To read a run's block, cut it out of the stream — never scrape the prose:
 
