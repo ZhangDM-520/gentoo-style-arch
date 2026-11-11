@@ -108,8 +108,20 @@ pub fn help_text() -> String {
 /// Read-path root discovery. The `--state-dir` tier must reach the
 /// recipe-store fallback too (E1: the full precedence chain in EVERY verb) —
 /// a `--state-dir`'d query must read one state tree, not two.
-fn find_root(state_flag: Option<&str>) -> Option<PathBuf> {
-    resolve_root(false, state_flag).ok()
+///
+/// A BROKEN config is surfaced, never folded into "no workspace": discarding
+/// the parse error answered a typo'd `gsa.conf` key with "(missing
+/// config/topology.conf)" and sent the reader after a file that was never the
+/// problem (blind review, 2026-11-11).
+fn find_root(state_flag: Option<&str>) -> Result<PathBuf, String> {
+    resolve_root(false, state_flag)
+}
+
+/// The optional shape, for a seam where "no workspace reachable" is a legal
+/// answer (an optional side-car view) — never for an entry point that must
+/// name its failure.
+fn find_root_opt(state_flag: Option<&str>) -> Option<PathBuf> {
+    find_root(state_flag).ok()
 }
 
 /// Workspace discovery for a READ-ONLY seam (completion, contract §D.1): the
@@ -599,12 +611,7 @@ fn execute(
         // A standalone-target run staged its own workspace (plan W4); the
         // report verbs' own discovery never fetches (read-only, §B.10).
         Some(root) => root.clone(),
-        None => find_root(inv.state_dir.as_deref()).ok_or_else(|| {
-            cmd_error(format!(
-                "cannot find a recipe workspace: {} (missing config/topology.conf)",
-                gsa_model::config::WORKSPACE_HINT
-            ))
-        })?,
+        None => find_root(inv.state_dir.as_deref()).map_err(cmd_error)?,
     };
     let project = load_project(&root).map_err(|e| cmd_error(e.to_string()))?;
     let graph = Graph::build(&project.topology.records)

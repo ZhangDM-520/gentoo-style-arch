@@ -269,7 +269,7 @@ fn run_local_db_check_inner(
             // it is given — under the engine's ONE layout error policy: an
             // unusable layout is fatal for the operation, never a silent
             // home switch.
-            let mut scan_dirs = match crate::find_root(state_flag) {
+            let mut scan_dirs = match crate::find_root_opt(state_flag) {
                 Some(root) => match gsa_topo::load_project(&root) {
                     Ok(project) => project
                         .topology
@@ -355,7 +355,7 @@ pub fn query_abi(
     // with a token for a package pacman no longer had). An unreadable local
     // DB is "unknown", never a false "not installed".
     let db = LocalDb::load(&pacman_db_root()).ok();
-    let repo = crate::find_root(inv.state_dir.as_deref());
+    let repo = crate::find_root_opt(inv.state_dir.as_deref());
     for &idx in &indices {
         let record = ctx.graph.record(idx);
         let id = record.id.as_str();

@@ -484,7 +484,11 @@ pub fn load() -> Result<GsaConfig, String> {
     if let Ok(path) = std::env::var("GSA_CONF") {
         if !path.is_empty() {
             let home = build_user_home()?;
-            return read_layer(Path::new(&path), &home);
+            // An explicitly named file is a CLAIM, not an optional layer: a
+            // misspelt path used to contribute nothing and the run silently
+            // proceeded against the built-in directories (blind review,
+            // 2026-11-11: `GSA_CONF=/typo.conf gsa -Sl` listed the store).
+            return read_layer_required(Path::new(&path), &home);
         }
     }
     let home = build_user_home()?;
@@ -600,11 +604,18 @@ fn warn_once(message: &str) {
 }
 
 fn read_layer(path: &Path, home: &Path) -> Result<GsaConfig, String> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(GsaConfig::default()),
-        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
-    };
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_layer(&text, &path.display().to_string(), home),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GsaConfig::default()),
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+/// `read_layer` for a path the caller NAMED (`GSA_CONF`): absence is an
+/// error, not an empty layer.
+fn read_layer_required(path: &Path, home: &Path) -> Result<GsaConfig, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     parse_layer(&text, &path.display().to_string(), home)
 }
 

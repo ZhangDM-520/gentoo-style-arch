@@ -76,6 +76,40 @@ mkdir -p "$fixture/empty"
     printf 'b: a configured project resolves the workspace\n'
 )
 
+# ─── c. a BROKEN gsa.conf names its own error, never a missing topolog ─────
+# A typo'd key used to be answered with "cannot find a recipe workspace
+# (missing config/topology.conf)": the parse error was discarded by the
+# discovery seam and the reader chased a file that was never the problem
+# (blind review, 2026-11-11).
+(
+    set -euo pipefail
+    printf 'projekt = %s\n' "$fixture/ws" >"$fixture/typo.conf"
+    GSA_CONF="$fixture/typo.conf" GSA_STATE_DIR="$fixture/state" \
+        run_engine "$fixture/empty" -Qt
+    ((FIXTURE_RC == 2)) ||
+        fail "c: a malformed gsa.conf must be a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT == *'unknown gsa.conf key'* && $FIXTURE_OUTPUT == *projekt* ]] ||
+        fail "c: the real config error is discarded: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT != *'missing config/topology.conf'* ]] ||
+        fail "c: the workspace prose still masks the config error: $FIXTURE_OUTPUT"
+    printf 'c: a malformed gsa.conf reports its own error\n'
+)
+
+# ─── d. an explicitly named GSA_CONF must exist ────────────────────────────
+# `GSA_CONF` "replaces the auto-read layers with exactly one file", so a
+# misspelt path is an operator error — not an empty layer that silently ran
+# against the built-in directories (blind review, 2026-11-11).
+(
+    set -euo pipefail
+    GSA_CONF="$fixture/nope.conf" GSA_STATE_DIR="$fixture/state" \
+        run_engine "$fixture/empty" -Qt
+    ((FIXTURE_RC == 2)) ||
+        fail "d: a missing GSA_CONF must be a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT == *"cannot read $fixture/nope.conf"* ]] ||
+        fail "d: the missing file is not named: $FIXTURE_OUTPUT"
+    printf 'd: an explicitly named GSA_CONF must exist\n'
+)
+
 # ─── the fetch child: its own preamble, the shared remedy ──────────────────
 (
     set -euo pipefail

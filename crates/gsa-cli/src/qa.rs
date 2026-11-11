@@ -59,12 +59,7 @@ fn run_qa_check_inner(
         positional.push(arg.clone());
     }
     let args: &[String] = &positional;
-    let Some(root) = crate::find_root(state_flag) else {
-        return Err(Exit::Usage(format!(
-            "cannot find a recipe workspace: {}",
-            gsa_model::config::WORKSPACE_HINT
-        )));
-    };
+    let root = crate::find_root(state_flag).map_err(Exit::Usage)?;
     Ok(gsa_qa::seam::run_qa_check(
         args,
         &root,
@@ -81,7 +76,7 @@ fn run_qa_check_inner(
 /// context, the run's own archive sets probed. `None` when no workspace is
 /// reachable from the run.
 pub fn report_lines(targets: &[String], state_flag: Option<&str>) -> Option<Vec<String>> {
-    let root = crate::find_root(state_flag)?;
+    let root = crate::find_root_opt(state_flag)?;
     let workspace = load_workspace(&root).ok()?;
     let archives = collect_archives(&workspace.recipes, targets);
     let installed = installed_view();
