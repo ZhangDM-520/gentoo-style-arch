@@ -155,6 +155,15 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | `gsa -Qt` | print resolved topology records `id\|path\|groups\|edges\|tags`, one per line — the tooling data channel (today `--topology`; tooling must never parse `config/` directly) |
 | `gsa -Qr` | revdep report over the installed-ELF view: unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin leftovers — live (read-only, rc 0) over an on-demand view. *Correction (2026-10-28, F3):* the row previously read "deferred to a later phase" while the verb shipped; the preserved-lib registry is still Phase 4 (§J.1) and nothing writes it, so that report class is structurally empty until the preserve mode of `docs/plans/plan-native-pm.md` §4.4 lands |
 
+*Amendment (2026-11-11, a zero-row answer).* On the HUMAN rendering a
+row-listing query states its verdict instead of printing zero bytes: `-Qb`
+renders `binpkg empty …`, `-Qu` `stale clean …`, `-Qr` `revdep clean …`
+(selected by the §L.9 ladder, so `--color=always` reaches it through a pipe).
+A clean query must never be mistaken for a broken one. The machine channel
+and the data channels (`-Qt`, `-Qs`, `-Ql`/`-Qo`'s pacman passthrough) stay
+row-only: a zero-row capture is scriptable and never grows a synthetic row.
+Pinned by `tests/gsa-query.sh` §h.
+
 ### B.4 `-S` — build + install
 
 | Spelling | Action |
@@ -750,7 +759,10 @@ surface). Pinned by `tests/gsa-abi-v2.sh` sections g/h and `gsa-abi`'s
 
 Ranges (`22..38`, `22..`, `..15`) index the **selection** in build order after
 expansion, exactly as the `-Sl` listing prints them. A range requires a
-selection to anchor it; a bare range is a usage error. Group runs may cross
+selection to anchor it; a bare range is a usage error. A range that runs past
+the selection's end is clamped to it and ANSWERS with a note naming the clamp
+(owner decision 2026-11-11) — never a silent shrink; a start past the end or a
+reversed range is a usage error. Group runs may cross
 groups through consumers (`-S @git` may add `app` consumers via `glib2-git`);
 the union of multiple targets/groups is deduplicated before sorting.
 

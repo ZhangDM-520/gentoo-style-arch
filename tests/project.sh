@@ -417,11 +417,14 @@ if [[ -n $root ]]; then
         fail "the refusal does not name the $git_rows-package selection's valid range: $FIXTURE_OUTPUT"
 
     # clamping is DATA: 1..999 covers the whole selection — exactly
-    # $git_rows rows (the "clamped" note is rendering, gap G9)
+    # $git_rows rows — and it is ANSWERED: a range that shrank says so
+    # (owner decision 2026-11-11), never a silent adjustment.
     run_engine "$root" -Sl @git 1..999
     [ "$FIXTURE_RC" = 0 ] || fail "the over-long range 1..999 failed: $FIXTURE_OUTPUT"
     [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | wc -l)" -eq "$git_rows" ] ||
         fail "1..999 selected $(listing_rows <<<"$FIXTURE_OUTPUT" | wc -l) packages, not the whole $git_rows-package selection"
+    [[ $FIXTURE_OUTPUT == *"clamped_to_$git_rows"* || $FIXTURE_OUTPUT == *"clamped to $git_rows"* ]] ||
+        fail "the clamped range 1..999 does not say it was clamped to $git_rows: $FIXTURE_OUTPUT"
 
     run_engine "$root" -Sl @git ..
     [ "$FIXTURE_RC" = 2 ] || fail "the empty range .. must be a usage error (§G.1), got $FIXTURE_RC"

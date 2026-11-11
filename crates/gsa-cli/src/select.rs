@@ -208,7 +208,7 @@ fn unknown_reference(ctx: &Ctx<'_>, token: &str, namespace: bool) -> SelectError
     // alphabetically close to a number (blind review, 2026-11-11).
     if token.chars().all(|c| c.is_ascii_digit()) && !token.is_empty() {
         return SelectError::new(format!(
-            "'{token}' is an index, not a reference — indices address a selection (see 'gsa -Sl' and the range grammar in 'gsa --help')"
+            "'{token}' is an index, not a reference — indices address a selection: print one with 'gsa -Sl <target>' and pass the position as a range ('{token}..{token}'), or see the range grammar in 'gsa --help'"
         ));
     }
     let candidates = nearest_candidates(ctx, token, namespace);
@@ -562,7 +562,7 @@ impl SelectionDraft {
             mut app_seeds,
             ranges,
             leaf,
-            notes,
+            mut notes,
         } = self;
 
         let unfiltered: Vec<usize> = other_seeds
@@ -626,6 +626,17 @@ impl SelectionDraft {
                 return Err(SelectError::new(format!(
                     "range {token} is empty — the start is past the end"
                 )));
+            }
+            // A clamp is an ANSWER, not a silent adjustment: the operator
+            // asked for rows the selection does not have, and a range that
+            // quietly shrank reads as if it had matched exactly.
+            if spec.end.is_some_and(|end| end > total) {
+                notes.push(format!(
+                    "range {token} ends past the {total}-package selection — clamped to {total}"
+                ));
+            }
+            if spec.start == Some(0) {
+                notes.push(format!("range {token} starts below 1 — clamped to 1"));
             }
             let start = start.max(1);
             let end = end.min(total);

@@ -57,6 +57,7 @@ pub fn query_binpkg(
     if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
         return Err(message);
     }
+    let mut printed = 0usize;
     for row in &index.rows {
         if let Some(wanted) = &wanted {
             if !wanted.contains(&row.recipe_id) {
@@ -64,6 +65,13 @@ pub fn query_binpkg(
             }
         }
         let _ = writeln!(out, "{}", wire_row(row));
+        printed += 1;
+    }
+    // Zero bytes is not an answer: the human surface says the index is EMPTY
+    // so a clean query cannot be mistaken for a broken one. The machine
+    // channel stays row-only (a zero-row data surface is scriptable).
+    if printed == 0 && crate::output::is_human() {
+        let _ = writeln!(out, "binpkg empty no retained built instances");
     }
     Ok(())
 }
@@ -482,8 +490,17 @@ pub fn query_revdep(
     for line in corrupt {
         let _ = writeln!(err, "gsa: note: {line}");
     }
-    for row in gsa_abi::render_revdep(&report) {
+    let rows = gsa_abi::render_revdep(&report);
+    for row in &rows {
         let _ = writeln!(out, "{row}");
+    }
+    // A clean report renders its verdict instead of nothing (the same
+    // `clean`/`empty` answer the `-M` surfaces give).
+    if rows.is_empty() && crate::output::is_human() {
+        let _ = writeln!(
+            out,
+            "revdep clean no unresolved DT_NEEDED, preserved survivors, or exact-pin leftovers"
+        );
     }
     Ok(())
 }
@@ -1001,7 +1018,8 @@ pub fn query_updates(
     }
     let ids: Vec<gsa_model::RecipeId> = ctx.graph.records().iter().map(|r| r.id.clone()).collect();
     let installed = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
-    for row in crate::prepare::stale_set(root, ctx.graph, ctx.db, &installed, &ids) {
+    let rows = crate::prepare::stale_set(root, ctx.graph, ctx.db, &installed, &ids);
+    for row in &rows {
         writeln!(
             out,
             "{} tracked={} installed={} built={}",
@@ -1011,6 +1029,9 @@ pub fn query_updates(
             row.built.as_deref().unwrap_or("-"),
         )
         .map_err(|e| e.to_string())?;
+    }
+    if rows.is_empty() && crate::output::is_human() {
+        let _ = writeln!(out, "stale clean no stale recipes");
     }
     Ok(())
 }

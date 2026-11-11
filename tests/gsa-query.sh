@@ -32,7 +32,9 @@ set -euo pipefail
 #   g. `-Si`/`-Ss`/`-Sg` are RETIRED (H7/H8): rc 2, a usage error naming
 #      the new `-Q` home — never a silent re-route;
 #   h. a `-Q` verb against a PRISTINE root creates no state (it must run
-#      unprivileged and report the empty side-car, never mkdir/chown);
+#      unprivileged and report the empty side-car, never mkdir/chown), and a
+#      zero-row surface answers with a verdict on the human channel rather
+#      than zero bytes (the machine channel stays row-only);
 #   i. a CLOSED READER is normal Unix: `gsa -Q | head` must exit 0 with no
 #      "Broken pipe" diagnostic, never route an EPIPE through the usage path.
 #
@@ -436,6 +438,29 @@ if [ -z "$only" ] || [ "$only" = h ]; then
             [ ! -e "$state" ] \
                 || fail "h: $verb created the state root $state (a query never owns state)"
         done
+
+        # Zero rows is an ANSWER, not silence (owner decision 2026-11-11): the
+        # human surface states the verdict, so a clean query cannot be
+        # mistaken for a broken one. The machine channel stays row-only — a
+        # zero-row data surface is scriptable.
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qb --color always
+        [ "$FIXTURE_RC" -eq 0 ] || fail "h: human -Qb failed: $FIXTURE_OUTPUT"
+        grep -F 'binpkg empty' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "h: an empty binpkg index renders zero bytes on the human surface: $FIXTURE_OUTPUT"
+        # An EMPTY recipe set is the clean stale-set case (an installed older
+        # output would make `foo` stale by design).
+        ws_empty="$fixture/h/empty-ws"
+        state_empty="$fixture/h/never-empty"
+        make_workspace "$ws_empty" 1 1 low
+        GSA_CONF="$conf" GSA_STATE_DIR="$state_empty" run_engine_user "$ws_empty" -Qu --color always
+        [ "$FIXTURE_RC" -eq 0 ] || fail "h: human -Qu failed: $FIXTURE_OUTPUT"
+        grep -F 'stale clean' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "h: a clean stale set renders zero bytes on the human surface: $FIXTURE_OUTPUT"
+        GSA_CONF="$conf" GSA_STATE_DIR="$state_empty" run_engine_user "$ws_empty" -Qu
+        [ -z "$(printf '%s' "$FIXTURE_OUTPUT")" ] \
+            || fail "h: the machine channel invented a row for an empty stale set: $FIXTURE_OUTPUT"
+        [ ! -e "$state" ] && [ ! -e "$state_empty" ] \
+            || fail "h: the human-surface empty rendering created a state root"
     )
 fi
 
