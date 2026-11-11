@@ -755,7 +755,10 @@ fn execute(
             query::query_revdep(inv, out, err).map_err(cmd_error)?;
         }
         Command::Plan => {
-            return Ok(build::plan_only(&ctx, inv, &project, out, err).map_err(cmd_error)?);
+            return match build::plan_only(&ctx, inv, &project, out, err) {
+                Ok(rc) => Ok(rc),
+                Err(exit) => Ok(exit.render(err)),
+            };
         }
     }
     Ok(RC_OK)

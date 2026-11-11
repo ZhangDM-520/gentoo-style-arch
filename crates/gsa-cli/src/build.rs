@@ -135,7 +135,7 @@ fn run_build_with(
     };
     // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
     let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-        .map_err(|error| Exit::Usage(error.message))?;
+        .map_err(|error| error.into_exit())?;
     crate::write_notes(err, draft.notes());
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
@@ -156,7 +156,7 @@ fn run_build_with(
             err,
             crate::prompt::interactive(inv.machine_requested()),
         )
-        .map_err(|error| Exit::Usage(error.message))?;
+        .map_err(|error| error.into_exit())?;
 
     // ── build-cache root (§J.2): asked AFTER the selection prompt, before
     //    anything resolves the layout ─────────────────────────────────────
@@ -897,9 +897,11 @@ pub(crate) fn plan_only(
     project: &ProjectConfig,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<i32, String> {
+) -> Result<i32, Exit> {
     if inv.targets.is_empty() {
-        return Err("selection is mandatory: a build never starts without a selection".to_string());
+        return Err(Exit::Usage(
+            "selection is mandatory: a build never starts without a selection".to_string(),
+        ));
     }
     // Same write-back as the real run: a plan answers the build-dir question
     // so its continuation restates the chosen root (§J.2/§H.2).
@@ -913,7 +915,7 @@ pub(crate) fn plan_only(
         err,
         crate::prompt::interactive(inv.machine_requested()),
     )
-    .map_err(|error| error.message)?;
+    .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
     // resolve() owns its typed usage exit; the plan's rc is the run's (§H.2).
     if let Err(exit) = crate::builddir::resolve(inv, err) {
@@ -922,7 +924,7 @@ pub(crate) fn plan_only(
     // The same pre-dispatch ABI wave check the build pipeline runs (§E.3):
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
     // The same prerequisite expansion the run performs (owner decision
     // 2026-11-11): a dry run must show the additions it would build. An
     // unreadable installed DB is the run's refusal, so the plan reports that
@@ -968,7 +970,7 @@ pub(crate) fn plan_only(
     // `--jobs`, `--intensity` or env twin is a usage error here too (the
     // plan used to accept it and then the real run refused it), and the
     // record's `intensity` scalar is the value the run would actually use.
-    let budget = resolve_budget(inv, project, selection.listed.len())?;
+    let budget = resolve_budget(inv, project, selection.listed.len()).map_err(Exit::Usage)?;
     let _intensity = budget.intensity;
     // The note counts the POST-PROMPT closure: the prompt filters the
     // selection before the ordinary pipeline runs (§C.4), so its drops are
@@ -1163,9 +1165,8 @@ fn run_update_inner(
         update_inv.no_sync = true;
     }
     if inv.dry_run {
-        // `plan_only` keeps its `String` usage error (the Plan command's own
-        // entry renders it); the typed exit owns the rc here.
-        return plan_only(&ctx, &update_inv, &project, out, err).map_err(Exit::Usage);
+        // The dry run's typed exit owns its rc (a declined prompt is rc 3).
+        return plan_only(&ctx, &update_inv, &project, out, err);
     }
     let mode = if inv.modifiers.contains(&'f') {
         DecideMode::Force

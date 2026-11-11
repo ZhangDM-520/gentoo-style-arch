@@ -23,7 +23,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use crate::args::Invocation;
-use crate::exit::Exit;
+use crate::exit::{Exit, Refusal, RefusalClass};
 use crate::prompt::{self, prompt_build_dir, BuildDirOutcome};
 
 /// Resolve the run's build root, prompting on a TTY when nothing named it.
@@ -55,7 +55,12 @@ pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), Exit> {
             apply(inv, root);
             Ok(())
         }
-        Ok(BuildDirOutcome::Abort(reason)) => Err(Exit::Usage(reason.to_string())),
+        // A dialogue that ends in `q`/EOF is a REFUSAL, not a bad argv
+        // (owner decision 2026-11-11): the operator said stop.
+        Ok(BuildDirOutcome::Abort(reason)) => Err(Exit::Refuse(Refusal::noted(
+            RefusalClass::PromptDeclined,
+            vec![format!("gsa: {reason}")],
+        ))),
         Err(error) => Err(Exit::Usage(format!(
             "cannot read the build-dir answer: {error}"
         ))),

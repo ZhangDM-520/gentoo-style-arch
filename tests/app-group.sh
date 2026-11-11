@@ -25,7 +25,8 @@ set -euo pipefail
 #      abort/hang, so exit 0 with the whole list proves silence) and never
 #      builds (zero makepkg spawns)      [gsa 4]
 #   5. on a PTY: Enter = whole group, numbers = the checked subset (plus its
-#      consumers), q = non-zero abort; and ONLY an `@app` selection prompts —
+#      consumers), q/EOF = rc 3 refusal (prompt-declined); and ONLY an `@app`
+#      selection prompts —
 #      a positional app member builds without a menu (§C.4, fish-era
 #      `test "$g" = app`)      [fish 5-7 — engine gap]
 #   6. -g app combined with -g git: the union of both groups' expansions
@@ -115,6 +116,30 @@ export GSA_TEST_GSA_BIN="$gsa_bin"
 # ── Synthetic workspace: five fake packages, one topology record each ───────
 make_workspace "$fixture" auto auto xhigh
 install_fish_oracle "$fixture"
+
+# extdep is INSTALLED in a fabricated local DB: §C.3 adds a build-order
+# prerequisite the SYSTEM lacks, and this fixture pins CONSUMER expansion —
+# an installed prerequisite is never added and never rebuilt (the missing
+# case has its own section in tests/project.sh).
+mkdir -p "$fixture/db/local/extdep-1-1"
+cat >"$fixture/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+chmod +x "$fixture/bin/pacman-conf"
+{
+    printf '%%NAME%%\nextdep\n\n'
+    printf '%%VERSION%%\n1-1\n\n'
+    printf '%%BASE%%\nextdep\n'
+} >"$fixture/db/local/extdep-1-1/desc"
+printf '%%FILES%%\n' >"$fixture/db/local/extdep-1-1/files"
+export GSA_FAKE_DB_PATH="$fixture/db"
+export PATH="$fixture/bin:$PATH"
 
 # pkgver=1 (not the helper's $gsa_meta_any default) keeps these PKGBUILDs
 # byte-identical to the hand-written skeleton this replaced.
@@ -599,10 +624,11 @@ expected6_note="consumer expansion added $(($(wc -l <"$fixture/o6.expected") - $
 [ "$note6" = "$expected6_note" ] \
     || fail "expansion note does not count the post-prompt closure: got [$note6], want [$expected6_note]" "$fixture/o6p"
 
-# ── 7. PTY + q: abort with non-zero ─────────────────────────────────────────
-if run_pty_gsa 'q\n' "$fixture/o7p" -B --state-dir "$fixture/state-7p" --dry-run @app; then
-    fail "-B --dry-run @app accepted 'q' (abort must exit non-zero)" "$fixture/o7p"
-fi
+# ── 7. PTY + q: abort with rc 3 (a declined prompt is a REFUSAL) ────────────
+rc_q=0
+run_pty_gsa 'q\n' "$fixture/o7p" -B --state-dir "$fixture/state-7p" --dry-run @app || rc_q=$?
+[ "$rc_q" = 3 ] ||
+    fail "declining the app prompt must exit 3 (§G.1 prompt-declined), got rc=$rc_q" "$fixture/o7p"
 grep -q 'app selection aborted' "$fixture/o7p" \
     || fail "abort path did not report the abort" "$fixture/o7p"
 # The abort is exactly ONE line (fish parity: the reason rides on it) — the
@@ -613,9 +639,10 @@ grep -q 'app selection aborted' "$fixture/o7p" \
 # same way: non-zero, one line, reason attached. The unprivileged twin is
 # required here: sudo's PTY pump swallows the EOF condition (run_pty_gsa
 # header).
-if run_pty_gsa_user '\004' "$fixture/o7c" -B --state-dir "$fixture/state-7c" --dry-run @app; then
-    fail "-B --dry-run @app accepted input EOF (abort must exit non-zero)" "$fixture/o7c"
-fi
+rc_eof=0
+run_pty_gsa_user '\004' "$fixture/o7c" -B --state-dir "$fixture/state-7c" --dry-run @app || rc_eof=$?
+[ "$rc_eof" = 3 ] ||
+    fail "EOF at the app prompt must exit 3 (§G.1 prompt-declined), got rc=$rc_eof" "$fixture/o7c"
 grep -q 'app selection aborted (input closed)' "$fixture/o7c" \
     || fail "EOF abort did not name its reason" "$fixture/o7c"
 [ "$(grep -c 'app selection aborted' "$fixture/o7c")" = 1 ] \

@@ -59,6 +59,10 @@ pub(crate) enum RefusalClass {
     AnchorRefused,
     AbiConsumerUncovered,
     PreflightRefused,
+    /// The operator declined an interactive prompt (`q`, EOF). A dialogue
+    /// that ends in NO is a refusal, not a usage error (owner decision
+    /// 2026-11-11): the argv was valid, the operator said stop.
+    PromptDeclined,
 }
 
 impl RefusalClass {
@@ -70,6 +74,7 @@ impl RefusalClass {
             RefusalClass::AnchorRefused => "anchor-refused",
             RefusalClass::AbiConsumerUncovered => "abi-consumer-uncovered",
             RefusalClass::PreflightRefused => "preflight-refused",
+            RefusalClass::PromptDeclined => "prompt-declined",
         }
     }
 
@@ -82,6 +87,7 @@ impl RefusalClass {
             RefusalClass::AnchorRefused,
             RefusalClass::AbiConsumerUncovered,
             RefusalClass::PreflightRefused,
+            RefusalClass::PromptDeclined,
         ]
         .into_iter()
         .find(|class| class.key() == key)

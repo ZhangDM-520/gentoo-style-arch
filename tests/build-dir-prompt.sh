@@ -18,7 +18,7 @@ set -euo pipefail
 #      override is an answer, not a default); its leaves the
 #      continuation as an env-required entry, never a flag         [env]
 #   G. a built-in-default root is reported when no layer set one    [PTY ⏎]
-#   H. q aborts (rc 2, one named line) and a relative --build-dir is a
+#   H. q aborts (rc 3 prompt-declined, one named line) and a relative --build-dir is a
 #      usage error naming the flag                                [refusals]
 #   I. a non-build spelling refuses --build-dir as deferred         [gate]
 #   J. CI (any non-empty value but 0/false) answers it silently: an
@@ -254,7 +254,7 @@ set +e
 run_dir "$fixture/gsa.conf" "$fixture/h1.out" 'q\n' -B --dry-run --leaf p1
 rc_abort=$RC
 set -e
-[ "$rc_abort" = 2 ] || fail "q did not abort with rc 2 (rc=$rc_abort)" "$fixture/h1.out"
+[ "$rc_abort" = 3 ] || fail "q must abort with rc 3 (prompt-declined), got $rc_abort" "$fixture/h1.out"
 grep -q 'build-dir selection aborted' "$fixture/h1.out" \
     || fail "q printed no abort line" "$fixture/h1.out"
 

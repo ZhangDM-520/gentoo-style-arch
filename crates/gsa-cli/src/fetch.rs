@@ -54,7 +54,7 @@ fn run_fetch_only_inner(
         user_sets: select::load_user_sets(inv),
     };
     let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-        .map_err(|error| Exit::Usage(error.message))?;
+        .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────

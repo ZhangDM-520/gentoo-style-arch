@@ -78,28 +78,40 @@ pub fn prompt_app_selection(
 ) -> std::io::Result<PromptOutcome> {
     let total: usize = rows.iter().map(|row| row.members.len()).sum();
     let mut checked: Vec<usize> = Vec::new();
+    let mut notice: Option<&str> = None;
+    let mut drawn = 0usize;
     loop {
-        writeln!(out, "app group — choose what to build ({total} packages):")?;
-        writeln!(out, "  default: nothing checked = build EVERY app package")?;
+        let mut frame: Vec<String> = Vec::new();
+        frame.push(format!(
+            "app group — choose what to build ({total} packages):"
+        ));
+        frame.push("  default: nothing checked = build EVERY app package".to_string());
         for (i, row) in rows.iter().enumerate() {
             let mark = if checked.contains(&(i + 1)) {
                 "[x]"
             } else {
                 "[ ]"
             };
-            writeln!(out, "  {mark} {:>2}. {}", i + 1, row.label)?;
+            frame.push(format!("  {mark} {:>2}. {}", i + 1, row.label));
         }
         if !checked.is_empty() {
-            writeln!(
-                out,
+            frame.push(format!(
                 "  {} checked — confirming now builds ONLY those",
                 checked.len()
-            )?;
+            ));
         }
-        writeln!(
-            out,
-            "numbers toggle (e.g. '1 3'), 'a' all, 'c' clear, Enter build, 'q' abort"
-        )?;
+        frame.push(
+            "numbers toggle (e.g. '1 3'), 'a' all, 'c' clear, Enter build, 'q' abort".to_string(),
+        );
+        if let Some(line) = notice.take() {
+            frame.push(line.to_string());
+        }
+        // The menu redraws IN PLACE (owner decision 2026-11-11): every
+        // keystroke used to reprint the whole list, so a 60-row app group
+        // buried the question it was asking. The dashboard's idiom
+        // (`ESC[nA` up, `ESC[2K` clear) replaces the previous frame when the
+        // terminal can take it; `TERM=dumb` keeps the old append behaviour.
+        write_frame(out, &frame, &mut drawn)?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
             return Ok(PromptOutcome::Abort("app selection aborted (input closed)"));
@@ -130,9 +142,8 @@ pub fn prompt_app_selection(
             }
         }
         if invalid {
-            writeln!(out, " unrecognized token — use numbers, 'a', 'c' or 'q'")?;
+            notice = Some(" unrecognized token — use numbers, 'a', 'c' or 'q'");
         }
-        writeln!(out)?;
     }
     if checked.is_empty() {
         return Ok(PromptOutcome::All);
@@ -144,6 +155,49 @@ pub fn prompt_app_selection(
         }
     }
     Ok(PromptOutcome::Picked(picked))
+}
+
+/// One fitted prompt line (the same width rule as the menu).
+fn emit(out: &mut dyn Write, line: &str) -> std::io::Result<()> {
+    match crate::style::terminal_width() {
+        Some(width) => writeln!(out, "{}", crate::style::truncate_end(line, width)),
+        None => writeln!(out, "{line}"),
+    }
+}
+
+/// Write one menu frame, erasing the previous one in place when the terminal
+/// can take ANSI control. Lines are fitted to the terminal width so a long
+/// cluster label never pushes the instruction line off-screen.
+fn write_frame(out: &mut dyn Write, frame: &[String], drawn: &mut usize) -> std::io::Result<()> {
+    // The FIRST frame stays plain bytes: fixtures and captures read it as
+    // data, and only a REDRAW needs control sequences.
+    let control = *drawn > 0 && !crate::style::term_is_dumb();
+    if control {
+        write!(out, "\x1b[{}A", *drawn)?;
+    }
+    let width = crate::style::terminal_width();
+    for line in frame {
+        let line = match width {
+            Some(width) => crate::style::truncate_end(line, width),
+            None => line.clone(),
+        };
+        if control {
+            writeln!(out, "\x1b[2K{line}")?;
+        } else {
+            writeln!(out, "{line}")?;
+        }
+    }
+    if *drawn > frame.len() {
+        for _ in 0..(*drawn - frame.len()) {
+            writeln!(out, "\x1b[2K")?;
+        }
+        if control {
+            write!(out, "\x1b[{}A", *drawn - frame.len())?;
+        }
+    }
+    out.flush()?;
+    *drawn = frame.len();
+    Ok(())
 }
 
 /// What the build-dir prompt resolved to.
@@ -171,15 +225,14 @@ pub fn prompt_build_dir(
     input: &mut dyn BufRead,
 ) -> std::io::Result<BuildDirOutcome> {
     loop {
-        writeln!(
-            out,
-            "build directory (makepkg BUILDDIR/PKGDIR/PKGDEST live under it):"
-        )?;
-        writeln!(out, "  current: {}  [{source}]", default.display())?;
-        writeln!(
-            out,
+        for line in [
+            "build directory (makepkg BUILDDIR/PKGDIR/PKGDEST live under it):".to_string(),
+            format!("  current: {}  [{source}]", default.display()),
             "Enter keeps it, an absolute path (or ~/…) uses that root for this run, 'q' aborts"
-        )?;
+                .to_string(),
+        ] {
+            emit(out, &line)?;
+        }
         write!(out, "build dir> ")?;
         out.flush()?;
         let mut line = String::new();

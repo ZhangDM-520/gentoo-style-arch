@@ -66,12 +66,37 @@ pub fn load_user_sets_at(state_dir: Option<&str>) -> Vec<(String, Vec<String>)> 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectError {
     pub message: String,
+    /// The operator declined a prompt (`q`/EOF) instead of making a bad
+    /// request: a refusal class (§G.1 rc 3), never a usage error.
+    pub declined: bool,
 }
 
 impl SelectError {
     pub fn new(message: impl Into<String>) -> Self {
         SelectError {
             message: message.into(),
+            declined: false,
+        }
+    }
+
+    /// The operator said no at an interactive prompt.
+    pub fn declined(message: impl Into<String>) -> Self {
+        SelectError {
+            message: message.into(),
+            declined: true,
+        }
+    }
+
+    /// The typed exit this error is (§G.1): a declined prompt is rc 3, every
+    /// other selection failure is the usage class.
+    pub fn into_exit(self) -> crate::exit::Exit {
+        if self.declined {
+            crate::exit::Exit::Refuse(crate::exit::Refusal::noted(
+                crate::exit::RefusalClass::PromptDeclined,
+                vec![format!("gsa: {}", self.message)],
+            ))
+        } else {
+            crate::exit::Exit::Usage(self.message)
         }
     }
 }
@@ -730,7 +755,7 @@ fn prompt_filter_app_seeds(
                 .filter(|&idx| chosen.contains(ctx.graph.record(idx).id.as_str()))
                 .collect())
         }
-        Ok(PromptOutcome::Abort(reason)) => Err(SelectError::new(reason)),
+        Ok(PromptOutcome::Abort(reason)) => Err(SelectError::declined(reason)),
         Err(error) => Err(SelectError::new(format!("app selection aborted ({error})"))),
     }
 }

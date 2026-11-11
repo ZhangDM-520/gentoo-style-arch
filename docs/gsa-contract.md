@@ -330,7 +330,8 @@ blocked forever on a question nothing could answer (blind-review 2026-11-11). Th
 shows the resolved root WITH its provenance (`gsa.conf build_dir`,
 `GSA_BUILD_DIR`, `the built-in default`), so a stale config path or a stray
 environment override is visible before it is accepted; Enter keeps it, an
-absolute or `~/…` path replaces it for that run, `q` aborts (rc 2). The
+absolute or `~/…` path replaces it for that run, `q`/EOF aborts (rc 3,
+`prompt-declined`). The
 answer is pinned process-wide, exported to lane and fetch children through
 `GSA_BUILD_DIR`, and mirrored as `--build-dir PATH` in the continuation. A
 relative path, or an existing non-directory, is a usage error naming
@@ -440,7 +441,7 @@ The dumb-TTY rule is §L.9.
 | `--no-deps` | `--leaf` | renamed (leaf-only mode) |
 | `-c/--clean` | `-Mc`, and cluster letter `c` on `-S`/`-B` | split: prune verb vs build-run modifier |
 | `-cc/--cleanup` | `-Mcc` | carried |
-| `-ccc/--nuclear` | `-Mccc` | carried (prints its targets and stops rc 3 `confirmation-required` without `--noconfirm` — the engine never prompts, §B.7/§K.3) |
+| `-ccc/--nuclear` | `-Mccc` | carried (prints its targets and stops rc 3 `confirmation-required` without `--noconfirm` — §B.7) |
 | `-s/--skip` | `--skip` | carried as long-only; short `-s` dropped (collides with the pacman search idiom `-Ss`) |
 | `--skip-built` | `--skip-built` | carried |
 | `--vcs-skip-tolerance N` | same | carried |
@@ -786,7 +787,11 @@ the union of multiple targets/groups is deduplicated before sorting.
 
 An `@app` build or `--dry-run` on a TTY prompts to multi-select before the
 normal pipeline runs: all unchecked + Enter = the whole group; any checked =
-only those; `q` aborts with a usage-class exit. Only the `@app` GROUP's
+only those; `q` (or EOF) aborts with a REFUSAL — rc 3, reason
+`prompt-declined` (owner decision 2026-11-11: the argv was valid, the operator
+said stop). The menu redraws in place when the terminal can take ANSI control
+(`TERM=dumb` appends instead) and its lines are fitted to the terminal width.
+Only the `@app` GROUP's
 contribution prompts — a positional app member (or an app member seeded
 through any other target) is never prompt-filtered (fish-era `test "$g" =
 app` rule), and an app member named both ways survives an unchecked row. An
@@ -1017,7 +1022,7 @@ mapping from lane code to status is total and defined in §H.3.
 | 0 | success | every selected package `succeeded` (including skip reasons); no `failed`, `deferred`, or `parked` row |
 | 1 | build failure under `--fail-fast` | ≥1 `failed` row and dispatch stopped (drain completed) |
 | 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record or `gsa.conf` layer (§B.11), a standalone-target refusal (mixed with workspace references, query/report verb, staging failure — §C.1) |
-| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution), confirmation gate (`-Mm`/`-Mccc` without `--noconfirm`: plan printed, `confirmation-required` — the engine never prompts, §K.3) |
+| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution), confirmation gate (`-Mcc`/`-Mccc`/`-Mm` on a destructive plan without `--noconfirm`: plan printed, `confirmation-required` — §B.7), **the operator declined a prompt** (`q`/EOF at the `@app` or build-dir dialogue; reason `prompt-declined`, §C.4) |
 | 4 | parked-cone-with-failures | **cone-stop (default) run with ≥1 `failed` row** — dispatch continued with unrelated work; parked rows may be empty when the failed package is a leaf |
 | 5 | deferral-only | ≥1 `deferred`/`parked` row and no `failed` row (extension of the six-class list; preserves "a deferral exits non-zero" without claiming a build failure) |
 | 130 | interrupted | a signal terminated the run; the full run record is emitted first |
