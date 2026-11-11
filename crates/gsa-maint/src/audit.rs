@@ -24,7 +24,10 @@
 //!    machinery is not landed) and saying so in its rows.
 //! 7. `installed-pgo` — installed files of PGO-instrumenting recipes still
 //!    carrying a baked profiling destination (`.gcda`/`.profraw` bytes).
-//! 8. `state-integrity` — the side-car's own truth (rule 71): unusable lines
+//! 8. `recipe-integrity` — source claims the recipe cannot honour: a declared
+//!    local source absent from the recipe directory, and a REMOTE source
+//!    whose integrity sum is `SKIP` (fetched, never verified).
+//! 9. `state-integrity` — the side-car's own truth (rule 71): unusable lines
 //!    in the binpkg index, the run history and the kv store, plus every index
 //!    row whose archive is gone, unreadable or no longer the recorded size.
 //!    A store the reader could not use is never "clean", and the audit is the
@@ -331,10 +334,45 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     let pgo = installed_pgo(ctx);
     push_family(&mut rows, "installed-pgo", pgo);
 
+    let recipe_integrity = recipe_integrity(ctx);
+    push_family(&mut rows, "recipe-integrity", recipe_integrity);
+
     let integrity = state_integrity(ctx);
     push_family(&mut rows, "state-integrity", integrity);
 
     rows
+}
+
+/// Source claims a recipe cannot honour (blind-review 2026-11-11,
+/// airgapped-admin): a `source=()` entry with no transport that is absent
+/// from the recipe directory (makepkg will refuse the build), and a REMOTE
+/// source the recipe pins as `SKIP` — fetched, never verified, which a clean
+/// audit would present as trustworthy. A VCS source with `SKIP` is the
+/// normal spelling and is not reported.
+fn recipe_integrity(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for record in ctx.graph.records() {
+        let id = record.id.as_str();
+        let Some(meta) = ctx.db.get(id) else {
+            continue;
+        };
+        let dir = ctx.root.join(&record.path);
+        let missing = meta.missing_local_sources(&dir);
+        if !missing.is_empty() {
+            out.push((
+                id.to_string(),
+                format!("local-source-missing {}", missing.join(" ")),
+            ));
+        }
+        let unverified = meta.unverified_remote_sums();
+        if !unverified.is_empty() {
+            out.push((
+                id.to_string(),
+                format!("unverified-sums {}", unverified.join(" ")),
+            ));
+        }
+    }
+    out
 }
 
 /// The side-car's own truth (rule 71). Three silent-loss classes used to pass

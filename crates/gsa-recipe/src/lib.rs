@@ -662,6 +662,87 @@ impl RecipeMeta {
         raw.iter().map(|s| classify_source(s)).collect()
     }
 
+    /// The declared LOCAL sources (`source=()` entries with no transport)
+    /// that do not exist in the recipe directory. makepkg reports the same
+    /// set as `"<file> was not found in the build directory and is not a
+    /// URL"`, so a fetch/verify pass that claims success while one is absent
+    /// promises a build it cannot deliver (blind-review 2026-11-11).
+    pub fn missing_local_sources(&self, recipe_dir: &std::path::Path) -> Vec<String> {
+        self.sources()
+            .into_iter()
+            .filter(|source| source.kind == SourceKind::Local)
+            .filter(|source| {
+                let name = source
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| source.location.clone());
+                !recipe_dir.join(name).exists()
+            })
+            .map(|source| source.name.unwrap_or(source.location))
+            .collect()
+    }
+
+    /// The REMOTE sources whose integrity sum is `SKIP` (makepkg's
+    /// `sha256sums=(SKIP)` and friends): fetched, never verified. A VCS
+    /// source with `SKIP` is the normal spelling and is not listed — its
+    /// ref, not a sum, is the anchor.
+    ///
+    /// The sum lists are consumed the way makepkg consumes them: the first
+    /// sum family present, indexed by source position. An ABSENT list or a
+    /// length mismatch is makepkg's own fail-closed refusal ("Integrity
+    /// checks are missing"), so this helper stays silent there — only an
+    /// explicit `SKIP` entry is a disclosure this engine owes.
+    pub fn unverified_remote_sums(&self) -> Vec<String> {
+        let sources = self.sources();
+        const SUM_KEYS: [&str; 5] = ["sha256sums", "sha512sums", "b2sums", "sha1sums", "md5sums"];
+        // A sum produced by the recipe's own shell (`sha256sums=($(…))`) is
+        // unknowable statically: reporting it as unverified would flag a
+        // recipe that DOES verify, so it is left alone.
+        if self
+            .scanned
+            .as_ref()
+            .is_some_and(|scan| SUM_KEYS.iter().any(|key| scan.dynamic.contains(*key)))
+        {
+            return Vec::new();
+        }
+        // `.SRCINFO` first (the committed metadata), else the read-only scan —
+        // the same precedence `sources()` uses.
+        let sums: Option<Vec<String>> = self
+            .srcinfo
+            .as_ref()
+            .and_then(|info| {
+                SUM_KEYS
+                    .iter()
+                    .find_map(|key| info.other.get(*key).cloned())
+            })
+            .or_else(|| {
+                let scan = self.scanned.as_ref()?;
+                SUM_KEYS.iter().find_map(|key| match scan.vars.get(*key) {
+                    Some(ScanValue::Array(items)) => Some(items.clone()),
+                    Some(ScanValue::Scalar(value)) => Some(vec![value.clone()]),
+                    None => None,
+                })
+            });
+        let mut out = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            if source.kind != SourceKind::Remote {
+                continue;
+            }
+            let Some(list) = sums.as_ref().filter(|list| list.len() == sources.len()) else {
+                continue;
+            };
+            if list.get(index).is_some_and(|sum| sum.trim() == "SKIP") {
+                out.push(
+                    source
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| source.location.clone()),
+                );
+            }
+        }
+        out
+    }
+
     /// A fact `.SRCINFO` does not carry, answered from the scan. A dynamic
     /// or absent value is a usage-level refusal naming the missing fact —
     /// the scan never evaluates shell to produce one.

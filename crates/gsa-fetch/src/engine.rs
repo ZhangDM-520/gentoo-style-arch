@@ -29,7 +29,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::candidacy::{classify, FetchCandidacy};
 use crate::verdict::{
     self, FetchResult, FetchVerdict, REASON_DISK_FLOOR, REASON_EVAL_FAILED, REASON_FETCH_FAILED,
-    REASON_OK, REASON_QUARANTINED_RETRY_OK, REASON_RETRY_OK, REASON_VERIFY_FAILED,
+    REASON_LOCAL_SOURCE_MISSING, REASON_OK, REASON_QUARANTINED_RETRY_OK, REASON_RETRY_OK,
+    REASON_UNVERIFIED_SUMS, REASON_VERIFY_FAILED,
 };
 
 /// Transport attempts per recipe before the lane takes over (docs/plans/plan.md §2.3
@@ -396,14 +397,30 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
                 .expect("pkg is validated by the caller");
         }
     };
-    let candidacy = match candidacy_for(pkg, root) {
-        Ok(candidacy) => candidacy,
+    let meta = match meta_for(pkg, root) {
+        Ok(meta) => meta,
         Err(why) => {
             let _ = writeln!(err, "gsa-fetch: {pkg}: {why}");
             return FetchResult::new(pkg, FetchVerdict::Failed, 0, REASON_EVAL_FAILED)
                 .expect("pkg is validated by the caller");
         }
     };
+    let candidacy = classify(&meta);
+    // A declared local source that is absent means the build cannot start;
+    // the fetch run must say so rather than skip as "nothing to fetch"
+    // (blind-review 2026-11-11, airgapped-admin). makepkg's own verdict is
+    // the same class, but this costs no spawn and names every missing file.
+    let missing = meta.missing_local_sources(&recipe_dir);
+    if !missing.is_empty() {
+        let _ = writeln!(
+            err,
+            "gsa-fetch: {pkg}: {REASON_LOCAL_SOURCE_MISSING}: {} — declared in source=() but absent from {}",
+            missing.join(" "),
+            recipe_dir.display()
+        );
+        return FetchResult::new(pkg, FetchVerdict::Failed, 0, REASON_LOCAL_SOURCE_MISSING)
+            .expect("pkg is validated by the caller");
+    }
     if let Some(skip) = candidacy.skip_verdict(pkg) {
         let _ = writeln!(
             err,
@@ -435,7 +452,21 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
     for note in &report.notes {
         let _ = writeln!(err, "gsa-fetch: {pkg}: {note}");
     }
-    report.result
+    let mut result = report.result;
+    // A remote source the recipe pins as `SKIP` was fetched, never verified
+    // — never report that as a clean `ok` (blind-review 2026-11-11).
+    if result.verdict == FetchVerdict::Ok && result.reason == REASON_OK {
+        let unverified = meta.unverified_remote_sums();
+        if !unverified.is_empty() {
+            let _ = writeln!(
+                err,
+                "gsa-fetch: {pkg}: {REASON_UNVERIFIED_SUMS}: {} — fetched but never verified (the recipe pins SKIP)",
+                unverified.join(" ")
+            );
+            result.reason = REASON_UNVERIFIED_SUMS.to_string();
+        }
+    }
+    result
 }
 
 /// The recipe directory of one topology id (read-only).
@@ -451,6 +482,12 @@ pub fn recipe_dir_for(pkg: &str, root: &Path) -> Result<PathBuf, String> {
 /// The fetch candidacy of one recipe (committed `.SRCINFO` or the strict
 /// scan fallback — `gsa-recipe`, never grep).
 pub fn candidacy_for(pkg: &str, root: &Path) -> Result<FetchCandidacy, String> {
+    Ok(classify(&meta_for(pkg, root)?))
+}
+
+/// One recipe's loaded metadata (read-only): the shared input of candidacy
+/// and the integrity checks above.
+pub fn meta_for(pkg: &str, root: &Path) -> Result<gsa_recipe::RecipeMeta, String> {
     let project = gsa_topo::load_project(root).map_err(|e| format!("configuration error: {e}"))?;
     let record = project
         .topology
@@ -458,10 +495,9 @@ pub fn candidacy_for(pkg: &str, root: &Path) -> Result<FetchCandidacy, String> {
         .ok_or_else(|| format!("unknown recipe '{pkg}'"))?;
     let db = gsa_recipe::RecipeDb::load(root, std::slice::from_ref(record))
         .map_err(|e| format!("recipe metadata error: {e}"))?;
-    let meta = db
-        .get(pkg)
-        .ok_or_else(|| format!("recipe metadata missing for '{pkg}'"))?;
-    Ok(classify(&meta))
+    db.get(pkg)
+        .map(|meta| (*meta).clone())
+        .ok_or_else(|| format!("recipe metadata missing for '{pkg}'"))
 }
 
 /// `gsa --fetch-job <pkg> <result-path>` (contract §D.1): the one-shot

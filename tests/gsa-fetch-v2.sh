@@ -11,7 +11,7 @@ set -euo pipefail
 # runs produced (rule 25(j) / contract §L.3) — never from pinned counts.
 #
 # Pinned here (seven ( subshell ) sections, one per scenario; run one alone
-# with GSA_FETCH_V2_ONLY=a…g):
+# with GSA_FETCH_V2_ONLY=<letter>):
 #   a. fetch-ahead-while-compiling: an upcoming recipe's `--verifysource`
 #      starts and ends while an earlier recipe is still compiling (stub
 #      clocks), and the run's fate is unchanged.
@@ -35,6 +35,12 @@ set -euo pipefail
 #      renamed `<name>.gsa-bad-<ts>` and the one retry re-fetches — exactly
 #      2 attempts, verdict `ok quarantined-retry-ok`, nothing left at the
 #      final name.
+#   h. source claims the fetch run must not paper over: a declared local
+#      source that is ABSENT fails the run (`failed local-source-missing`,
+#      rc 4, zero spawns, no silent `skipped`), a REMOTE source pinned
+#      `SKIP` is `ok unverified-sums` with a warning (fetched, never
+#      verified), and a local source that exists stays a routine
+#      `not-a-candidate` skip (blind-review 2026-11-11).
 #   g. operator surface: `gsa --help` names both fetch-ahead flags (§L.1)
 #      and hides `--fetch-job`; `--no-prefetch` fetches nothing and prints
 #      no `prefetch-warnings` scalar; the `--fetch-job` seam publishes its
@@ -66,7 +72,7 @@ fail_out() {
     exit 1
 }
 
-# Section filter: GSA_FETCH_V2_ONLY=<a..g> runs exactly one section.
+# Section filter: GSA_FETCH_V2_ONLY=<letter> runs exactly one section.
 want() { [ -z "${GSA_FETCH_V2_ONLY:-}" ] || [ "${GSA_FETCH_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
@@ -481,6 +487,54 @@ if want g; then
         grep -Eq '^v2 p1 ok [0-9]+ ok$' "$ws/p1.fetch.result" \
             || fail "g: want a typed 'v2 p1 ok <dur> ok' result row:" "$ws/p1.fetch.result"
         assert_no_transactions g
+    )
+fi
+
+if want h; then
+    # ─── h. missing local source and SKIP sums are not a clean success ─────
+    (
+        set -euo pipefail
+        ws="$fixture/h/ws"
+        fetch_ws "$ws"
+        add_package "$ws" p-missing "$gsa_meta_any"$'\nsource=(absent.patch)\nsha256sums=(SKIP)'
+        add_package "$ws" p-skipsum "$gsa_meta_any"$'\nsource=(https://example.invalid/skipsum-1.0.0.tar.gz)\nsha256sums=(SKIP)'
+        add_package "$ws" p-local "$gsa_meta_any"$'\nsource=(present.patch)\nsha256sums=(SKIP)'
+        printf 'fixture local patch\n' >"$ws/packages/p-local/present.patch"
+
+        run_engine "$ws" -Sw p-missing p-skipsum p-local
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/h/run.txt"
+
+        # rc follows §G.1 from the rows: the missing local source is a
+        # failed row, so the run is a failure — never a silent success.
+        [ "$FIXTURE_RC" = 4 ] \
+            || fail "h: a missing local source must fail the fetch run (rc 4), got $FIXTURE_RC:" "$fixture/h/run.txt"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^p-missing failed [0-9]+ local-source-missing$' >/dev/null \
+            || fail "h: the verdict row must name the missing local source: $FIXTURE_OUTPUT"
+        [ "$(rr2_plan p-missing plan <<<"$FIXTURE_OUTPUT")" = fetch ] \
+            || fail "h: p-missing must be planned as a fetch attempt:" "$fixture/h/run.txt"
+        [ "$(rr2_plan p-missing reason <<<"$FIXTURE_OUTPUT")" = local-source-missing ] \
+            || fail "h: the plan reason must name the missing local source:" "$fixture/h/run.txt"
+        [ "$(rr2_outcome p-missing status <<<"$FIXTURE_OUTPUT")" = failed ] \
+            || fail "h: the record row must be failed:" "$fixture/h/run.txt"
+        [ "$(rr2_outcome p-missing reason <<<"$FIXTURE_OUTPUT")" = local-source-missing ] \
+            || fail "h: the record reason must survive:" "$fixture/h/run.txt"
+        [ "$(fetch_attempts p-missing)" = 0 ] \
+            || fail "h: a missing local source costs no makepkg spawn" "$GSA_FAKE_FETCH_LOG"
+
+        vgrep "$FIXTURE_OUTPUT" -Eq '^p-skipsum ok [0-9]+ unverified-sums$' >/dev/null \
+            || fail "h: a SKIP-sum remote source must report unverified-sums: $FIXTURE_OUTPUT"
+        grep -F 'unverified-sums' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "h: the unverified sources must be named loudly: $FIXTURE_OUTPUT"
+        [ "$(rr2_outcome p-skipsum status <<<"$FIXTURE_OUTPUT")" = succeeded ] \
+            || fail "h: a fetched-but-unverified source is not a failed row:" "$fixture/h/run.txt"
+        [ "$(fetch_attempts p-skipsum)" = 1 ] \
+            || fail "h: p-skipsum is still fetched" "$GSA_FAKE_FETCH_LOG"
+
+        vgrep "$FIXTURE_OUTPUT" -Eq '^p-local skipped [0-9]+ not-a-candidate$' >/dev/null \
+            || fail "h: an existing local source stays not-a-candidate: $FIXTURE_OUTPUT"
+        assert_no_transactions h
     )
 fi
 

@@ -156,7 +156,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | --- | --- |
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `AGENTS.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
-| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) |
+| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) — except on a `-Sw` run, where they ARE the work and set the rc. Two honest non-`ok` outcomes (added 2026-11-11): `failed local-source-missing` when a `source=()` entry with no transport is absent from the recipe directory (the build cannot start; the plan row says `fetch local-source-missing`), and `ok unverified-sums` when a REMOTE source is pinned `SKIP` (fetched, never verified — warning-class, never a clean `ok`) |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
 | `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (recipes whose tracked version moved past their newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
 | `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
@@ -231,7 +231,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 
 | Spelling | Action |
 | --- | --- |
-| `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report (today `--audit`). Report-only by contract (§E.4); exit 0, read the report |
+| `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a REMOTE source pinned `SKIP`), `state-integrity` (unusable side-car lines, index rows whose archive is gone or resized) (today `--audit`). Report-only by contract (§E.4); exit 0, read the report |
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart. Default reports; `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones (today's hidden `--register-ignorepkg`) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |

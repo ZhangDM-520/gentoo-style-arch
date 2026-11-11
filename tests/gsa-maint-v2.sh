@@ -78,6 +78,9 @@ set -euo pipefail
 #      contains an `-M` token. rc classes asserted by exact code: usage 2
 #      (bare `-M`, `-Mc` without selection), refusal 3 (confirmation,
 #      run-in-flight).
+#   m. `-Ma`'s `recipe-integrity` family names the source claims a recipe
+#      cannot honour: a declared local source absent from the recipe dir and
+#      a REMOTE source pinned `SKIP` (a clean audit must not bless either).
 #   k. side-car integrity (rule 71): a truncated `runs/history.jsonl` is
 #      named by `-Mh` (and `--show` refuses rather than renumbering), a
 #      truncated `index/binpkg.jsonl` makes `-Qb` refuse, and `-Ma`'s
@@ -1304,6 +1307,35 @@ if want l; then
             || fail "l: -Mc must remove the live build tree of a recipe with no .SRCINFO"
         [ ! -e "$build/pkg/notree" ] \
             || fail "l: -Mc must remove the live pkg tree of a recipe with no .SRCINFO"
+    )
+fi
+
+# ─── m. -Ma recipe-integrity: absent local source, SKIP remote sums ───────
+if want m; then
+    (
+        set -euo pipefail
+        ws="$fixture/m/ws"
+        state="$fixture/m/state"
+        make_workspace "$ws" 1 auto low
+        maint_ws "$ws"
+        add_package "$ws" good "$gsa_meta_any"$'\nsource=(https://example.invalid/good-1.0.0.tar.gz)\nsha256sums=(0123456789abcdef)'
+        add_package "$ws" abslocal "$gsa_meta_any"$'\nsource=(absent.patch)'
+        add_package "$ws" skipsum "$gsa_meta_any"$'\nsource=(https://example.invalid/s-1.0.0.tar.gz)\nsha256sums=(SKIP)'
+        add_package "$ws" vcsskip "$gsa_meta_any"$'\nsource=(git+https://example.invalid/v.git)\nsha256sums=(SKIP)'
+
+        run_engine "$ws" -Ma --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "m: -Ma is report-only rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -E '^audit +recipe-integrity +2 finding' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "m: -Ma must report two recipe-integrity findings: $FIXTURE_OUTPUT"
+        grep -E '^recipe-integrity +abslocal +local-source-missing absent\.patch' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "m: the absent local source must be named: $FIXTURE_OUTPUT"
+        grep -E '^recipe-integrity +skipsum +unverified-sums' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "m: the SKIP-sum remote source must be named: $FIXTURE_OUTPUT"
+        # A VCS source with SKIP is the normal spelling: never a finding, and
+        # a plain verified source is clean.
+        if grep -E '^recipe-integrity +(vcsskip|good) ' <<<"$FIXTURE_OUTPUT"; then
+            fail "m: a VCS SKIP sum or a verified remote source is not a finding: $FIXTURE_OUTPUT"
+        fi
     )
 fi
 

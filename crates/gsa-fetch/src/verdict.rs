@@ -68,6 +68,16 @@ pub const REASON_EVAL_FAILED: &str = "eval-failed";
 pub const REASON_VCS_ONLY: &str = "vcs-only";
 pub const REASON_NOT_A_CANDIDATE: &str = "not-a-candidate";
 pub const REASON_DISK_FLOOR: &str = "disk-floor";
+/// A declared local source is absent from the recipe directory: the build
+/// cannot start, so a fetch/verify pass that reports success would promise
+/// something it cannot deliver (makepkg's own verdict is
+/// `"<file> was not found in the build directory and is not a URL"`).
+pub const REASON_LOCAL_SOURCE_MISSING: &str = "local-source-missing";
+/// The recipe pins `SKIP` (or nothing) for a REMOTE source, so makepkg
+/// fetched bytes it never verified. The fetch succeeded and the run is not
+/// failed, but the outcome is warning-class: an `ok` that claimed
+/// verification would be a lie (blind-review 2026-11-11).
+pub const REASON_UNVERIFIED_SUMS: &str = "unverified-sums";
 /// The fetch child vanished without a usable result (reap anomaly).
 pub const REASON_RESULT_LOST: &str = "result-lost";
 
@@ -302,6 +312,8 @@ mod tests {
             REASON_NOT_A_CANDIDATE,
             REASON_DISK_FLOOR,
             REASON_RESULT_LOST,
+            REASON_LOCAL_SOURCE_MISSING,
+            REASON_UNVERIFIED_SUMS,
         ];
         for verdict in [
             FetchVerdict::Ok,

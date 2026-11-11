@@ -74,13 +74,15 @@ fn run_fetch_only_inner(
     // `skip not-a-candidate`.
     let mut plan: Vec<PlanRow> = Vec::new();
     for (_, id) in &selection.listed {
-        let skip = db
-            .get(id.as_str())
-            .map(|meta| classify_skip(&meta))
-            .unwrap_or(Some("not-a-candidate".to_string()));
-        let (action, reason) = match skip {
-            Some(reason) => (PlanAction::Skip, reason),
-            None => (PlanAction::Fetch, "ok".to_string()),
+        let recipe_dir = graph
+            .index_of(id.as_str())
+            .map(|idx| root.join(&graph.record(idx).path))
+            .unwrap_or_else(|| root.clone());
+        let (action, reason) = match db.get(id.as_str()) {
+            Some(meta) => plan_row_for(&meta, &recipe_dir),
+            // No metadata: nothing can be fetched, and the engine will say
+            // why (`eval-failed`) — the plan names the same class.
+            None => (PlanAction::Skip, "not-a-candidate".to_string()),
         };
         plan.push(PlanRow {
             pkg: id.clone(),
@@ -172,16 +174,32 @@ fn run_fetch_only_inner(
     Ok(outcome.rc)
 }
 
-/// The non-candidate skip reason of one recipe (`vcs-only`,
-/// `not-a-candidate`), `None` when fetch-ahead may fetch it (owner decision
-/// 3). A recipe whose metadata is missing is a skip, loudly honest rather
-/// than a fetch attempt that would fail at eval.
-fn classify_skip(meta: &gsa_recipe::RecipeMeta) -> Option<String> {
+/// The plan row of one recipe: `skip <reason>` for a non-candidate
+/// (`vcs-only`, `not-a-candidate`), `fetch ok` for a candidate, and
+/// `fetch local-source-missing` when a declared local source is absent —
+/// that recipe IS attempted, and the attempt fails with the same reason, so
+/// the plan foreshadows the outcome instead of promising a clean fetch
+/// (blind-review 2026-11-11, airgapped-admin). A recipe whose metadata is
+/// missing is a skip, loudly honest rather than a fetch attempt that would
+/// fail at eval.
+fn plan_row_for(
+    meta: &gsa_recipe::RecipeMeta,
+    recipe_dir: &std::path::Path,
+) -> (PlanAction, String) {
+    if !meta.missing_local_sources(recipe_dir).is_empty() {
+        return (
+            PlanAction::Fetch,
+            verdict::REASON_LOCAL_SOURCE_MISSING.to_string(),
+        );
+    }
     let candidacy = gsa_fetch::candidacy::classify(meta);
     match &candidacy {
-        FetchCandidacy::Plain(_) => None,
-        FetchCandidacy::VcsOnly => Some(verdict::REASON_VCS_ONLY.to_string()),
-        FetchCandidacy::NoFetchable => Some(verdict::REASON_NOT_A_CANDIDATE.to_string()),
+        FetchCandidacy::Plain(_) => (PlanAction::Fetch, "ok".to_string()),
+        FetchCandidacy::VcsOnly => (PlanAction::Skip, verdict::REASON_VCS_ONLY.to_string()),
+        FetchCandidacy::NoFetchable => (
+            PlanAction::Skip,
+            verdict::REASON_NOT_A_CANDIDATE.to_string(),
+        ),
     }
 }
 
