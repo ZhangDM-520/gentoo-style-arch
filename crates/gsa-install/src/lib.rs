@@ -728,6 +728,32 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         .iter()
         .map(|c| read_pkginfo(&c.archive).ok())
         .collect();
+    // pacman refuses one transaction carrying the same package twice
+    // ("duplicate target"), so naming one archive path twice — or two paths
+    // holding the same package — made the plan say `install ok` and the run
+    // fail rc 4 (blind-review finding, 2026-11-11). Collapse by what pacman
+    // identifies a package by: `.PKGINFO`'s pkgbase + version. The FIRST
+    // spelling wins; an unreadable `.PKGINFO` is never collapsed (its own
+    // refusal owes a row).
+    let mut kept: Vec<usize> = Vec::new();
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for (index, info) in parsed.iter().enumerate() {
+        if let Some(info) = info {
+            let key = (info.pkgbase.clone(), info.version.clone());
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+        }
+        kept.push(index);
+    }
+    let collapsed: Vec<Candidate> = kept.iter().map(|&i| candidates[i].clone()).collect();
+    let parsed: Vec<Option<Pkginfo>> = kept.iter().map(|&i| parsed[i].clone()).collect();
+    let candidates: &[Candidate] = if kept.len() == candidates.len() {
+        candidates
+    } else {
+        &collapsed
+    };
     // The transaction set: every name this plan would install — the
     // coverage side of the ABI gate.
     let tx_names: Vec<String> = parsed

@@ -185,6 +185,52 @@ fn force_mode_installs_every_surviving_candidate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The same package named twice (one path two spellings, or a copy) is ONE
+/// transaction entry: pacman refuses a transaction carrying the same
+/// name+version twice ("duplicate target"), which used to make the plan say
+/// `install ok` and the run fail rc 4 (blind-review finding, 2026-11-11).
+#[test]
+fn duplicate_candidates_collapse_to_one_transaction_entry() {
+    let dir = scratch("duplicate");
+    let archive = dir.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &archive,
+        &[(".PKGINFO", &pkginfo_body("foo", "1.0-1", &[]))],
+    );
+    let copy = dir.join("copy-of-foo.pkg.tar.zst");
+    std::fs::copy(&archive, &copy).unwrap();
+
+    let rows = decide(
+        &[
+            candidate(&archive, None),
+            candidate(&archive, None),
+            candidate(&copy, None),
+        ],
+        &force_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(rendered(&rows), vec!["foo install ok".to_string()]);
+    assert_eq!(rows_rc(&rows), 0);
+
+    // A different version is a different package: never collapsed.
+    let newer = dir.join("foo-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&newer, &[(".PKGINFO", &pkginfo_body("foo", "2.0-1", &[]))]);
+    let rows = decide(
+        &[candidate(&archive, None), candidate(&newer, None)],
+        &force_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "a different version is a different package and is never collapsed: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn checked_mode_skips_already_current_and_installs_on_doubt() {
     let dir = scratch("skip");
