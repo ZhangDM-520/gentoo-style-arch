@@ -410,6 +410,10 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
             ));
         };
         let value = value.trim();
+        // The key is trimmed exactly like gsa.conf's loader trims it: the
+        // spelling `lanes = 1` is the INI shape an operator writes, and
+        // refusing it as an "unknown key" names a problem that is not there.
+        let key = key.trim();
         if value.is_empty() {
             return Err(TopologyError::at(
                 file,
@@ -861,6 +865,17 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
         .unwrap();
         assert_eq!(ok.lanes, "auto");
         assert_eq!(ok.jobs, "4");
+        // Whitespace around `=` is the shape gsa.conf accepts (and every
+        // INI reader writes); calling a correctly spelled key "unknown" sent
+        // the reader after a non-existent problem (blind review, 2026-11-11).
+        let spaced = parse_build_defaults(
+            "lanes = 1\njobs = 2\nintensity = low\n",
+            "config/build-defaults.conf",
+        )
+        .unwrap();
+        assert_eq!(spaced.lanes, "1");
+        assert_eq!(spaced.jobs, "2");
+        assert_eq!(spaced.intensity, "low");
         // `state_dir` retired (2026-10-28): it was a silent no-op — the §J.3
         // ladder lives in gsa.conf, and the key names that home instead of
         // hiding a dead knob.
