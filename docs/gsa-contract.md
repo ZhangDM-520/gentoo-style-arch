@@ -143,7 +143,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 | `gsa -Qg [name…]` | groups/sets and their members (all with counts by default) — the home of the retired `-Sg` (2026-10-28, H5/H7) |
 | `gsa -Ql <ref…>` | list owned files (pacman `-Ql` semantics) |
 | `gsa -Qo <path…>` | file owner (pacman `-Qo` semantics) |
-| `gsa -Qp <archive…>` | archive probe: read `.PKGINFO`, match the binpkg index row, report hash/size agreement |
+| `gsa -Qp <archive…>` | archive probe: read `.PKGINFO`, match the binpkg index row, report hash/size agreement. Its rc is the verdict — 0 every archive `agrees`, 1 any finding (`mismatch`, `unindexed`, `unreadable`, `not-a-package-archive`; the `--local-db-check health` shape), 2 a bad argv (a missing path is `archive not found`, never `malformed`) |
 | `gsa -Qb [ref…]` | binpkg index rows (retained built instances) |
 | `gsa -Qa <ref…>` | ABI report: derived token, `abi-rev=` override if any, subscriptions recorded against it |
 | `gsa -Qu` | stale set: recipes whose tracked upstream/provider version moved since their newest built instance (the `--stale` query, `docs/plans/plan-gentoo-qol.md` shortlist 6) |

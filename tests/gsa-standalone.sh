@@ -197,6 +197,8 @@ if [ -z "$only" ] || [ "$only" = c ]; then
         # not by a standalone refusal.
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
             -Qp "$fixture/c/shared/solo-recipe/PKGBUILD"
+        # The probe's rc is its verdict: a PKGBUILD is not a package archive.
+        [ "$FIXTURE_RC" -eq 1 ] || fail "c: -Qp finding is rc 1, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         case $FIXTURE_OUTPUT in
         *'standalone targets'*)
             fail "c: -Qp must answer the probe, never a standalone refusal: $FIXTURE_OUTPUT"

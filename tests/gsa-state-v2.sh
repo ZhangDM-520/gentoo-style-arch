@@ -452,7 +452,10 @@ got:  $FIXTURE_OUTPUT"
         # `-Qp` on a tampered archive: the hash binding fires (§J.4).
         printf 'x' >>"$archive"
         run_engine "$ws" -Qp --state-dir "$state" "$archive"
-        [ "$FIXTURE_RC" = 0 ] || fail "-Qp is a report-only query (rc 0), got $FIXTURE_RC"
+        # A probe's rc IS its verdict: a finding is rc 1 (a script cannot
+        # tell a mismatch from an agreement otherwise — blind-review
+        # 2026-11-11).
+        [ "$FIXTURE_RC" = 1 ] || fail "-Qp over a mismatched archive is rc 1, got $FIXTURE_RC"
         vgrep "$FIXTURE_OUTPUT" -F "mismatch" >/dev/null \
             || fail "-Qp must report the tampered archive as a mismatch (§J.4): $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -F "hash=disagree size=disagree" >/dev/null \
@@ -464,7 +467,7 @@ got:  $FIXTURE_OUTPUT"
         stray="$ws/packages/probe/stray-9.9.9-1-any.pkg.tar.zst"
         make_archive "$stray" "$stage"
         run_engine "$ws" -Qp --state-dir "$state" "$stray"
-        [ "$FIXTURE_RC" = 0 ] || fail "-Qp on an unrecorded archive is rc 0, got $FIXTURE_RC"
+        [ "$FIXTURE_RC" = 1 ] || fail "-Qp on an unrecorded archive is rc 1, got $FIXTURE_RC"
         vgrep "$FIXTURE_OUTPUT" -F "unindexed" >/dev/null \
             || fail "-Qp must report an unrecorded archive as unindexed (§J.4): $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -F "hash=unrecorded" >/dev/null \
@@ -472,9 +475,9 @@ got:  $FIXTURE_OUTPUT"
 
         # Usage refusals name the argument (§D.1's seam shape, §G.1 rc 2).
         run_engine "$ws" -Qp --state-dir "$state" "$ws/packages/probe/absent.pkg.tar.zst"
-        [ "$FIXTURE_RC" = 2 ] || fail "a malformed archive argument is rc 2, got $FIXTURE_RC"
-        vgrep "$FIXTURE_OUTPUT" -F "malformed archive argument" >/dev/null \
-            || fail "the refusal names the argument: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_RC" = 2 ] || fail "a missing archive path is rc 2, got $FIXTURE_RC"
+        vgrep "$FIXTURE_OUTPUT" -F "archive not found" >/dev/null \
+            || fail "the refusal names the argument and the real problem: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qp --state-dir "$state"
         [ "$FIXTURE_RC" = 2 ] || fail "-Qp without archives is rc 2, got $FIXTURE_RC"
         vgrep "$FIXTURE_OUTPUT" -F "requires at least one archive" >/dev/null \

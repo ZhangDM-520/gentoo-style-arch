@@ -673,7 +673,11 @@ fn execute(
             query::query_binpkg(&ctx, inv, out, err).map_err(cmd_error)?;
         }
         Command::QueryProbe => {
-            query::query_probe(inv, out, err).map_err(cmd_error)?;
+            // A probe answers with its rc: 0 every archive agrees, 1 a
+            // finding (the `--local-db-check health` shape).
+            if !query::query_probe(inv, out, err).map_err(cmd_error)? {
+                return Ok(1);
+            }
         }
         Command::QueryAbi => {
             no_ranges(inv)?;
@@ -1119,7 +1123,7 @@ mod tests {
         // seam shape — bad argv is named before any state is touched).
         let (code, _out, err) = run_capture(&["-Qp", "no-such-archive.pkg.tar.zst"]);
         assert_eq!(code, 2);
-        assert!(err.contains("malformed archive argument"), "{err}");
+        assert!(err.contains("archive not found"), "{err}");
         let (code, _out, err) = run_capture(&["-Qp"]);
         assert_eq!(code, 2);
         assert!(err.contains("requires at least one archive"), "{err}");

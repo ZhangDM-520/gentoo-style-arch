@@ -91,13 +91,17 @@ fn is_zstd_frame(path: &Path) -> bool {
 /// from a filename), `unreadable` (no `.PKGINFO` truth, rule 25(h)), or
 /// `not-a-package-archive` (a path that is not a zstd frame at all — a
 /// PKGBUILD handed to the probe).
-/// Report-only: the probe never mutates and its rc is 0 unless the argv is
-/// bad (§G.1 rc 2).
+/// Report-only: the probe never mutates. Its rc answers the QUESTION — 0 when
+/// every probe agrees, 1 when any probe reports a finding (`mismatch`,
+/// `unindexed`, `unreadable`, `not-a-package-archive`), 2 for a bad argv
+/// (§G.1) — the same shape `--local-db-check health` has, because a probe a
+/// script cannot distinguish from "agrees" is not a probe (blind-review
+/// 2026-11-11, skeptic: every finding row accompanied rc 0).
 pub fn query_probe(
     inv: &Invocation,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let _ = err;
     if !inv.ranges.is_empty() {
         return Err("index ranges address an -S/-B selection (see 'gsa -Sl')".to_string());
@@ -108,7 +112,9 @@ pub fn query_probe(
     for arg in &inv.targets {
         let path = Path::new(arg);
         if !path.is_file() {
-            return Err(format!("malformed archive argument {arg}"));
+            // A missing path is a bad argument, not a malformed archive: the
+            // old label sent a user looking at the archive's bytes.
+            return Err(format!("archive not found: {arg}"));
         }
     }
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
@@ -119,6 +125,7 @@ pub fn query_probe(
     if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
         return Err(message);
     }
+    let mut clean = true;
     for arg in &inv.targets {
         let path = Path::new(arg);
         let row = index.find_archive(path);
@@ -127,12 +134,14 @@ pub fn query_probe(
         // (the blind-review confusion, 2026-11-11) is not, and saying so
         // beats leaking the decoder's "Unknown frame descriptor".
         if !is_zstd_frame(path) {
+            clean = false;
             let _ = writeln!(out, "{arg} not-a-package-archive index={index_field}");
             continue;
         }
         let info = match read_pkginfo(path) {
             Ok(info) => info,
             Err(error) => {
+                clean = false;
                 let _ = writeln!(out, "{arg} unreadable pkginfo={error} index={index_field}");
                 continue;
             }
@@ -162,13 +171,16 @@ pub fn query_probe(
             Some(_) if agrees => "agrees",
             Some(_) => "mismatch",
         };
+        if status != "agrees" {
+            clean = false;
+        }
         let _ = writeln!(
             out,
             "{arg} {status} pkginfo=ok pkgbase={} pkgname={} version={} index={index_field} hash={hash} size={size}",
             info.pkgbase, info.pkgname, info.version
         );
     }
-    Ok(())
+    Ok(clean)
 }
 
 /// `gsa --local-db-check [health|runs]` (§D.1, extended with the run-history
