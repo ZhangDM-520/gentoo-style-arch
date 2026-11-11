@@ -253,7 +253,14 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                         } else {
                             RC_OK
                         };
-                        (outcome.rows, rc)
+                        let mut rows = outcome.rows;
+                        // A repair pass that repaired nothing must SAY so:
+                        // an empty capture read as "did it even run?"
+                        // (2026-11-11 blind review).
+                        if rows.is_empty() {
+                            rows.push(Row::new("doctor", "clean", "nothing to repair"));
+                        }
+                        (rows, rc)
                     })
                 });
                 return Ok(finish(result, out, err, "-Md --fix"));
@@ -388,14 +395,21 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         MaintVerb::Mirrors => {
             let confirming = !inv.dry_run && !has_flag(inv, "--noconfirm");
             if confirming {
-                match gsa_maint::mirrors::run(&ctx, false) {
-                    Ok(plan) => {
-                        let _ = write!(out, "{}", render_rows(&plan));
-                    }
+                let plan = match gsa_maint::mirrors::run(&ctx, false) {
+                    Ok(plan) => plan,
                     Err(message) => {
                         let _ = writeln!(err, "gsa: -Mm: {message}");
                         return Ok(RC_REFUSAL);
                     }
+                };
+                let _ = write!(out, "{}", render_rows(&plan));
+                // Nothing to apply is a SUCCESS, not a confirmation: a
+                // healthy tree printed `mirrors clean …` and then demanded
+                // --noconfirm at rc 3, so `gsa -Mm` failed on exactly the
+                // trees a script runs it on (2026-11-11 blind review). Only
+                // a plan with pending work asks for consent.
+                if !plan.iter().any(|row| row.action != "clean") {
+                    return Ok(RC_OK);
                 }
                 let _ = writeln!(err, "gsa: -Mm {}", gsa_maint::CONFIRMATION_REQUIRED);
                 return Ok(RC_REFUSAL);

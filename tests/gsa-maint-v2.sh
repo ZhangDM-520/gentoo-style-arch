@@ -333,7 +333,11 @@ if want b; then
         # The summary count is the row stream's own (derived, not pinned).
         summary=$(printf '%s\n' "$FIXTURE_OUTPUT" | awk '$1 == "doctor" && $2 == "report" { print; exit }')
         [ -n "$summary" ] || fail "-Md must lead with a doctor report row: $FIXTURE_OUTPUT"
-        findings=$(printf '%s\n' "$FIXTURE_OUTPUT" | tail -n +2 | wc -l)
+        # A finding is a problem: the `local-db health ok` row is the health
+        # statement and is excluded from the count (derived from the row
+        # stream, never pinned).
+        findings=$(printf '%s\n' "$FIXTURE_OUTPUT" | tail -n +2 \
+            | awk '!($1 == "local-db" && $2 == "health" && $3 == "ok")' | wc -l)
         case $summary in
         *" $findings finding(s)") ;;
         *) fail "doctor summary disagrees with its rows ('$summary' vs $findings rows): $FIXTURE_OUTPUT" ;;
@@ -350,6 +354,30 @@ if want b; then
         [ "$FIXTURE_RC" = 0 ] || fail "-Md after --fix is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         absent_row "$FIXTURE_OUTPUT" "orphan-row" "orphan row must be tombstoned"
         absent_row "$FIXTURE_OUTPUT" "orphan-archive" "orphan archive must be reindexed"
+
+        # A healthy root is NOT a finding: the `local-db health ok` row is
+        # the health statement, so a clean doctor says `doctor clean`
+        # (2026-11-11 blind-review finding: `1 finding(s)` beside `ok`).
+        clean_ws="$fixture/b/clean-ws"
+        make_workspace "$clean_ws" 1 auto low
+        maint_ws "$clean_ws"
+        add_package "$clean_ws" docok "$gsa_meta_any" git
+        run_engine "$clean_ws" -Md --state-dir "$fixture/b/clean-state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md on a clean root is rc 0: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "doctor clean" "a healthy root reports clean, not a finding"
+        absent_row "$FIXTURE_OUTPUT" " finding(s)" "a health-ok row is never counted as a finding"
+        # A repair pass that repaired nothing says so (an empty capture read
+        # as "did it even run?" — 2026-11-11 blind-review finding).
+        run_engine "$clean_ws" -Md --fix --state-dir "$fixture/b/clean-state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md --fix on a clean root is rc 0: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "doctor clean nothing to repair" \
+            "a repair pass with nothing to do must say so"
+        # A healthy tree asks no consent: `-Mm` with nothing to change is a
+        # SUCCESS (2026-11-11 blind-review finding: `clean` then rc 3).
+        run_engine_user "$clean_ws" -Mm --state-dir "$fixture/b/clean-state"
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "b: -Mm with nothing to do is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "mirrors clean" "the mirror plan reports clean"
         assert_varlib_unchanged
     )
 fi

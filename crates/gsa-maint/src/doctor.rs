@@ -209,7 +209,13 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
             ));
         }
     }
-    let findings = rows.len();
+    // A "finding" is a problem. The `local-db health ok …` row is the
+    // doctor's health statement, not a defect, so a healthy root reported
+    // `1 finding(s)` beside its own `ok` row (2026-11-11 blind review).
+    let findings = rows
+        .iter()
+        .filter(|row| row.action != "health" || !row.reason.starts_with("ok"))
+        .count();
     let mut out = vec![if findings == 0 {
         Row::new("doctor", "clean", "")
     } else {
