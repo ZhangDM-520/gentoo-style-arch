@@ -92,6 +92,13 @@ paths=$(grep -n 'BUILDDIR="\${GSA_LANE_BUILDDIR' "$composite" | cut -d: -f1)
 [ "$universal" -lt "$gcc_body" ] || fail 'B: the compiler body must follow the universal body' "$composite"
 [ "$gcc_body" -lt "$site" ] || fail 'B: the site file must override the built-ins' "$composite"
 [ "$site" -lt "$paths" ] || fail 'B: the engine-owned paths must be re-asserted LAST' "$composite"
+# PKGEXT is part of the engine's discovery/index contract, so the LAST
+# assignment must be the engine's: a site body that changed it built an
+# archive nothing could find and every later `-S` refused on an empty list
+# (blind-review 2026-11-11, embedded-cross-compiler F11).
+pkgext=$(grep -n "^PKGEXT='\.pkg\.tar\.zst'$" "$composite" | tail -n 1 | cut -d: -f1)
+[ -n "$pkgext" ] && [ "$site" -lt "$pkgext" ] ||
+    fail 'B: the engine must re-assert PKGEXT after the site file' "$composite"
 # The site file is SOURCED, not inlined: its content stays the operator's
 # (one file, one owner), and the guard makes a missing file a no-op.
 grep -Fq "source '$conf_dir/gcc-makepkg.conf'" "$composite" ||

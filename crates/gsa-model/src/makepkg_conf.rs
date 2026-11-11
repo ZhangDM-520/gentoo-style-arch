@@ -292,6 +292,13 @@ BUILDDIR=\"${GSA_LANE_BUILDDIR:-$BUILDDIR}\"
 PKGDIR=\"${GSA_LANE_PKGDIR:-$PKGDIR}\"
 PKGDEST=\"${GSA_LANE_PKGDEST:-$PKGDEST}\"
 SRCDEST=\"${GSA_LANE_SRCDEST:-$SRCDEST}\"
+# The archive extension belongs to the engine's discovery/index contract (the
+# binpkg index, install discovery and prune all read `.pkg.tar.zst`): a site
+# body that changed it built an archive the engine could not find, reported
+# success, and made every later `-S` refuse on an empty list — a
+# self-reproducing loop (blind-review 2026-11-11, embedded-cross-compiler
+# F11). Owned like the cache paths above.
+PKGEXT='.pkg.tar.zst'
 MAKEFLAGS=\"${GSA_LANE_MAKEFLAGS:-$MAKEFLAGS}\"
 NINJAFLAGS=\"${GSA_LANE_NINJAFLAGS:-$NINJAFLAGS}\"
 # makepkg exports its buildenv list (CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS, plus
@@ -358,6 +365,21 @@ mod render_tests {
         // The host's config is never sourced.
         assert!(!body.contains("/etc/makepkg.conf"));
         assert!(!body.contains(".makepkg.conf"));
+    }
+
+    #[test]
+    fn a_site_file_cannot_change_the_archive_extension() {
+        // Discovery, the binpkg index and prune read `.pkg.tar.zst`; a site
+        // body that set another PKGEXT must not outlive the re-assertion.
+        let site = std::path::PathBuf::from("/etc/gsa/gcc-makepkg.conf");
+        let body = render(Toolchain::Gcc, std::slice::from_ref(&site));
+        let path = body
+            .find("source '/etc/gsa/gcc-makepkg.conf'")
+            .expect("the site file is sourced");
+        let owned = body
+            .find("PKGEXT='.pkg.tar.zst'\nMAKEFLAGS=")
+            .expect("the engine re-asserts PKGEXT after every site file");
+        assert!(path < owned, "{body}");
     }
 
     #[test]
