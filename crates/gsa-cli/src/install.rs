@@ -712,7 +712,10 @@ fn run_upgrade_inner(
                 continue;
             }
             if token.ends_with(".pkg.tar.zst") {
-                return Err(Exit::Usage(format!("malformed archive argument '{token}'")));
+                // One vocabulary for a path that does not exist: nothing is
+                // malformed about it, and `-Qp` already says "not found"
+                // (blind-review 2026-11-11, packaging-novice).
+                return Err(Exit::Usage(format!("archive not found: {token}")));
             }
             let (found, notes) = select::resolve_ref(&ctx, token, 0)
                 .map_err(|error| Exit::Usage(error.to_string()))?;
@@ -1874,9 +1877,7 @@ fn run_install_decide_inner(
     for archive in archives {
         let path = PathBuf::from(archive);
         if !path.is_file() {
-            return Err(Exit::Usage(format!(
-                "malformed archive argument '{archive}'"
-            )));
+            return Err(Exit::Usage(format!("archive not found: {archive}")));
         }
         // The seam takes archive PATHS (§D.1): the neighbour `.SRCINFO` is a
         // name authority for the QA gate, never a trusted build declaration.

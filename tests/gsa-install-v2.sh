@@ -567,9 +567,9 @@ $rows"
         vgrep "$FIXTURE_OUTPUT" -F "unknown mode 'bogus'" >/dev/null \
             || fail "the mode refusal must name the argument: $FIXTURE_OUTPUT"
         run_engine "$ws" --install-decide checked "$ws/packages/one/absent.pkg.tar.zst"
-        [ "$FIXTURE_RC" = 2 ] || fail "a malformed archive argument is rc 2 (§E.5), got $FIXTURE_RC"
-        vgrep "$FIXTURE_OUTPUT" -F "malformed archive argument" >/dev/null \
-            || fail "the archive refusal must name the argument: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_RC" = 2 ] || fail "a missing archive argument is rc 2 (§E.5), got $FIXTURE_RC"
+        vgrep "$FIXTURE_OUTPUT" -F "archive not found" >/dev/null \
+            || fail "the archive refusal must name the argument as missing (-Qp's vocabulary): $FIXTURE_OUTPUT"
         run_engine "$ws" --install-decide
         [ "$FIXTURE_RC" = 2 ] || fail "an empty argument list is rc 2 (§E.5), got $FIXTURE_RC"
 

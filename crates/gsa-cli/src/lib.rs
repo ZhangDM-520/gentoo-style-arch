@@ -1285,7 +1285,7 @@ mod tests {
             "definitely-missing.pkg.tar.zst",
         ]);
         assert_eq!(code, 2);
-        assert!(err.contains("malformed archive argument"), "{err}");
+        assert!(err.contains("archive not found"), "{err}");
         // --install-register wants <conf> <subject> <names…>.
         let (code, _out, err) = run_capture(&["--install-register", "a.conf", "subject"]);
         assert_eq!(code, 2);

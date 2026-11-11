@@ -36,7 +36,10 @@ fn run_ids_are_one_based_history_positions() {
     assert!(error.contains("unknown run id 0"), "{error}");
     let error = history::show(&state, 4).expect_err("out of range");
     assert!(error.contains("unknown run id 4"), "{error}");
-    assert!(error.contains("1..=3"), "{error}");
+    assert!(
+        error.contains("1-3"),
+        "the recorded range is typeable, never Rust's 1..=3: {error}"
+    );
 }
 
 #[test]

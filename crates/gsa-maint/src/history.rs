@@ -182,6 +182,17 @@ fn unfinished_dir(state: &StateRoot, id: &str) -> Option<Unfinished> {
 /// [`gsa_model::RunRecord::render_machine`] the run emitted (§H.1:
 /// persistence is storage of the same structure — the renderings can never
 /// drift). `run_id` is 1-based over the history.
+/// The ids a store currently answers, spelled the way a reader types them
+/// back: `none`, `1`, `1-7` — never Rust's `1..=7` debug syntax
+/// (blind-review 2026-11-11, packaging-novice).
+fn recorded_range(len: usize) -> String {
+    match len {
+        0 => "none".to_string(),
+        1 => "1".to_string(),
+        n => format!("1-{n}"),
+    }
+}
+
 pub fn show(state: &StateRoot, run_id: usize) -> Result<String, String> {
     let (records, corrupt) = records(state)?;
     // Run ids are positions over the history, so an unusable line shifts
@@ -194,11 +205,7 @@ pub fn show(state: &StateRoot, run_id: usize) -> Result<String, String> {
         Some(record) if run_id > 0 => Ok(record.render_machine()),
         _ => Err(format!(
             "unknown run id {run_id} (recorded: {})",
-            if records.is_empty() {
-                "none".to_string()
-            } else {
-                format!("1..={}", records.len())
-            }
+            recorded_range(records.len())
         )),
     }
 }
@@ -296,4 +303,17 @@ fn compact(state: &StateRoot, records: &[RunRecord], keep: &[bool]) -> Result<()
         format!("cannot publish the run-history compaction: {e}")
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_recorded_range_is_typed_the_way_a_reader_types_it_back() {
+        assert_eq!(recorded_range(0), "none");
+        assert_eq!(recorded_range(1), "1");
+        assert_eq!(recorded_range(2), "1-2");
+        assert!(!recorded_range(9).contains("..="));
+    }
 }
