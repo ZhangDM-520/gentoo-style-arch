@@ -62,9 +62,16 @@ pub enum EmptyListPolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
     pub archive: PathBuf,
-    /// The recipe directory beside the archive, when there is one — the
+    /// The recipe directory beside this archive, when there is one — the
     /// second name authority (rule 9) and the PGO-instrumentation witness.
     pub recipe_dir: Option<PathBuf>,
+    /// Whether `recipe_dir` is the workspace recipe DISCOVERY found for this
+    /// archive (`true`), or merely the directory an operator-named path sits
+    /// in (`false`). Only a discovered recipe's "it is instrumented"
+    /// declaration is trusted; a neighbour `PKGBUILD` proves nothing about
+    /// bytes that came from anywhere, and trusting it stood the PGO payload
+    /// scan down (blind review, 2026-11-11).
+    pub recipe_trusted: bool,
 }
 
 /// Everything the decision needs beyond the candidates and the installed DB.
@@ -369,6 +376,7 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
                 candidates.push(Candidate {
                     archive: archive.clone(),
                     recipe_dir: Some(recipe_dir.to_path_buf()),
+                    recipe_trusted: true,
                 });
                 versions.push(version.clone());
             }
@@ -911,10 +919,13 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             }
         }
 
-        // Rule 25(h): an unreadable `.PKGINFO` is never probed. Names come
-        // from the second authority (the recipe dir's committed `.SRCINFO`);
-        // established → `skip unreadable-pkginfo`; unestablishable →
-        // `refuse discover-failed` (rule 9 fail-closed).
+        // Rule 25(h): an unreadable `.PKGINFO` is never PROBED — and rule 71
+        // says an unreadable file is not an absent one, so it is never a
+        // clean SKIP either. `skip unreadable-pkginfo` settled the row as
+        // success (rc 0) while nothing installed: a damaged archive read as a
+        // healthy run, and the same bytes reached through a recipe REFUSED
+        // (blind review, 2026-11-11). Names from the second authority only
+        // name the subject; they do not change what the bytes are.
         let Some(info) = pkginfo else {
             let rows = if name_chain.is_empty() {
                 vec![row(
@@ -923,7 +934,11 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                     format!("discover-failed {}", candidate.archive.display()),
                 )]
             } else {
-                vec![row(&subject, Decision::Skip, "unreadable-pkginfo")]
+                vec![row(
+                    &subject,
+                    Decision::Refuse,
+                    format!("unreadable-pkginfo {}", candidate.archive.display()),
+                )]
             };
             plans.push(CandidatePlan {
                 candidate: candidate.clone(),
@@ -944,11 +959,12 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // skipping the payload scan there installed an instrumented archive
         // the same engine refused by name (2026-11-11 blind review). When the
         // recipe is not knowable, the PAYLOAD is the authority: scan it.
-        let recipe_known = candidate
-            .recipe_dir
-            .as_deref()
-            .map(|dir| dir.join("PKGBUILD").is_file())
-            .unwrap_or(false);
+        let recipe_known = candidate.recipe_trusted
+            && candidate
+                .recipe_dir
+                .as_deref()
+                .map(|dir| dir.join("PKGBUILD").is_file())
+                .unwrap_or(false);
         if !recipe_known || gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
             match gsa_recipe::pkginfo::pgo_hits(&candidate.archive) {
                 Err(_) => {

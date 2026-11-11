@@ -347,4 +347,25 @@ loose_rc=$FIXTURE_RC
 vgrep "$loose_rows" -Eq '^loose-bad refuse pgo-hit ' \
     || { printf 'the payload scan did not run without a recipe dir:\n%s\n' "$loose_rows" >&2; exit 1; }
 
+# ─── a DECOY PKGBUILD beside a named archive proves nothing ───────────────
+# The recipe declaration is the cheap gate for an archive DISCOVERED from a
+# recipe. A path the operator names has no trustworthy recipe, and reading
+# the neighbour `PKGBUILD` as one installed the very same instrumented bytes
+# the check refuses by name (blind review, 2026-11-11).
+mkdir -p "$fixture/decoy"
+cp "$fixture/loose/loose-bad-1.0-1-x86_64.pkg.tar.zst" \
+    "$fixture/decoy/loose-bad-1.0-1-x86_64.pkg.tar.zst"
+printf 'pkgname=decoy\npkgver=1.0\npkgrel=1\narch=x86_64\n' \
+    >"$fixture/decoy/PKGBUILD"
+: >"$fixture/pacman.log"
+run_engine "$fixture" --install-decide checked \
+    "$fixture/decoy/loose-bad-1.0-1-x86_64.pkg.tar.zst"
+decoy_rows=$FIXTURE_OUTPUT
+decoy_rc=$FIXTURE_RC
+[[ $decoy_rc == 1 ]] \
+    || { printf 'a decoy PKGBUILD stood the payload scan down (rc=%s, want 1):\n%s\n' \
+        "$decoy_rc" "$decoy_rows" >&2; exit 1; }
+vgrep "$decoy_rows" -Eq '^loose-bad refuse pgo-hit ' \
+    || { printf 'the payload scan did not run beside a decoy PKGBUILD:\n%s\n' "$decoy_rows" >&2; exit 1; }
+
 printf 'PGO payload guard fixture: PASS\n'

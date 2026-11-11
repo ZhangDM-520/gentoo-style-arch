@@ -61,6 +61,7 @@ fn candidate(path: &Path, recipe_dir: Option<&Path>) -> Candidate {
     Candidate {
         archive: path.to_path_buf(),
         recipe_dir: recipe_dir.map(|d| d.to_path_buf()),
+        recipe_trusted: recipe_dir.is_some(),
     }
 }
 

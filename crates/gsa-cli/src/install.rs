@@ -680,15 +680,17 @@ fn run_upgrade_inner(
         for token in &inv.targets {
             let path = PathBuf::from(token);
             if path.is_file() {
-                // A NAMED archive path has no trustworthy recipe: whatever
-                // sits in the same directory proves nothing about bytes that
-                // could have come from anywhere. A `PKGBUILD` there used to
-                // stand the PGO payload scan down (a decoy installed an
-                // instrumented archive the engine refuses by name), and a
-                // stray `.SRCINFO` turned "cannot read this archive" into a
-                // clean skip (blind review, 2026-11-11).
+                // A NAMED archive path sits beside files, but it was not
+                // DISCOVERED from a recipe: the `.SRCINFO` there is still the
+                // second name authority the QA gate compares against (a
+                // mismatch refuses), while the neighbouring `PKGBUILD`'s
+                // "this recipe is instrumented" shortcut must not be trusted
+                // for bytes that came from anywhere (blind review,
+                // 2026-11-11: a decoy PKGBUILD installed an archive the
+                // payload scan refuses).
                 items.push(Item::Direct(Candidate {
-                    recipe_dir: None,
+                    recipe_dir: path.parent().map(|p| p.to_path_buf()),
+                    recipe_trusted: false,
                     archive: path,
                 }));
                 continue;
@@ -1844,11 +1846,11 @@ fn run_install_decide_inner(
                 "malformed archive argument '{archive}'"
             )));
         }
-        // The seam takes archive PATHS (§D.1), so no recipe is knowable
-        // here either: the payload is the authority (see the `Item::Direct`
-        // note above).
+        // The seam takes archive PATHS (§D.1): the neighbour `.SRCINFO` is a
+        // name authority for the QA gate, never a trusted build declaration.
         candidates.push(Candidate {
-            recipe_dir: None,
+            recipe_dir: path.parent().map(|p| p.to_path_buf()),
+            recipe_trusted: false,
             archive: path,
         });
     }

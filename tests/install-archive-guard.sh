@@ -906,15 +906,19 @@ assert_decisions 'K2: damaged archive at the seam refuses discover-failed' 1 <<'
 - refuse discover-failed
 EOF
 
-# K''': with names established by a committed .SRCINFO the damaged archive
-# is SKIPPED as unreadable, never refused and never probed (rule 25(h)).
+# K''': a damaged archive stays REFUSED whatever sits beside it. A committed
+# .SRCINFO there used to name the archive and turn "cannot read this" into a
+# clean `skip unreadable-pkginfo` — rc 0 success with nothing installed, for
+# bytes that reached the seam by path and carry no trustworthy recipe (blind
+# review, 2026-11-11).
 mkdir -p "$fixture/named/p1"
 printf '%s\n' 'pkgbase = p1' 'pkgname = p1' 'pkgname = p1-extra' >"$fixture/named/p1/.SRCINFO"
+printf 'pkgname=p1\npkgver=1.0.0\npkgrel=1\narch=(any)\n' >"$fixture/named/p1/PKGBUILD"
 named_damaged="$fixture/named/p1/p1-1.0.0-1-any.pkg.tar.zst"
 cp "$damaged" "$named_damaged"
 gsa_decide checked "$named_damaged"
-assert_decisions 'K3: named damaged archive skips unreadable-pkginfo' 0 <<'EOF'
-p1 skip unreadable-pkginfo
+assert_decisions 'K3: a neighbour .SRCINFO cannot turn damage into a skip' 1 <<'EOF'
+p1 refuse unreadable-pkginfo
 EOF
 
 # R-F25: -Ua must not silently install a shrunken set. One recipe's
