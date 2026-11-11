@@ -80,7 +80,10 @@ pub fn accepted_flags(verb: MaintVerb) -> Vec<&'static str> {
         MaintVerb::Logs => flags.extend(["--tail", "--keep"]),
         MaintVerb::Mirrors => flags.push("--noconfirm"),
         MaintVerb::Prune(strength) => {
-            if strength >= 3 {
+            // Consent is a function of the DESTROYED SET (§B.7, owner
+            // decision 2026-11-11), so the strength that deletes archives
+            // accepts the flag its plan will demand.
+            if strength >= 2 {
                 flags.push("--noconfirm");
             }
         }
@@ -393,26 +396,31 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             }
         }
         MaintVerb::Mirrors => {
-            let confirming = !inv.dry_run && !has_flag(inv, "--noconfirm");
-            if confirming {
-                let plan = match gsa_maint::mirrors::run(&ctx, false) {
-                    Ok(plan) => plan,
-                    Err(message) => {
-                        let _ = writeln!(err, "gsa: -Mm: {message}");
-                        return Ok(RC_REFUSAL);
-                    }
-                };
-                let _ = write!(out, "{}", render_rows(&plan));
-                // Nothing to apply is a SUCCESS, not a confirmation: a
-                // healthy tree printed `mirrors clean …` and then demanded
-                // --noconfirm at rc 3, so `gsa -Mm` failed on exactly the
-                // trees a script runs it on (2026-11-11 blind review). Only
-                // a plan with pending work asks for consent.
-                if !plan.iter().any(|row| row.action != "clean") {
-                    return Ok(RC_OK);
+            // Plan first: consent is owed on the DESTROYED SET (§B.7), never
+            // on the spelling. A healthy tree plans `clean` and needs none.
+            let plan = match gsa_maint::mirrors::run(&ctx, false) {
+                Ok(plan) => plan,
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: -Mm: {message}");
+                    return Ok(RC_REFUSAL);
                 }
-                let _ = writeln!(err, "gsa: -Mm {}", gsa_maint::CONFIRMATION_REQUIRED);
-                return Ok(RC_REFUSAL);
+            };
+            if !inv.dry_run {
+                if let Err(rc) = consent_to_destroy(
+                    inv,
+                    out,
+                    err,
+                    &plan,
+                    |row| {
+                        matches!(
+                            row.action.as_str(),
+                            "link" | "repair-origin" | "repair-refspec"
+                        )
+                    },
+                    "mirrors",
+                ) {
+                    return Ok(rc);
+                }
             }
             let apply = !inv.dry_run;
             let _lock = if apply {
@@ -467,22 +475,24 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                 };
                 Ok((rows, rc))
             };
-            // -Mccc prints its target list and stops rc 3 (§B.7): without
-            // --noconfirm the PLAN is printed and the run stops — the
-            // engine never prompts (§K.3), nothing is deleted.
-            let confirming = strength >= 3 && !inv.dry_run && !has_flag(inv, "--noconfirm");
-            if confirming {
-                match run_strength(false) {
-                    Ok((plan_rows, _)) => {
-                        let _ = write!(out, "{}", render_rows(&plan_rows));
-                    }
+            // The plan decides whether consent is owed — the DESTROYED SET,
+            // never the strength number (§B.7, owner decision 2026-11-11):
+            // `-Mcc` deletes archives exactly like `-Mccc`, so both print
+            // their target list and stop rc 3 without --noconfirm. A plan
+            // that removes nothing applies without asking.
+            if strength >= 2 && !inv.dry_run {
+                let plan = match run_strength(false) {
+                    Ok((plan_rows, _)) => plan_rows,
                     Err(message) => {
                         let _ = writeln!(err, "gsa: {}: {message}", inv.spelling());
                         return Ok(RC_REFUSAL);
                     }
+                };
+                if let Err(rc) =
+                    consent_to_destroy(inv, out, err, &plan, |row| row.action == "prune", "prune")
+                {
+                    return Ok(rc);
                 }
-                let _ = writeln!(err, "gsa: -Mccc {}", gsa_maint::CONFIRMATION_REQUIRED);
-                return Ok(RC_REFUSAL);
             }
             let result = mutating_rows(&state_dir, inv, out, err, "prune", run_strength);
             return Ok(finish(result, out, err, inv.spelling().as_str()));
@@ -666,6 +676,69 @@ fn mutating_rows(
     } else {
         f(false)
     }
+}
+
+/// The destroyed-set confirmation (`-Mcc`/`-Mccc`/`-Mm`, contract §B.7,
+/// owner decision 2026-11-11): a verb asks for consent when its PLAN would
+/// remove or rewrite something, never because of the strength number it was
+/// spelled with. `--noconfirm` consents; an interactive prompt asks once;
+/// every non-interactive caller (`--machine`, `CI`, a pipe) is refused at
+/// rc 3 with the exact paste-safe command. A plan that destroys nothing
+/// applies without asking.
+fn consent_to_destroy(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    plan: &[Row],
+    doomed: impl Fn(&Row) -> bool,
+    what: &str,
+) -> Result<(), i32> {
+    let count = plan.iter().filter(|row| doomed(row)).count();
+    if count == 0 || has_flag(inv, "--noconfirm") {
+        return Ok(());
+    }
+    // The plan IS the thing being consented to.
+    let _ = write!(out, "{}", render_rows(plan));
+    let command = paste_command(inv);
+    if crate::prompt::interactive(inv.machine_requested()) {
+        let mut input = std::io::stdin().lock();
+        let question = format!("{what}: {count} item(s) would be removed or rewritten — proceed?");
+        match crate::prompt::confirm(err, &mut input, &question) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                let _ = writeln!(err, "gsa: {error}");
+            }
+        }
+    }
+    let _ = writeln!(
+        err,
+        "gsa: {} {}",
+        inv.spelling(),
+        gsa_maint::CONFIRMATION_REQUIRED
+    );
+    let _ = writeln!(err, "gsa: apply it with: {command}");
+    Err(RC_REFUSAL)
+}
+
+/// The same invocation made paste-safe for a refusal: the cluster spelling,
+/// its selection, and `--noconfirm`. `gsa -Mcc` is replayable as
+/// `gsa -Mcc --noconfirm`.
+fn paste_command(inv: &Invocation) -> String {
+    let mut command = format!("gsa {}", inv.spelling());
+    for target in &inv.targets {
+        command.push(' ');
+        command.push_str(&crate::record::shell_quote(target));
+    }
+    for range in &inv.ranges {
+        command.push(' ');
+        command.push_str(&crate::record::shell_quote(range));
+    }
+    if inv.leaf {
+        command.push_str(" --leaf");
+    }
+    command.push_str(" --noconfirm");
+    command
 }
 
 /// The rows of one `-M` verb, every one through [`render_row`] — one

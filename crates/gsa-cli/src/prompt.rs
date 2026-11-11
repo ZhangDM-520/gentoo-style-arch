@@ -214,6 +214,27 @@ pub fn prompt_build_dir(
     }
 }
 
+/// The one destructive-verb confirmation (contract §B.7, owner decision
+/// 2026-11-11): ask a single `y`/`N` question on the caller's error stream.
+/// Anything other than `y`/`yes` — including EOF and an empty line — is NO,
+/// so a stray Enter can never delete something.
+pub fn confirm(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    question: &str,
+) -> std::io::Result<bool> {
+    write!(out, "{question} [y/N] ")?;
+    out.flush()?;
+    let mut line = String::new();
+    if input.read_line(&mut line)? == 0 {
+        return Ok(false);
+    }
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +364,26 @@ mod tests {
             run_dir("").0,
             BuildDirOutcome::Abort("build-dir selection aborted (input closed)")
         ));
+    }
+
+    fn ask(feed: &str) -> (bool, String) {
+        let mut out: Vec<u8> = Vec::new();
+        let mut input = Cursor::new(feed.to_string());
+        let answer = confirm(&mut out, &mut input, "delete them?").unwrap();
+        (answer, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn only_y_and_yes_consent() {
+        assert!(ask("y\n").0);
+        assert!(ask("YES\n").0);
+        // Everything else is NO — a stray Enter or a closed stream never
+        // deletes anything.
+        for feed in ["n\n", "\n", "yess\n", "q\n", ""] {
+            assert!(!ask(feed).0, "{feed:?} must not consent");
+        }
+        let (_, question) = ask("y\n");
+        assert!(question.starts_with("delete them?"), "{question}");
+        assert!(question.trim_end().ends_with("[y/N]"), "{question}");
     }
 }

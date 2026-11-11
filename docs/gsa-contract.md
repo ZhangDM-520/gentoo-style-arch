@@ -249,19 +249,35 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart. Default reports; `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones (today's hidden `--register-ignorepkg`) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
-| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated, never prompts (§K.3): without `--noconfirm` it prints its plan/targets and stops rc 3 `confirmation-required`; must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
+| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated on its DESTROYED SET (§K.3): a `clean` plan applies without asking; a plan that links or rewrites prints its targets and, without `--noconfirm`, stops rc 3 `confirmation-required` (on a TTY it asks one `y`/`N` question first). Must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (today `-c` as a wipe) |
-| `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed (today `-cc`) |
+| `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed (today `-cc`). Confirmation-gated on the DESTROYED SET, exactly like `-Mccc`: a plan with archives to remove prints them and stops rc 3 without `--noconfirm` |
 | `gsa -Mccc` | prune strength 3: additionally remove pulled sources — source clones, downloaded tarballs (extension-matched to the root `.gitignore` set), staging dirs. Prints its target list and stops rc 3 `confirmation-required` without `--noconfirm` (today `-ccc`) |
 | `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; user sets are the kv-store/`config/sets` union (§C.2) — `--add`/`--remove` edit the kv side. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
 | `gsa -Mw [--add\|--remove <ref…>]` | world: the explicitly wanted set. Default lists it; `--add`/`--remove` edit it (remove = deselect) |
 | `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention |
 
 The strength idiom `-Mc`/`-Mcc`/`-Mccc` is deliberately pacman's `-Sc`/`-Scc`
-cache-prune shape. `-Mm` and `-Mccc` are confirmation-gated and **never
-prompt** (§K.3): without `--noconfirm` each prints its plan/targets and stops
-rc 3 `confirmation-required`; `--dry-run` renders the same targets at rc 0;
-`--noconfirm` applies. `-Mh --show` is a pure read — no confirmation, no gate.
+cache-prune shape. `-Mcc`, `-Mccc` and `-Mm` are confirmation-gated on their
+DESTROYED SET (owner decision 2026-11-11): a plan that removes or rewrites
+nothing applies without asking; a plan that does asks first — `--noconfirm`
+consents, a TTY gets one `y`/`N` question, and every non-interactive caller
+(`--machine`, `CI`, a pipe) is refused at rc 3 `confirmation-required` with
+the exact paste-safe command. `--dry-run` renders the same targets at rc 0.
+`-Mc` keeps its selection-scoped meaning and asks nothing. `-Mh --show` is a
+pure read — no confirmation, no gate.
+
+*Amendment (2026-11-11, the destroyed set).* The gate reads the PLAN, not the
+cluster's strength: `-Mcc` deletes archives exactly as `-Mccc` deletes
+sources, so both stop without `--noconfirm`, while a plan that removes
+nothing applies silently (a healthy `-Mm` used to fail on exactly the trees a
+script runs it on). On a terminal the gate asks ONE `y`/`N` question on the
+error stream (`prompt::interactive` — stdin and stderr both terminals, no
+`CI`, not `--machine`; anything but `y`/`yes` is NO, including EOF). A
+non-interactive caller is never prompted and gets the refusal plus the
+paste-safe replay (`gsa -Mcc --noconfirm …`). Pinned by
+`tests/gsa-maint-v2.sh` §h (PTY consent and decline) and §e (mirrors).
+Where this amendment and the 2026-10-17 one below disagree, this one wins.
 
 *Amendment (2026-10-17, §B.7 confirmation semantics).* The `-Mm` row
 ("Interactive confirmation"), the `-Mccc` row ("asks first"), and the trailing
@@ -294,7 +310,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |
 | `--no-build-dir-prompt` | restore the pre-prompt behaviour: resolve the build root silently from the layers above instead of asking on a TTY. Mirrored into the continuation |
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
-| `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` applies to the engine's own confirmations (`-Mm`, `-Mccc`) and never to a pacman question flag |
+| `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` consents to the engine's own destroyed-set confirmations (`-Mcc`, `-Mccc`, `-Mm`) and never to a pacman question flag |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 | `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
 | `--color auto\|always\|never` | colour for the HUMAN rendering, every family (added 2026-11-11): `auto` (the default) colours only when stdout is a terminal, `TERM` is set and not `dumb`, and `NO_COLOR` is unset or empty; `always` asks for the human rendering WITH colour even through a pipe (the only rendering that has colour), and `never` keeps the terminal's own vocabulary without colour. `--machine` is the machine vocabulary and is never coloured, whatever the flag says — an escape byte in the record, the kv lines or a decision row is a contract break, not a style choice. Colour is never the only signal: every state keeps its word and glyph (`✓ DONE`, `✗ FAILED`, `parked`, `deferred`), so a piped or `NO_COLOR` reader loses nothing. Presentation only, never mirrored (§H.2); resolved once in `gsa-cli::style`, never at a call site |
@@ -1519,10 +1535,12 @@ dispatch; a failure parks a cone (§I).
   serializes build-user maintain runs among themselves but does NOT mutually
   exclude root engine runs over the same state root — a permission split
   cannot provide one mutex.
-- **`sudo -n` only.** The engine never prompts (a TTY changes nothing). The
-  preflight refuses to start an install run whose installs cannot succeed;
-  a credential lost mid-run stops dispatch exactly once, drains in-flight
-  lanes, and exits non-zero.
+- **`sudo -n` only.** The engine never prompts for CREDENTIALS (a TTY changes
+  nothing). The one question it may ask is §B.7's destroyed-set consent, and
+  only on a terminal; every non-interactive caller gets the refusal instead.
+  The preflight refuses to start an install run whose installs cannot
+  succeed; a credential lost mid-run stops dispatch exactly once, drains
+  in-flight lanes, and exits non-zero.
 - **Signals**: the first signal sends ONE `SIGTERM` to each child process
   group, starts a shared grace window, then `SIGKILL`s survivors. A second
   signal escalates immediately (kill children now, no further grace). The run

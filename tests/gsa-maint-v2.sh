@@ -1041,8 +1041,19 @@ arch=(any)'
             fail "without a live process the staging tree is pruned"
 
         # ── strength 2 (-Mcc): every archive in the workspace ────────────
+        # Consent is the DESTROYED SET, not the strength number (§B.7): -Mcc
+        # deletes archives exactly like -Mccc, so it prints its plan and
+        # stops rc 3 without --noconfirm, and the refusal is paste-safe.
         run_engine "$ws" -Mcc --state-dir "$state"
-        [ "$FIXTURE_RC" = 0 ] || fail "-Mcc is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_RC" = 3 ] || fail "-Mcc without --noconfirm stops rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
+            fail "the -Mcc stop must name confirmation-required: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mcc --noconfirm" >/dev/null ||
+            fail "the -Mcc stop must carry the paste-safe command: $FIXTURE_OUTPUT"
+        [ -f "$ws/packages/prgamma/prgamma-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "the unconfirmed strength-2 run deleted an archive"
+        run_engine "$ws" -Mcc --noconfirm --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "-Mcc --noconfirm is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/pralpha/pralpha-1.0.0-1-any.pkg.tar.zst keep referenced-by-run" "referenced archive kept at strength 2"
         [ -f "$ws/packages/pralpha/pralpha-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "the run-referenced archive must survive strength 2"
@@ -1060,6 +1071,8 @@ arch=(any)'
         [ "$FIXTURE_RC" = 3 ] || fail "-Mccc without --noconfirm stops rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
             fail "the stop must name confirmation-required: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mccc --noconfirm" >/dev/null ||
+            fail "the -Mccc stop must carry the paste-safe command: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prbeta/bsrc.tar.gz prune source-download" "the plan lists the pulled download"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prgamma/gsrc prune source-clone" "the plan lists the source clone"
         # Nothing is deleted by the unconfirmed run.
@@ -1099,6 +1112,42 @@ arch=(any)'
         [ -L "$ws/packages/prbeta/prbeta-link-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "the symlinked archive must survive every strength"
         [ -f "$outside" ] || fail "strength 3 must never follow the symlink"
+
+        # ── an INTERACTIVE operator consents once (owner decision 2026-11-11)
+        # The destroyed-set gate asks on a terminal instead of only printing
+        # the refusal: `y` applies the same plan without --noconfirm, `n` is
+        # NO and deletes nothing. A PTY is the only way to be interactive
+        # (`prompt::interactive` needs stdin AND stderr to be terminals).
+        mcc_pty() { # INPUT OUTFILE — run `-Mcc` under a PTY; sets MCC_PTY_RC
+            local input=$1 outfile=$2
+            local -a pty_argv=()
+            rr2_engine_argv sudo "$ws" pty_argv -Mcc --state-dir "$state"
+            local runner="$fixture/.mcc-pty.sh"
+            {
+                printf '#!/bin/bash\ncd %q || exit 127\nunset CI\nexec' "$ws"
+                printf ' %q' "${pty_argv[@]}"
+                printf '\n'
+            } >"$runner"
+            set +e
+            printf '%b' "$input" |
+                timeout 60 env TERM=dumb script -qec "/bin/bash $(printf %q "$runner")" /dev/null \
+                    >"$outfile" 2>&1
+            MCC_PTY_RC=$?
+            set -e
+        }
+        : >"$ws/packages/prgamma/prgamma-pty-yes-1.0.0-1-any.pkg.tar.zst"
+        mcc_pty 'y\n' "$fixture/h/pty-yes.out"
+        [ "$MCC_PTY_RC" = 0 ] ||
+            fail "interactive y is consent, got rc=$MCC_PTY_RC: $(cat "$fixture/h/pty-yes.out")"
+        [ ! -e "$ws/packages/prgamma/prgamma-pty-yes-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "interactive y must apply the prune: $(cat "$fixture/h/pty-yes.out")"
+        : >"$ws/packages/prgamma/prgamma-pty-no-1.0.0-1-any.pkg.tar.zst"
+        mcc_pty 'n\n' "$fixture/h/pty-no.out"
+        [ "$MCC_PTY_RC" = 3 ] ||
+            fail "interactive n is a refusal, got rc=$MCC_PTY_RC: $(cat "$fixture/h/pty-no.out")"
+        [ -f "$ws/packages/prgamma/prgamma-pty-no-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "interactive n must delete nothing: $(cat "$fixture/h/pty-no.out")"
+        /usr/bin/sudo -n rm -f "$ws/packages/prgamma/prgamma-pty-no-1.0.0-1-any.pkg.tar.zst"
 
         # ── an unreadable binpkg index refuses the strength (rc 3) ────────
         # The index names which instances died. A strength that cannot read

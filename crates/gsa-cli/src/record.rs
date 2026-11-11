@@ -297,7 +297,7 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
 /// embedded `'` closed-quoted. A newline or carriage return never reaches
 /// here — the flag parser refuses those values, because the record's value
 /// grammar is one line (§H.2).
-fn shell_quote(value: &str) -> String {
+pub(crate) fn shell_quote(value: &str) -> String {
     let safe = !value.is_empty()
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric()
