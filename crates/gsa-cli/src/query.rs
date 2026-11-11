@@ -50,7 +50,9 @@ pub fn query_binpkg(
         )
     };
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
+    // run unprivileged against a pristine root and report an empty side-car.
+    let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     for row in &index.rows {
         if let Some(wanted) = &wanted {
@@ -93,7 +95,9 @@ pub fn query_probe(
         }
     }
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
+    // run unprivileged against a pristine root and report an empty side-car.
+    let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     for arg in &inv.targets {
         let path = Path::new(arg);
@@ -196,12 +200,7 @@ fn run_local_db_check_inner(
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
     let root_path = gsa_state::resolve_state_root(state_flag).map_err(Exit::Usage)?;
-    let root = StateRoot::open(&root_path).map_err(|error| {
-        Exit::Refuse(Refusal::noted(
-            RefusalClass::StartupRefused,
-            vec![format!("gsa: {error}")],
-        ))
-    })?;
+    let root = StateRoot::open_readonly(&root_path);
     match verb {
         "runs" => match gsa_state::RunHistory::read(&root) {
             Ok((records, corrupt)) => {
@@ -299,7 +298,9 @@ pub fn query_abi(
     }
     let indices = crate::resolve_records(&ctx, &inv.targets, err)?;
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
+    // run unprivileged against a pristine root and report an empty side-car.
+    let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
     let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(root.path()))
         .map_err(|e| e.to_string())?;
@@ -419,7 +420,9 @@ pub fn query_revdep(
             files: pkg.files.clone(),
         }));
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
-    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
+    // run unprivileged against a pristine root and report an empty side-car.
+    let root = StateRoot::open_readonly(&state_dir);
     let (report, corrupt) =
         gsa_abi::revdep_report_with_state(&view, root.path()).map_err(|e| e.to_string())?;
     for line in corrupt {
@@ -440,7 +443,9 @@ fn side_car_index(inv: &Invocation) -> Result<Option<BinpkgIndex>, String> {
     if !state_dir.exists() {
         return Ok(None);
     }
-    let root = StateRoot::open(&state_dir).map_err(|e| e.to_string())?;
+    // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
+    // run unprivileged against a pristine root and report an empty side-car.
+    let root = StateRoot::open_readonly(&state_dir);
     Ok(Some(BinpkgIndex::load(&root).map_err(|e| e.to_string())?))
 }
 

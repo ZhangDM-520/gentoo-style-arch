@@ -8,8 +8,8 @@ set -euo pipefail
 # this fixture writes in the §J.4 storage format, and PATH pacman stubs
 # that record their argv.
 #
-# Pinned here (seven ( subshell ) sections, run one alone with
-# GSA_QUERY_ONLY=a…g):
+# Pinned here (eight ( subshell ) sections, run one alone with
+# GSA_QUERY_ONLY=a…h):
 #   a. `gsa -Q` lists the INSTALLED packages (never the recipe universe)
 #      with the side-car columns `abi= built= instances=` exactly where an
 #      index row exists (§B.3 "where a side-car row exists");
@@ -28,7 +28,9 @@ set -euo pipefail
 #   f. `gsa -Qg` lists the group roster with counts (the -Sg content, moved
 #      to the query family);
 #   g. `-Si`/`-Ss`/`-Sg` are RETIRED (H7/H8): rc 2, a usage error naming
-#      the new `-Q` home — never a silent re-route.
+#      the new `-Q` home — never a silent re-route;
+#   h. a `-Q` verb against a PRISTINE root creates no state (it must run
+#      unprivileged and report the empty side-car, never mkdir/chown).
 #
 # House conventions: ( subshell ) sections, `fail()` prefixes, rr-v2.bash's
 # run_engine_user (queries are read-only, §B.10).
@@ -325,6 +327,26 @@ if [ -z "$only" ] || [ "$only" = g ]; then
                 || fail "g: $spelling must say it is retired: $FIXTURE_OUTPUT"
             grep -F "$moved_to" <<<"$FIXTURE_OUTPUT" >/dev/null \
                 || fail "g: $spelling must name its new home $moved_to: $FIXTURE_OUTPUT"
+        done
+    )
+fi
+
+# ── h. a query against a pristine root creates no state ───────────────────
+if [ -z "$only" ] || [ "$only" = h ]; then
+    (
+        ws="$fixture/h/ws"
+        state="$fixture/h/never"
+        make_workspace "$ws" 1 1 low
+        add_package "$ws" foo "$gsa_meta_any"
+        make_local_db "$fixture/h/db"
+        make_pacman_stubs "$ws/bin" "$fixture/h/db"
+        export PATH="$ws/bin:$PATH"
+        for verb in -Q -Qb -Qu; do
+            GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" "$verb"
+            [ "$FIXTURE_RC" -eq 0 ] \
+                || fail "h: $verb must read a pristine root without creating it (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+            [ ! -e "$state" ] \
+                || fail "h: $verb created the state root $state (a query never owns state)"
         done
     )
 fi
