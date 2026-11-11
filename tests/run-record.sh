@@ -549,7 +549,39 @@ EOF
     done
 )
 
-# ─── 7. Enum closure: every §H.3 status was produced by some scenario ───────
+# ─── 7. A dry-run plan: budget scalars 0 (§H.2 amendment 1), the resolved ───
+# ─── budget in the continuation (a plan→run paste keeps the request) ────────
+(
+    set -euo pipefail
+    ws="$fixture/plan-budget/ws"
+    make_case_workspace "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    run_engine "$ws" -B --dry-run --lanes 3 --jobs 5 --intensity low @git
+    [ "$FIXTURE_RC" = 0 ] || fail "the plan failed: $FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s7.out"
+    record_ok "$fixture/s7.out"
+    # A plan dispatches nothing, so the scalars are 0 — never `-`, never a
+    # predicted budget (§H.2 amendment 1).
+    for scalar in lanes normal-jobs core-jobs; do
+        value=$(rr2_scalar "$scalar" <"$fixture/s7.out")
+        [ "$value" = 0 ] ||
+            fail "a plan's $scalar scalar must be 0 (§H.2 amendment 1), got '$value'" "$fixture/s7.out"
+    done
+    [ "$(rr2_scalar intensity <"$fixture/s7.out")" = low ] ||
+        fail "the plan's intensity scalar must be the resolved profile" "$fixture/s7.out"
+    # The continuation carries the resolved budget: a resumed real run must
+    # not fall back to the profile because the plan dropped the request.
+    command=$(rr2_continuation command <"$fixture/s7.out")
+    for flag in '--dry-run' '--lanes 3' '--jobs 5' '--intensity low'; do
+        case " $command " in
+        *" $flag "*) ;;
+        *) fail "the plan's continuation drops '$flag': $command" "$fixture/s7.out" ;;
+        esac
+    done
+)
+
+# ─── 8. Enum closure: every §H.3 status was produced by some scenario ───────
 for status in $STATUSES; do
     grep -qx "$status" "$seen_statuses" ||
         fail "status '$status' was never produced by any scenario — the enum pin is incomplete"

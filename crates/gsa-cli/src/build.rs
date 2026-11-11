@@ -904,7 +904,7 @@ pub(crate) fn plan_only(
     // plan used to accept it and then the real run refused it), and the
     // record's `intensity` scalar is the value the run would actually use.
     let budget = resolve_budget(inv, project, selection.listed.len())?;
-    let intensity = budget.intensity.to_string();
+    let _intensity = budget.intensity;
     // The note counts the POST-PROMPT closure: the prompt filters the
     // selection before the ordinary pipeline runs (§C.4), so its drops are
     // not consumer expansion and not part of the selected count.
@@ -927,7 +927,7 @@ pub(crate) fn plan_only(
     } else {
         crate::RC_OK
     };
-    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &intensity, rc);
+    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &budget, rc);
     let _ = write!(out, "{}", rec.render_machine());
     Ok(rc)
 }

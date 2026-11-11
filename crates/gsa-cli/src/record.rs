@@ -307,7 +307,7 @@ pub fn build_plan_record(
     selection: &Selection,
     targets: &[String],
     ranges: &[String],
-    intensity: &str,
+    budget: &gsa_sched::budget::Budget,
     rc: i32,
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
@@ -351,7 +351,7 @@ pub fn build_plan_record(
     if inv.leaf {
         command.push_str(" --leaf");
     }
-    command.push_str(&mirror_flags(inv, None));
+    command.push_str(&mirror_flags(inv, Some(budget)));
     for (_, id) in &selection.listed {
         command.push(' ');
         command.push_str(id.as_str());
@@ -361,13 +361,14 @@ pub fn build_plan_record(
     RunRecord {
         selection_source,
         order: selection.listed.iter().map(|(_, id)| id.clone()).collect(),
-        // Lanes and job budgets are computed by the scheduler (gsa-sched,
-        // later phase); a dry run dispatches nothing and does not predict a
-        // plan ("never predict a plan — read the parallelism: line").
-        lanes: None,
-        normal_jobs: None,
-        core_jobs: None,
-        intensity: intensity.to_string(),
+        // A plan dispatches nothing, so the budget scalars render `0` (§H.2
+        // amendment 1) even though the plan validated the request. The
+        // resolved values reach the CONTINUATION as explicit flags, so a
+        // plan→run paste keeps the budget it planned with.
+        lanes: Some(0),
+        normal_jobs: Some(0),
+        core_jobs: Some(0),
+        intensity: budget.intensity.to_string(),
         outcome: "planned".to_string(),
         rc,
         dry_run: true,
@@ -788,6 +789,19 @@ mod tests {
         }
     }
 
+    /// The budget a plan resolved; the record reads its scalars and its
+    /// profile name from this one value (there is no second derivation).
+    fn test_budget(intensity: &'static str) -> gsa_sched::budget::Budget {
+        gsa_sched::budget::Budget {
+            threads: 8,
+            memory_gib: 16,
+            intensity,
+            lanes: 4,
+            normal_jobs: 4,
+            core_jobs: 4,
+        }
+    }
+
     #[test]
     fn dry_run_record_carries_plan_and_continuation() {
         let inv = Invocation {
@@ -824,7 +838,14 @@ mod tests {
             allow_broken_rustc: false,
             standalone_root: None,
         };
-        let record = build_plan_record(&inv, &selection(2), &["@git".to_string()], &[], "xhigh", 3);
+        let record = build_plan_record(
+            &inv,
+            &selection(2),
+            &["@git".to_string()],
+            &[],
+            &test_budget("xhigh"),
+            3,
+        );
         assert_eq!(record.outcome, "planned");
         assert_eq!(
             record.rc, 3,
@@ -834,7 +855,10 @@ mod tests {
         assert_eq!(record.plan[0].action, PlanAction::BuildInstall);
         // The prune strength 'c' is never mirrored; --dry-run is; --leaf only
         // in its true form (G4 — absence IS the negation).
-        assert_eq!(record.continuation.command, "gsa -S --dry-run pkg1 pkg2");
+        assert_eq!(
+            record.continuation.command,
+            "gsa -S --dry-run --lanes 4 --jobs 4 --intensity xhigh pkg1 pkg2"
+        );
         // H3: the line is argv-scoped — this run's own `c` prune strength is
         // the only spelling the composed command drops.
         assert_eq!(record.continuation.not_mirrored, vec!["-Sc".to_string()]);
@@ -885,11 +909,14 @@ mod tests {
             &selection(1),
             &["mesa-git".to_string()],
             &["1..1".to_string()],
-            "high",
+            &test_budget("high"),
             0,
         );
         assert_eq!(record.plan[0].action, PlanAction::Build);
-        assert_eq!(record.continuation.command, "gsa -B --dry-run --leaf pkg1");
+        assert_eq!(
+            record.continuation.command,
+            "gsa -B --dry-run --leaf --lanes 4 --jobs 4 --intensity high pkg1"
+        );
         assert_eq!(record.selection_source, "sets=mesa-git leaf=yes range=1..1");
     }
 
@@ -1323,7 +1350,14 @@ mod tests {
         // continuation mirrors `--leaf` or nothing (absence IS the negation).
         let mut inv = inv_for(Family::S);
         inv.leaf = true;
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
+        let record = build_plan_record(
+            &inv,
+            &selection(1),
+            &["pkg1".to_string()],
+            &[],
+            &test_budget("xhigh"),
+            0,
+        );
         assert!(
             record
                 .continuation
@@ -1335,7 +1369,14 @@ mod tests {
         );
 
         inv.leaf = false;
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
+        let record = build_plan_record(
+            &inv,
+            &selection(1),
+            &["pkg1".to_string()],
+            &[],
+            &test_budget("xhigh"),
+            0,
+        );
         assert!(
             !record.continuation.command.contains("--leaf"),
             "{}",
@@ -1412,7 +1453,14 @@ mod tests {
         // A build continuation's `command:` carries no -M token at all.
         let mut inv = inv_for(Family::B);
         inv.targets = vec!["pkg1".to_string()];
-        let record = build_plan_record(&inv, &selection(1), &["pkg1".to_string()], &[], "xhigh", 0);
+        let record = build_plan_record(
+            &inv,
+            &selection(1),
+            &["pkg1".to_string()],
+            &[],
+            &test_budget("xhigh"),
+            0,
+        );
         let command = record.continuation.command.clone();
         assert!(
             !command.split_whitespace().any(|tok| tok.starts_with("-M")),
