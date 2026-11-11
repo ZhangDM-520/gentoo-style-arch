@@ -42,6 +42,7 @@ use gsa_recipe::sync::{
     SyncOutcome, SyncPolicy, SyncReport, VersionProvider,
 };
 use gsa_recipe::toolchain;
+use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
@@ -779,6 +780,80 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
     } else {
         select::build_selection(ctx, &inv.targets, &inv.ranges, inv.leaf).map_err(|e| e.message)
     }
+}
+
+/// The transitive build-order prerequisites of a selection that the
+/// selection does not already contain, in canonical build order.
+///
+/// A build selection expands toward its CONSUMERS (§C.2); nothing used to
+/// expand it toward its prerequisites, so `gsa -S app` planned
+/// `app build-install ok` and then died in makepkg's
+/// `Missing dependencies: -> lib` after the run had promised "each package
+/// installed before its consumers compile" (blind-review 2026-11-11,
+/// packaging-novice). `--leaf` is exempt by definition: it builds exactly
+/// what was named.
+pub fn prerequisite_candidates(graph: &Graph<'_>, selection: &Selection, leaf: bool) -> Vec<usize> {
+    if leaf || selection.listed.is_empty() {
+        return Vec::new();
+    }
+    let selected: std::collections::BTreeSet<usize> = selection
+        .listed
+        .iter()
+        .filter_map(|(_, id)| graph.index_of(id.as_str()))
+        .collect();
+    let mut wanted = selected.clone();
+    let mut frontier: Vec<usize> = selected.iter().copied().collect();
+    while let Some(idx) = frontier.pop() {
+        for prereq in graph.prerequisites(idx) {
+            if wanted.insert(prereq) {
+                frontier.push(prereq);
+            }
+        }
+    }
+    let mut out: Vec<usize> = wanted.difference(&selected).copied().collect();
+    out.sort_by_key(|idx| graph.position(*idx));
+    out
+}
+
+/// Every pacman name one recipe can be installed under: its id (`pkgbase`
+/// fallback), the committed `.SRCINFO` pkgbase, and its declared pkgnames.
+fn recipe_names(db: &RecipeDb, record: &gsa_model::TopologyRecord) -> Vec<String> {
+    let mut names = vec![record.id.as_str().to_string()];
+    if let Some(meta) = db.get(record.id.as_str()) {
+        if let Some(info) = &meta.srcinfo {
+            if let Some(base) = &info.pkgbase {
+                names.push(base.clone());
+            }
+        }
+        names.extend(meta.pkgnames());
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The prerequisite additions a run actually makes: a candidate is added
+/// only when the SYSTEM has NONE of its output names installed.
+///
+/// Owner decision 2026-11-11: expand to what is missing, never rebuild. A
+/// partially installed split recipe is left alone for the same reason (the
+/// missing output is an install, not a build).
+pub fn missing_prerequisites(
+    graph: &Graph<'_>,
+    candidates: &[usize],
+    db: &RecipeDb,
+    installed: &gsa_install::LocalDb,
+) -> Vec<String> {
+    candidates
+        .iter()
+        .filter(|&&idx| {
+            let record = graph.record(idx);
+            !recipe_names(db, record)
+                .iter()
+                .any(|name| installed.get(name).is_some())
+        })
+        .map(|&idx| graph.record(idx).id.as_str().to_string())
+        .collect()
 }
 
 /// The `-Sy` phase shared by `gsa -Sy` and `gsa -Syu`: sync every selected

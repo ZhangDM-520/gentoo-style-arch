@@ -705,10 +705,21 @@ invariants (§K.2), not selection semantics.
 
 A selection of X expands to X plus its transitive **consumers** — the reverse
 build-order closure (a record listing B in `edges` consumes B). Prerequisites
-are never expanded: they are assumed installed and current; bootstrap and
-fresh builds use group runs. Rebuilding X cannot break what X consumes; the ABI
-risk lives in X's consumers. `--leaf` suppresses the expansion and builds
+are NOT expanded as a rule: they are assumed installed and current; bootstrap
+and fresh builds use group runs. Rebuilding X cannot break what X consumes; the
+ABI risk lives in X's consumers. `--leaf` suppresses the expansion and builds
 exactly the named recipes.
+
+*Amendment (2026-11-11, missing prerequisite).* A selection's unselected
+build-order **prerequisite** joins it when the system has NONE of that
+recipe's output names installed (owner decision: expand to what is missing,
+never rebuild). An installed prerequisite is never added and never rebuilt — a
+split recipe with one installed output is left alone for the same reason — and
+`--leaf` builds exactly what was named. The addition is announced per recipe
+(`gsa: note: added build-order prerequisite <id> (not installed)`), joins the
+plan in topological position (§C.5), and appears in the dry run, which reads
+the same installed DB as the run. An unreadable installed DB refuses (rule
+71). Pinned by `tests/project.sh` §10.
 
 *Amendment (2026-11-01, direction rule).* The ABI rebuild wave (`gsa-abi`'s
 coupled batches and `:=` subscription terms) obeys the same direction rule:
@@ -1100,7 +1111,10 @@ seams are never mirrored. **The update spellings are the exception:** `-Su`
 and `-Syu` mirror as themselves (H9 — a `-Syu` continuation that downgraded
 to `-Su` would silently drop the sync it recorded), so `-Su`/`-Syu` do
 not belong in the never-mirrored list. Environment inputs are warned about (`env-required`),
-never baked in.
+never baked in. A replay re-applies the selection rules, including §C.3's
+missing-prerequisite addition: a prerequisite the system still lacks joins
+the replay (a build-only run never installs, so its resume can rebuild one),
+while consumer expansion never grows the remaining set.
 
 *Amendment (2026-10-14, cutover gap (b)/G4 — the flag-rule table as
 implemented).* The mirrored set is exactly what

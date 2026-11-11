@@ -167,6 +167,38 @@ fn run_build_with(
     let state_dir =
         gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
+    // ── missing build-order prerequisites (owner decision 2026-11-11) ────
+    // `-S app` planned `ok` and then died in makepkg's "Missing dependencies"
+    // for a prerequisite nobody selected. The prerequisites the SYSTEM lacks
+    // now join the selection; an installed one is never added and never
+    // rebuilt, and `--leaf` builds exactly what was named.
+    match missing_prerequisite_additions(&graph, &selection, &db, inv) {
+        Ok(additions) => {
+            for id in &additions {
+                let _ = writeln!(
+                    err,
+                    "gsa: note: added build-order prerequisite {id} (not installed)"
+                );
+            }
+            merge_prerequisites(&mut selection, &additions, &graph);
+        }
+        Err(message) => {
+            // The additions decide what the run builds, so an unreadable
+            // installed DB is a refusal, never "nothing is missing" (which
+            // would rebuild, or plan a prerequisite-less run).
+            let _ = writeln!(err, "gsa: {message}");
+            return Err(refuse_startup(
+                inv,
+                &selection,
+                &state_dir,
+                out,
+                err,
+                RefusalClass::StartupRefused,
+                || resolve_budget(inv, &project, selection.listed.len()),
+            ));
+        }
+    }
+
     // ── the pre-dispatch ABI wave check (docs/plans/plan-native-pm.md §4.3, §E.3) ──
     // A provider whose registered token already moved (newest binpkg index
     // row ≠ what its consumers recorded at install) drags its consumer
@@ -891,6 +923,26 @@ pub(crate) fn plan_only(
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
+    // The same prerequisite expansion the run performs (owner decision
+    // 2026-11-11): a dry run must show the additions it would build. An
+    // unreadable installed DB is the run's refusal, so the plan reports that
+    // predicted class rather than a false 0.
+    let mut prereq_refused = false;
+    match missing_prerequisite_additions(ctx.graph, &selection, ctx.db, inv) {
+        Ok(additions) => {
+            for id in &additions {
+                let _ = writeln!(
+                    err,
+                    "gsa: note: added build-order prerequisite {id} (not installed)"
+                );
+            }
+            merge_prerequisites(&mut selection, &additions, ctx.graph);
+        }
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            prereq_refused = true;
+        }
+    }
     // A dry run still plans: nothing mutates, so the plan is rendered, but an
     // unreadable wave input makes the real run refuse (rc 3), and the plan's
     // `rc` scalar reports that predicted class rather than a false 0.
@@ -935,7 +987,7 @@ pub(crate) fn plan_only(
     );
     // §H.2: the record's `rc` scalar is the run's exit code — a refusing
     // plan reports its refusal, never a success.
-    let rc = if wave.uncovered || wave_refused {
+    let rc = if wave.uncovered || wave_refused || prereq_refused {
         crate::RC_REFUSED
     } else {
         crate::RC_OK
@@ -1577,15 +1629,71 @@ pub(crate) fn wave_check(
     })
 }
 
+/// The prerequisite additions one run makes: the selection's transitive
+/// build-order prerequisites with no installed output (owner decision
+/// 2026-11-11 — expand to what the system is MISSING, never rebuild an
+/// installed prerequisite). The installed DB is read only when the selection
+/// actually has unselected prerequisites, so the common run pays nothing.
+fn missing_prerequisite_additions(
+    graph: &Graph<'_>,
+    selection: &Selection,
+    db: &RecipeDb,
+    inv: &Invocation,
+) -> Result<Vec<String>, String> {
+    let candidates = prepare::prerequisite_candidates(graph, selection, inv.leaf);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conf = inv.config.as_deref().map(std::path::Path::new);
+    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
+    let installed = gsa_install::LocalDb::load(&db_root)?;
+    Ok(prepare::missing_prerequisites(
+        graph,
+        &candidates,
+        db,
+        &installed,
+    ))
+}
+
+/// Merge prerequisite additions into the selection in BUILD ORDER: plan,
+/// record and dispatch carry the one topological order (§C.3), so an added
+/// prerequisite precedes its consumer instead of trailing the plan. Anchors
+/// are renumbered consecutively — they render the plan's row indices, and a
+/// range was already resolved against the listing before this point.
+fn merge_prerequisites(selection: &mut Selection, additions: &[String], graph: &Graph<'_>) {
+    if additions.is_empty() {
+        return;
+    }
+    for id in additions {
+        selection.listed.push((
+            0,
+            RecipeId::new(id).expect("additions come from the topology"),
+        ));
+    }
+    selection
+        .listed
+        .sort_by_key(|(_, id)| graph.index_of(id.as_str()).map(|idx| graph.position(idx)));
+    for (n, (anchor, _)) in selection.listed.iter_mut().enumerate() {
+        *anchor = n + 1;
+    }
+}
+
 /// Append computed wave additions to the plan (anchors continue past the
 /// closure: `closure_size + n`). Listing order does not steer dispatch —
 /// the supervisor honours the build-order edges — but every anchor stays a
 /// distinct 1-based position.
 pub(crate) fn extend_selection(selection: &mut Selection, additions: &[String]) {
-    for (n, id) in additions.iter().enumerate() {
+    // Anchors continue past BOTH the closure and anything already appended
+    // (a run can add prerequisites and then wave members): every anchor stays
+    // a distinct 1-based position, and no existing anchor renumbers.
+    let mut next = selection
+        .closure_size
+        .max(selection.listed.iter().map(|(a, _)| *a).max().unwrap_or(0));
+    for id in additions {
+        next += 1;
         selection.listed.push((
-            selection.closure_size + n + 1,
-            RecipeId::new(id).expect("wave additions come from the topology"),
+            next,
+            RecipeId::new(id).expect("additions come from the topology"),
         ));
     }
 }

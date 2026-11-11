@@ -41,6 +41,9 @@ set -euo pipefail
 #      primary VCS source is a `#commit=` pin, prints the TRUE id in every
 #      output channel, and is refused (rc 2, naming the ref it tracks) for a
 #      floating/branch/tag/non-VCS recipe; a real `-snapshot` id wins.
+#  10. a selection's MISSING build-order prerequisites join it before their
+#      consumer (announced by name), an installed prerequisite is never added
+#      or rebuilt, and `--leaf` stays exact — on both the plan and the run.
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/project.sh`; the row's
 # phase cell reads "1 (continuation half at 2)" and the flip is whole-file —
@@ -762,8 +765,32 @@ fi
     # record's remaining set to the continuation; re-driving `command:`
     # itself must give back exactly the same semantics — no growth, no
     # upstream x returning.
+    #
+    # `x` is pinned INSTALLED in a fabricated DB: the missing-prerequisite
+    # rule (section 10) adds an unselected prerequisite the SYSTEM lacks, and
+    # a build-only run never installs, so without this the replay would
+    # legitimately re-add x. This scenario is about consumer expansion, and
+    # that rule has its own section.
+    mkdir -p "$fixture/expansion/bin" "$fixture/expansion/db/local/x-1-1"
+    cat >"$fixture/expansion/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fixture/expansion/bin/pacman-conf"
+    {
+        printf '%%NAME%%\nx\n\n'
+        printf '%%VERSION%%\n1-1\n\n'
+        printf '%%BASE%%\nx\n'
+    } >"$fixture/expansion/db/local/x-1-1/desc"
+    printf '%%FILES%%\n' >"$fixture/expansion/db/local/x-1-1/files"
+    export GSA_FAKE_DB_PATH="$fixture/expansion/db"
     stub_makepkg "$ws"
-    export PATH="$ws/bin:$PATH"
+    export PATH="$fixture/expansion/bin:$ws/bin:$PATH"
     export GSA_STATE_DIR="$fixture/expansion/state"
     export GSA_FAKE_FAIL_PACKAGE=c1
     run_engine "$ws" -B --intensity low x
@@ -1001,4 +1028,109 @@ source=('https://example.invalid/tool.tar.gz')"
     fi
 
     printf 'snapshot alias fixture: PASS (pinned resolves, four refusals name the ref, real id wins)\n'
+)
+
+# ─── 10. a MISSING build-order prerequisite joins the selection ─────────────
+# Owner decision 2026-11-11: `-S app` planned `ok` and then died in makepkg's
+# "Missing dependencies" for a prerequisite nobody selected. The expansion is
+# MISSING-only — an installed prerequisite is neither added nor rebuilt — and
+# `--leaf` still builds exactly what was named. The dry run reads the same
+# installed DB as the run, so the plan shows the additions it would build.
+(
+    set -euo pipefail
+
+    ws="$fixture/prereq/ws"
+    state="$fixture/prereq/state"
+    make_workspace "$ws" 1 1 low
+    add_package "$ws" lib "$gsa_meta_any" git
+    add_package "$ws" app "$gsa_meta_any" app
+    set_topology_record "$ws" app app 'lib'
+    stub_makepkg "$ws"
+
+    # The fabricated installed DB behind `pacman-conf DBPath`: the engine
+    # must judge this machine's installed set, never the host's local DB.
+    db="$fixture/prereq/db"
+    mkdir -p "$fixture/prereq/bin"
+    cat >"$fixture/prereq/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fixture/prereq/bin/pacman-conf"
+    export GSA_FAKE_DB_PATH="$db"
+    export PATH="$fixture/prereq/bin:$ws/bin:$PATH"
+    export GSA_STATE_DIR="$state"
+
+    # db_install NAME — one fabricated local-DB entry for NAME (the shape
+    # crates/gsa-install/src/localdb.rs reads: `<db>/local/<name>-<ver>/desc`).
+    db_install() {
+        local dir="$db/local/$1-1-1"
+        mkdir -p "$dir"
+        {
+            printf '%%NAME%%\n%s\n\n' "$1"
+            printf '%%VERSION%%\n1-1\n\n'
+            printf '%%BASE%%\n%s\n' "$1"
+        } >"$dir/desc"
+        printf '%%FILES%%\n' >"$dir/files"
+    }
+
+    # a. an EMPTY installed DB: the plan carries the prerequisite first and
+    # says it added it — the dry run shows what the run would build.
+    rm -rf "$db"
+    run_engine "$ws" -B --dry-run app
+    [ "$FIXTURE_RC" = 0 ] || fail "a: dry run of a prerequisite-owning selection failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = 'lib app' ] ||
+        fail "a: dry-run order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want [lib app] (the missing prerequisite joins before its consumer)"
+    [ "$(rr2_plan lib plan <<<"$FIXTURE_OUTPUT")" = build ] ||
+        fail "a: the added prerequisite has no build row: $(rr2_plan lib <<<"$FIXTURE_OUTPUT" 2>&1)"
+    [ "$(rr2_plan app plan <<<"$FIXTURE_OUTPUT")" = build ] ||
+        fail "a: the selected recipe is not planned as a build: $(rr2_plan app <<<"$FIXTURE_OUTPUT" 2>&1)"
+    grep -F 'gsa: note: added build-order prerequisite lib (not installed)' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "a: the addition is not announced by name and reason: $FIXTURE_OUTPUT"
+    if grep < <(find "$ws/packages" -name '*.pkg.tar.zst' -print -quit) -q .; then
+        fail "a: --dry-run built an archive (it must never build)"
+    fi
+
+    # b. an INSTALLED prerequisite is never added and never rebuilt.
+    db_install lib
+    run_engine "$ws" -B --dry-run app
+    [ "$FIXTURE_RC" = 0 ] || fail "b: dry run with an installed prerequisite failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = app ] ||
+        fail "b: dry-run order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want exactly [app] (an installed prerequisite is never added)"
+    if rr2_plan lib plan <<<"$FIXTURE_OUTPUT" >/dev/null 2>&1; then
+        fail "b: the installed prerequisite got a plan row (it must never be rebuilt): $(rr2_plan lib <<<"$FIXTURE_OUTPUT")"
+    fi
+    if grep -F 'added build-order prerequisite' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "b: an installed prerequisite still produced the addition note: $FIXTURE_OUTPUT"
+    fi
+
+    # c. `--leaf` builds exactly what was named, missing prerequisite or not.
+    rm -rf "$db"
+    run_engine "$ws" -B --dry-run --leaf app
+    [ "$FIXTURE_RC" = 0 ] || fail "c: --leaf dry run failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = app ] ||
+        fail "c: --leaf order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want exactly [app] (the absence of expansion IS the flag, §H.2)"
+    if grep -F 'added build-order prerequisite' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "c: --leaf produced the addition note: $FIXTURE_OUTPUT"
+    fi
+
+    # d. the RUN path, not only the plan: with the DB empty again, the real
+    # build dispatches the prerequisite first and both succeed.
+    rm -rf "$db"
+    run_engine "$ws" -B --intensity low app
+    [ "$FIXTURE_RC" = 0 ] || fail "d: the run of a prerequisite-owning selection failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = 'lib app' ] ||
+        fail "d: the run recorded order [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want [lib app]"
+    for pkg in lib app; do
+        [ "$(rr2_outcome "$pkg" status <<<"$FIXTURE_OUTPUT")" = succeeded ] ||
+            fail "d: $pkg did not succeed: $(rr2_outcome "$pkg" <<<"$FIXTURE_OUTPUT")"
+    done
+    grep -F 'gsa: note: added build-order prerequisite lib (not installed)' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "d: the run did not announce the addition: $FIXTURE_OUTPUT"
+
+    printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact)\n'
 )
