@@ -631,15 +631,34 @@ fn resolve_exclusions(
 /// match AND an install date (local-DB entry dir mtime) not older than the
 /// archive's mtime (nanosecond precision). Any doubt — no install date, no
 /// readable archive mtime, no exact match — installs.
+/// The checked-mode skip of one candidate, as the row reason — `None` when it
+/// installs.
+///
+/// Two classes, both "do not transact this archive":
+///
+/// - `already-current <v>`: the exact version is installed and its install
+///   date is not older than the archive file (re-installing would only
+///   re-write identical bytes).
+/// - `not-newer <v>`: the installed version is STRICTLY newer, verified with
+///   `vercmp` (§E.3's checked mode is "skip identical-or-not-newer"; `-Uf`/
+///   `-Sf` force). A checked `-U`/`-S` used to downgrade a live package from
+///   a stale archive or a reverted `pkgrel` and report success
+///   (blind-review 2026-11-11, distro-maintainer). A missing `vercmp` must
+///   never guess an order — the archive installs, as before.
 fn already_current(info: &Pkginfo, archive: &Path, db: &LocalDb) -> Option<String> {
     let installed = db.get(&info.pkgname)?;
     if installed.version != info.version {
-        return None;
+        let installed_canonical = gsa_recipe::pkginfo::canonical_version(&installed.version);
+        let archive_canonical = gsa_recipe::pkginfo::canonical_version(&info.version);
+        return match gsa_recipe::sync::vercmp(&installed_canonical, &archive_canonical) {
+            Some(order) if order > 0 => Some(format!("not-newer {}", installed.version)),
+            _ => None,
+        };
     }
     let install_date = installed.install_date?;
     let archive_mtime = std::fs::metadata(archive).ok()?.modified().ok()?;
     if install_date >= archive_mtime {
-        Some(installed.version.clone())
+        Some(format!("already-current {}", installed.version))
     } else {
         None
     }
@@ -1086,11 +1105,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             vec![row(&info.pkgbase, Decision::Install, repair_detail("ok"))]
         } else {
             match already_current(&info, &candidate.archive, db) {
-                Some(version) => vec![row(
-                    &info.pkgbase,
-                    Decision::Skip,
-                    format!("already-current {version}"),
-                )],
+                Some(reason) => vec![row(&info.pkgbase, Decision::Skip, reason)],
                 None => vec![row(&info.pkgbase, Decision::Install, repair_detail("ok"))],
             }
         };

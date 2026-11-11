@@ -1590,4 +1590,71 @@ $plan_rows" "$fixture/n/output.txt"
     )
 fi
 
+if want o; then
+    # ─── 15. a checked install never downgrades; force does (task: §E.3) ───
+    # `-U` of an older archive downgraded the live package and reported
+    # success; `-S` after a reverted pkgrel did the same. Checked mode is
+    # "skip identical-or-not-newer", so the row is a skip naming the
+    # installed version, and only `-Uf` transacts (blind-review 2026-11-11,
+    # distro-maintainer).
+    (
+        set -euo pipefail
+        ws="$fixture/o/ws"
+        db="$fixture/o/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        # A hermetic `vercmp`: the ordering must not depend on the host
+        # having pacman-contrib, and a plain numeric compare is enough for
+        # the two versions this section uses.
+        cat >"$ws/bin/vercmp" <<'STUB'
+#!/usr/bin/env bash
+# 1.0-4 vs 1.0-3: compare the numeric pkgrel tail.
+a=${1##*-}
+b=${2##*-}
+if [ "$a" -gt "$b" ]; then echo 1; elif [ "$a" -lt "$b" ]; then echo -1; else echo 0; fi
+STUB
+        chmod +x "$ws/bin/vercmp"
+        add_package "$ws" regress "$gsa_meta_any" git
+        ver="1.0-3"
+        stage_pkginfo "$fixture/o/stage" regress regress "$ver" 0
+        make_archive "$ws/packages/regress/regress-$ver-any.pkg.tar.zst" "$fixture/o/stage"
+        archive="$ws/packages/regress/regress-$ver-any.pkg.tar.zst"
+        # The live package is NEWER than the archive.
+        pkgdir=$(db_install "$db" regress "1.0-4")
+        touch -d '2030-01-01 00:00:00' "$pkgdir" 2>/dev/null || true
+        export GSA_FAKE_PACMAN_LOG="$fixture/o/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/o/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/o/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+
+        # seam
+        run_engine "$ws" --install-decide checked "$archive"
+        assert_row "$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)" regress skip \
+            'not-newer (0:)?1\.0-4' "a checked install of an older archive is a skip (§E.3)"
+
+        # run: rc 0, zero transactions, the record names the skip
+        run_engine "$ws" -U --state-dir "$fixture/o/state" --config "$ws/pacman.conf" "$archive"
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/o/checked.txt"
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "o: a skip-only -U is rc 0, got $FIXTURE_RC:" "$fixture/o/checked.txt"
+        grep < <(record_section plan) -Eq '^regress skip not-newer (0:)?1\.0-4$' \
+            || fail "o: the plan row must name the not-newer skip: $(record_section plan)" "$fixture/o/checked.txt"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "o: a checked downgrade must not transact:" "$GSA_FAKE_PACMAN_LOG"
+
+        # force still installs it (the documented escape hatch)
+        run_engine "$ws" -Uf --state-dir "$fixture/o/state" --config "$ws/pacman.conf" "$archive"
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/o/force.txt"
+        [ "$FIXTURE_RC" = 0 ] || fail "o: a forced -U is rc 0, got $FIXTURE_RC:" "$fixture/o/force.txt"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 1 ] \
+            || fail "o: -Uf must run exactly one transaction:" "$GSA_FAKE_PACMAN_LOG"
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'
