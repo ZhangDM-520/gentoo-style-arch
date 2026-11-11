@@ -107,6 +107,9 @@ fn run_build_with(
             .map_err(|message| Exit::Usage(format!("--toolchain: {message}")))?;
         gsa_model::toolchain::set_override(toolchain);
     }
+    // The record's wall clock (§H.2 amendment): captured before the first
+    // resolution, so a long preflight is inside the run's span.
+    let run_started = gsa_model::epoch_now();
     // The build-dir answer (a `--build-dir` flag or the prompt's) is written
     // back into this run's invocation so the run record's continuation
     // restates the tree this run actually built into (§J.2/§H.2).
@@ -728,6 +731,7 @@ fn run_build_with(
             map
         },
     });
+    let record_root = root.clone();
     let setup = RunSetup {
         root,
         state_dir: state_dir.clone(),
@@ -839,7 +843,7 @@ fn run_build_with(
             });
         }
     }
-    let record = record::build_run_record(
+    let mut record = record::build_run_record(
         inv,
         &inv.targets,
         &inv.ranges,
@@ -850,6 +854,14 @@ fn run_build_with(
         &run_outcome,
         prefetch_warnings,
     );
+    // Which compiler built this, under which identity, and when (§H.2).
+    let (toolchain, toolchain_identity) = record_toolchain(&graph, &record_root, &selection);
+    record.stamp = gsa_model::RecordStamp {
+        toolchain,
+        toolchain_identity,
+        started: Some(run_started),
+        ended: Some(gsa_model::epoch_now()),
+    };
     // The install-time QA report surface (contract §E.4): report-severity
     // findings over the run's subjects appended to the prose summary
     // (prose-only — the §H.2 choice in `gsa-qa::report`). Install runs only
@@ -888,6 +900,38 @@ fn probe_scratch() -> std::path::PathBuf {
     std::path::PathBuf::from(format!("{}_{}", base.display(), std::process::id()))
 }
 
+/// The record's compiler truth (§H.2 amendment): the family the WHOLE
+/// selection resolved to — `mixed` when recipes disagree — and that family's
+/// build identity when it is uniform. A selection with no resolvable recipe
+/// names no compiler. The identity probe runs once per record, never per row.
+fn record_toolchain(
+    graph: &Graph<'_>,
+    root: &std::path::Path,
+    selection: &Selection,
+) -> (Option<String>, Option<String>) {
+    let mut families = std::collections::BTreeSet::new();
+    for (_, id) in &selection.listed {
+        let Some(idx) = graph.index_of(id.as_str()) else {
+            continue;
+        };
+        let dir = root.join(&graph.record(idx).path);
+        families.insert(prepare::selected_toolchain(
+            id.as_str(),
+            graph.record(idx),
+            &dir,
+        ));
+    }
+    match families.len() {
+        0 => (None, None),
+        1 => {
+            let family = *families.iter().next().expect("one family");
+            let identity = gsa_recipe::toolchain::build_identity(family).ok();
+            (Some(family.as_str().to_string()), identity)
+        }
+        _ => (Some("mixed".to_string()), None),
+    }
+}
+
 /// The `-n` plan rendering (contract §B `--dry-run`) shared by `gsa -S
 /// --dry-run` and `gsa -Su --dry-run`: the pre-dispatch ABI wave check, the
 /// plan prose and the `format: 2` plan record — no mutation, no dispatch.
@@ -895,6 +939,7 @@ pub(crate) fn plan_only(
     ctx: &select::Ctx,
     inv: &Invocation,
     project: &ProjectConfig,
+    root: &std::path::Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
@@ -994,7 +1039,18 @@ pub(crate) fn plan_only(
     } else {
         crate::RC_OK
     };
-    let rec = record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &budget, rc);
+    let mut rec =
+        record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &budget, rc);
+    // A plan names the family it would use; it probes no compiler, so the
+    // identity is `-` — the plan did not build.
+    let (toolchain, _) = record_toolchain(ctx.graph, root, &selection);
+    let now = gsa_model::epoch_now();
+    rec.stamp = gsa_model::RecordStamp {
+        toolchain,
+        toolchain_identity: None,
+        started: Some(now),
+        ended: Some(now),
+    };
     let _ = write!(out, "{}", rec.render_machine());
     Ok(rc)
 }
@@ -1146,6 +1202,9 @@ fn run_update_inner(
         );
         // A dry run renders but never persists (§H.1).
         record.dry_run = inv.dry_run;
+        let now = gsa_model::epoch_now();
+        record.stamp.started = Some(now);
+        record.stamp.ended = Some(now);
         let _ = write!(
             out,
             "{}",
@@ -1166,7 +1225,7 @@ fn run_update_inner(
     }
     if inv.dry_run {
         // The dry run's typed exit owns its rc (a declined prompt is rc 3).
-        return plan_only(&ctx, &update_inv, &project, out, err);
+        return plan_only(&ctx, &update_inv, &project, &root, out, err);
     }
     let mode = if inv.modifiers.contains(&'f') {
         DecideMode::Force
@@ -1860,7 +1919,7 @@ fn emit_refusal_record(
     );
     // A refused run never reached fetch-ahead participation (owner decision
     // 5: the scalar counts a build run's prefetch advisories only).
-    let record = record::build_run_record(
+    let mut record = record::build_run_record(
         inv,
         &inv.targets,
         &inv.ranges,
@@ -1871,6 +1930,11 @@ fn emit_refusal_record(
         &run_outcome,
         None,
     );
+    // A refused run built nothing: no compiler is named, but the record still
+    // answers WHEN the refusal happened (§H.2 amendment).
+    let now = gsa_model::epoch_now();
+    record.stamp.started = Some(now);
+    record.stamp.ended = Some(now);
     let _ = write!(
         out,
         "{}",

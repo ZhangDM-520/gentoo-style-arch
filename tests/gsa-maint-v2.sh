@@ -726,6 +726,11 @@ if want g; then
             fail "run 1's list row carries its rc/remaining/command: $rows"
         printf '%s\n' "$rows" | awk '$1 == "2" && $3 == "0" && $4 == "0"' | grep -F "gsa" >/dev/null ||
             fail "run 2's list row carries its rc/remaining/command: $rows"
+        # §H.2's record truth, read through the listing: both recorded runs
+        # answer WHEN (epoch seconds; `-` only for a record without a stamp).
+        printf '%s\n' "$rows" | awk '$1 == "1" || $1 == "2"' |
+            grep -Eq 'started=[0-9]+$' ||
+            fail "a recorded run's list row must carry started=<epoch>: $rows"
 
         # --show re-renders one stored record BYTE-IDENTICAL to the block
         # its run emitted (§H.1: persistence is storage of the structure).

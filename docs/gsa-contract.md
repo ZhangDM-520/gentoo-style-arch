@@ -1081,6 +1081,19 @@ Scalars (fixed order): `format` (`2`), `selection-source`, `order`, `lanes`,
 be appended after the fixed set without a format bump. Values never contain a
 newline or a line starting with `--- `.
 
+*Amendment (2026-11-11, record truth).* Four extension scalars name the
+compiler and the wall clock: `toolchain:` (`gcc`/`clang` when the WHOLE
+selection resolved to one family, `mixed` when recipes disagreed, `-` for a
+record that built nothing), `toolchain-identity:` (that family's
+`<family>|<version>|<digest>` identity, rule 6, or `-` — a dry run names the
+family it would use and probes no compiler, so its identity is `-`),
+`started:` and `ended:` (epoch seconds the run began and the record closed;
+`-` when unknown). `-Mh`'s listing row carries `started=<epoch|->`, and
+`--show` re-renders the stored scalars with the rest of the block. Records
+persisted before this amendment deserialize with all four absent and render
+`-`; nothing else in the block moved, so these are additive (§L.2). Pinned by
+`tests/run-record.sh`.
+
 *Amendment (2026-10-14, cutover gap G2 + budget conformance).* Three
 tightenings of this grammar, all code truth (`gsa-model::RunRecord::
 render_machine`, `gsa-model::RunOutcome`, and the strict `format: 2` parser

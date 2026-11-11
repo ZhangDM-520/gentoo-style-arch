@@ -413,6 +413,11 @@ pub fn build_plan_record(
         rc,
         dry_run: true,
         prefetch_warnings: None,
+        stamp: gsa_model::RecordStamp {
+            started: Some(gsa_model::epoch_now()),
+            ended: Some(gsa_model::epoch_now()),
+            ..gsa_model::RecordStamp::default()
+        },
         plan,
         outcomes,
         continuation: Continuation {
@@ -486,6 +491,7 @@ pub fn build_run_record(
         rc: outcome.rc,
         dry_run: false,
         prefetch_warnings,
+        stamp: gsa_model::RecordStamp::default(),
         plan,
         outcomes,
         continuation: Continuation {
@@ -554,6 +560,11 @@ pub fn build_fetch_record(
         // The `prefetch-warnings` scalar belongs to build-run fetch-ahead
         // (owner decision 5); a fetch-only run's verdicts are its rows.
         prefetch_warnings: None,
+        stamp: gsa_model::RecordStamp {
+            started: Some(gsa_model::epoch_now()),
+            ended: Some(gsa_model::epoch_now()),
+            ..gsa_model::RecordStamp::default()
+        },
         plan,
         outcomes,
         continuation: Continuation {
@@ -751,6 +762,11 @@ pub fn build_txn_record(
         rc: outcome.rc,
         dry_run: inv.dry_run,
         prefetch_warnings: None,
+        stamp: gsa_model::RecordStamp {
+            started: Some(gsa_model::epoch_now()),
+            ended: Some(gsa_model::epoch_now()),
+            ..gsa_model::RecordStamp::default()
+        },
         plan,
         outcomes,
         continuation: Continuation {

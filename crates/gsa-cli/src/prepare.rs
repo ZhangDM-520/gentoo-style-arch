@@ -1325,7 +1325,7 @@ mod tests {
 /// planner compares is the one the build will produce. An ambiguous recipe
 /// resolves to the default here; the LANE refuses it with the named message,
 /// which is the surface that can stop a build.
-fn selected_toolchain(
+pub(crate) fn selected_toolchain(
     pkg: &str,
     record: &gsa_model::TopologyRecord,
     recipe_dir: &Path,

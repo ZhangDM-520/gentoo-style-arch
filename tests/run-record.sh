@@ -208,6 +208,22 @@ remaining_matches() {
     [ "$(rr2_scalar outcome <"$fixture/s1.out")" = success ] ||
         fail "outcome wrong: $(rr2_scalar outcome <"$fixture/s1.out")" "$fixture/s1.out"
 
+    # §H.2 amendment (2026-11-11): the record answers WHICH compiler, under
+    # which identity (rule 6), and WHEN. This run really built with the
+    # default family, so the identity is present and the clock is a span.
+    [ "$(rr2_scalar toolchain <"$fixture/s1.out")" = gcc ] ||
+        fail "toolchain scalar wrong: $(rr2_scalar toolchain <"$fixture/s1.out")" "$fixture/s1.out"
+    case "$(rr2_scalar toolchain-identity <"$fixture/s1.out")" in
+    gcc\|*\|*) ;;
+    *) fail "a build record must carry the gcc identity: $(rr2_scalar toolchain-identity <"$fixture/s1.out")" "$fixture/s1.out" ;;
+    esac
+    started=$(rr2_scalar started <"$fixture/s1.out")
+    ended=$(rr2_scalar ended <"$fixture/s1.out")
+    [[ $started =~ ^[0-9]+$ && $ended =~ ^[0-9]+$ ]] ||
+        fail "started/ended must be epoch seconds, got [$started]/[$ended]" "$fixture/s1.out"
+    [ "$ended" -ge "$started" ] ||
+        fail "the record ends before it starts: started=$started ended=$ended" "$fixture/s1.out"
+
     # One plan row and one outcome row per selected package; row sequence
     # agreement with `order:` is the parser's cross-check (§C.5), the field
     # meanings are pinned here.
@@ -570,6 +586,14 @@ EOF
     done
     [ "$(rr2_scalar intensity <"$fixture/s7.out")" = low ] ||
         fail "the plan's intensity scalar must be the resolved profile" "$fixture/s7.out"
+    # A plan NAMES the family it would use and probes no compiler, so the
+    # identity is `-`; its clock is still a span (§H.2 amendment).
+    [ "$(rr2_scalar toolchain <"$fixture/s7.out")" = gcc ] ||
+        fail "a plan must name the family it would use: $(rr2_scalar toolchain <"$fixture/s7.out")" "$fixture/s7.out"
+    [ "$(rr2_scalar toolchain-identity <"$fixture/s7.out")" = - ] ||
+        fail "a plan probes no compiler (identity must be -): $(rr2_scalar toolchain-identity <"$fixture/s7.out")" "$fixture/s7.out"
+    [[ $(rr2_scalar started <"$fixture/s7.out") =~ ^[0-9]+$ ]] ||
+        fail "a plan record still carries started: $(rr2_scalar started <"$fixture/s7.out")" "$fixture/s7.out"
     # The continuation carries the resolved budget: a resumed real run must
     # not fall back to the profile because the plan dropped the request.
     command=$(rr2_continuation command <"$fixture/s7.out")

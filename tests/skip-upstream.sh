@@ -1303,8 +1303,9 @@ grep -Fq $'gsa-vcs-revisions\t2' "$archive.gsa-vcs-revisions" ||
     fail 'the clean rebuild baseline is not manifest format 2'
 
 # workspace cleanup (strength 2) removes every built archive plus its
-# VCS-revision sidecar.
-run_case "$clean_dir/ws-rebuild" -Mcc
+# VCS-revision sidecar. The destroyed-set gate (§B.7) wants --noconfirm for
+# a plan that deletes archives.
+run_case "$clean_dir/ws-rebuild" -Mcc --noconfirm
 expect_success 'workspace cleanup'
 [[ ! -e $archive && ! -e $archive.gsa-vcs-revisions ]] ||
     fail 'workspace cleanup left an archive or its VCS revision record'

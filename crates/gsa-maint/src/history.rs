@@ -51,11 +51,18 @@ pub fn list_rows_with_corrupt(state: &StateRoot) -> Result<(Vec<Row>, Vec<Corrup
             Row::new(
                 (idx + 1).to_string(),
                 &record.outcome,
+                // `started=` is the record's own wall clock (§H.2): the
+                // listing answers "when" without a second side-car.
                 format!(
-                    "{} {} {}",
+                    "{} {} {} started={}",
                     record.rc,
                     record.continuation.remaining.len(),
-                    record.continuation.command
+                    record.continuation.command,
+                    record
+                        .stamp
+                        .started
+                        .map(|epoch| epoch.to_string())
+                        .unwrap_or_else(|| "-".to_string())
                 ),
             )
         })

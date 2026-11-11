@@ -550,9 +550,41 @@ pub struct RunRecord {
     /// no fetch-ahead participation (plan/txn records). Never rows, never a
     /// format bump.
     pub prefetch_warnings: Option<u32>,
+    /// Wall-clock and compiler truth (contract §H.2 additive scalars, owner
+    /// decision 2026-11-11). `#[serde(default)]` keeps every record stored
+    /// before the amendment readable — an absent stamp is "unknown", never
+    /// an error.
+    #[serde(default)]
+    pub stamp: RecordStamp,
     pub plan: Vec<PlanRow>,
     pub outcomes: Vec<OutcomeRow>,
     pub continuation: Continuation,
+}
+
+/// The record's wall-clock and compiler truth (contract §H.2 additive
+/// scalars). Every field is optional: a record that built nothing names no
+/// compiler, and a record persisted before the amendment has no stamp at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordStamp {
+    /// `gcc`/`clang` when the whole selection resolved to ONE family,
+    /// `mixed` when recipes disagreed. `None` renders `-` (no build).
+    pub toolchain: Option<String>,
+    /// That family's build identity (`<family>|<version>|<digest>`, rule 6)
+    /// when the selection is uniform; `None` renders `-`.
+    pub toolchain_identity: Option<String>,
+    /// Epoch seconds when the run began.
+    pub started: Option<i64>,
+    /// Epoch seconds when the record was closed.
+    pub ended: Option<i64>,
+}
+
+/// Wall-clock seconds since the epoch, saturating at 0 (a clock before 1970
+/// is not a run time). The ONE clock the record reads.
+pub fn epoch_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// Machine value sanitation (contract §H.2): a value never contains a
@@ -612,6 +644,19 @@ impl RunRecord {
         if let Some(count) = self.prefetch_warnings {
             out.push_str(&format!("prefetch-warnings: {count}\n"));
         }
+        // Extension scalars (§H.2): a record answers "which compiler, which
+        // identity, when" — `-` is the honest value for a record that did
+        // not build.
+        out.push_str(&format!(
+            "toolchain: {}\n",
+            scalar(self.stamp.toolchain.as_deref().unwrap_or("-"))
+        ));
+        out.push_str(&format!(
+            "toolchain-identity: {}\n",
+            scalar(self.stamp.toolchain_identity.as_deref().unwrap_or("-"))
+        ));
+        out.push_str(&format!("started: {}\n", opt_num(self.stamp.started)));
+        out.push_str(&format!("ended: {}\n", opt_num(self.stamp.ended)));
         out.push_str("--- plan ---\n");
         for row in &self.plan {
             let reason = if row.reason.is_empty() {
@@ -766,6 +811,7 @@ mod tests {
             rc: 0,
             dry_run,
             prefetch_warnings: None,
+            stamp: RecordStamp::default(),
             plan: vec![
                 PlanRow {
                     pkg: id("glib2-git"),

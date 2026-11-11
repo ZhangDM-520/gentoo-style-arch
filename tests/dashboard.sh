@@ -590,6 +590,30 @@ if [ "${GSA_FAKE_DEFER_PACKAGE:-}" = "$id" ]; then exit 99; fi
 printf 'fake makepkg %s\n' "$PWD"
 EOF
     chmod +x "$ws/bin/makepkg"
+    # The prerequisite ids are INSTALLED in a fabricated local DB: §C.3 adds
+    # a build-order prerequisite the SYSTEM lacks, and this section pins
+    # CONSUMER expansion and prose — an installed prerequisite is never
+    # added. (The missing case is `tests/project.sh` §10.)
+    cat >"$ws/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$ws/bin/pacman-conf"
+    for id in failp deferp; do
+        mkdir -p "$fixture/prose-db/local/$id-1-1"
+        {
+            printf '%%NAME%%\n%s\n\n' "$id"
+            printf '%%VERSION%%\n1-1\n\n'
+            printf '%%BASE%%\n%s\n' "$id"
+        } >"$fixture/prose-db/local/$id-1-1/desc"
+        printf '%%FILES%%\n' >"$fixture/prose-db/local/$id-1-1/files"
+    done
+    export GSA_FAKE_DB_PATH="$fixture/prose-db"
     export PATH="$ws/bin:$PATH"
     export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
 

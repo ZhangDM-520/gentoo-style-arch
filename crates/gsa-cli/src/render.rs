@@ -1531,6 +1531,7 @@ mod tests {
             rc: 130,
             dry_run: false,
             prefetch_warnings: None,
+            stamp: gsa_model::RecordStamp::default(),
             plan: Vec::new(),
             outcomes: vec![row(
                 "umbriel-git",

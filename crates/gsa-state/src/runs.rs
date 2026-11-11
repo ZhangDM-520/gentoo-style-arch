@@ -105,6 +105,7 @@ mod tests {
             rc,
             dry_run: false,
             prefetch_warnings: None,
+            stamp: gsa_model::RecordStamp::default(),
             plan: vec![PlanRow {
                 pkg: RecipeId::new(pkg).unwrap(),
                 action: PlanAction::Build,
