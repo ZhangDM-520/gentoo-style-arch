@@ -660,7 +660,10 @@ fn prepare_one(
         }
     }
     if drifted {
-        log.push(identity_state.to_string());
+        // The clean is PER RECIPE (one marker each): name the recipe, or N
+        // cold recipes read as one global event reported N times
+        // (2026-11-11 blind-review finding).
+        log.push(format!("{name}: {identity_state}"));
         drift_clean(recipe_dir, &mut log);
     }
 

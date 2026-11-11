@@ -322,6 +322,11 @@ if [ "$FIXTURE_RC" != 0 ]; then
     fail "initial build failed:" "$fixture/out-one-time-clean.txt"
 fi
 assert_msg one-time-clean 'GCC build identity missing; cleaning cached build artifacts (one-time clean)'
+# The clean is PER RECIPE and the note names it: with several cold recipes
+# the same sentence appears once per recipe, and only the name makes that
+# reading possible (2026-11-11 blind-review finding: two identical lines read
+# as a duplicated global clean).
+assert_msg one-time-clean 'p1: GCC build identity missing'
 assert_record one-time-clean p1
 assert_plan one-time-clean p1 build
 assert_row one-time-clean p1 succeeded 0
