@@ -728,6 +728,41 @@ impl Write for ClosedPipeTolerant<'_> {
     }
 }
 
+/// Read the process argv as UTF-8 texts, refusing a non-UTF-8 element as the
+/// usage class (§G.1 rc 2) every other bad argument gets — naming its
+/// position and lossy text.
+///
+/// argv is bytes on Unix and a path may be any bytes, so a caller that used
+/// `std::env::args()` panicked (rc 101, a Rust backtrace) before a verb was
+/// classified (blind-review 2026-11-11, locale-terminal). The binary entry
+/// point goes through here; nothing has been parsed when it refuses.
+pub fn utf8_argv<I>(raw: I) -> Result<Vec<String>, String>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let mut argv = Vec::new();
+    for (index, arg) in raw.into_iter().enumerate() {
+        match arg.into_string() {
+            Ok(text) => argv.push(text),
+            Err(raw) => {
+                return Err(format!(
+                    "argument {} is not valid UTF-8 ({}): pass a UTF-8 spelling, or set the matching environment input for that path",
+                    index + 1,
+                    raw.to_string_lossy()
+                ));
+            }
+        }
+    }
+    Ok(argv)
+}
+
+/// The process exit code for a usage-class refusal that was never parsed
+/// (the argv decode above): §G.1 rc 2, printed in the standard one-line form.
+pub fn usage_exit(message: &str, err: &mut dyn Write) -> i32 {
+    let _ = writeln!(err, "gsa: {message}");
+    RC_USAGE
+}
+
 /// Run one invocation against the current directory's repository. Returns
 /// the process exit code and writes all output through `out`/`err`.
 pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
@@ -925,6 +960,23 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_argv_refuses_a_non_utf8_element_and_names_it() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let argv = utf8_argv([
+            OsString::from("-Q"),
+            OsString::from_vec(b"/work/st\xffate".to_vec()),
+        ])
+        .expect_err("a non-UTF-8 element must be refused");
+        assert!(argv.contains("argument 2"), "{argv}");
+        assert!(argv.contains("not valid UTF-8"), "{argv}");
+        assert_eq!(
+            utf8_argv([OsString::from("-Q")]).unwrap(),
+            vec!["-Q".to_string()]
+        );
+    }
 
     fn run_capture(args: &[&str]) -> (i32, String, String) {
         let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();

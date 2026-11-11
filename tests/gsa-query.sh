@@ -493,4 +493,43 @@ if [ -z "$only" ] || [ "$only" = k ]; then
     )
 fi
 
+# ── l. a non-UTF-8 argument is a usage error, never a panic ───────────────
+# argv is bytes on Unix (a latin-1 directory name is legal), and
+# `std::env::args()` panicked on any of them — rc 101 with a Rust backtrace,
+# before a verb was classified (blind-review 2026-11-11, locale-terminal).
+if [ -z "$only" ] || [ "$only" = l ]; then
+    (
+        ws="$fixture/l/ws"
+        state="$fixture/l/state"
+        make_workspace "$ws" 1 1 low
+        add_package "$ws" foo "$gsa_meta_any"
+        make_local_db "$fixture/l/db"
+        make_pacman_stubs "$ws/bin" "$fixture/l/db"
+        export PATH="$ws/bin:$PATH"
+        export GSA_FAKE_PACMAN_LOG="$fixture/l/pacman.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        bad_state=$'/work/st\xffate'
+        bad_build=$'/work/bu\xffild'
+        bad_pkg=$'h\xffllo'
+
+        # check_bad WHAT ARG... — the run must answer the usage class, name
+        # the encoding, and never panic.
+        check_bad() {
+            local what=$1
+            shift
+            GSA_CONF="$conf" run_engine_user "$ws" "$@"
+            [ "$FIXTURE_RC" -eq 2 ] \
+                || fail "l: $what must be a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            grep -q 'not valid UTF-8' <<<"$FIXTURE_OUTPUT" \
+                || fail "l: $what must name the encoding problem: $FIXTURE_OUTPUT"
+            if grep -q 'panicked at' <<<"$FIXTURE_OUTPUT"; then
+                fail "l: $what panicked the engine: $FIXTURE_OUTPUT"
+            fi
+        }
+        check_bad "a non-UTF-8 --state-dir" -Q --state-dir "$bad_state"
+        check_bad "a non-UTF-8 --build-dir" -B --build-dir "$bad_build" --dry-run foo
+        check_bad "a non-UTF-8 target" -Sl "$bad_pkg"
+    )
+fi
+
 printf 'gsa-query: PASS\n'
