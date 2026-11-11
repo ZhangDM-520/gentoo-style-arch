@@ -78,6 +78,11 @@ set -euo pipefail
 #      contains an `-M` token. rc classes asserted by exact code: usage 2
 #      (bare `-M`, `-Mc` without selection), refusal 3 (confirmation,
 #      run-in-flight).
+#   k. side-car integrity (rule 71): a truncated `runs/history.jsonl` is
+#      named by `-Mh` (and `--show` refuses rather than renumbering), a
+#      truncated `index/binpkg.jsonl` makes `-Qb` refuse, and `-Ma`'s
+#      `state-integrity` family reports the torn store plus an index row
+#      whose archive is gone — never `clean`.
 #   i. `-Mm` permission split, the build-user fallback run lock (finding
 #      H10): the verb must run as the build user (§B.7) but the state
 #      root's `run.lock` is unopenable to that user — with the state root
@@ -1208,6 +1213,64 @@ $out"
         esac
         [ ! -e "$recipes/.git" ] \
             || fail "j: a report verb must never fetch the store into $recipes"
+    )
+fi
+
+# ─── k. side-car integrity: a torn store is reported, never folded as fact ─
+if want k; then
+    (
+        set -euo pipefail
+        ws="$fixture/k/ws"
+        state="$fixture/k/state"
+        make_workspace "$ws" 1 auto low
+        maint_ws "$ws"
+        add_package "$ws" histone "$gsa_meta_any" git
+        add_package "$ws" histtwo "$gsa_meta_any" git
+
+        # Two real runs seed the history AND the binpkg index.
+        run_engine "$ws" -B --no-prefetch --leaf --state-dir "$state" histone
+        [ "$FIXTURE_RC" = 0 ] || fail "k: seed run 1 rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        run_engine "$ws" -B --no-prefetch --leaf --state-dir "$state" histtwo
+        [ "$FIXTURE_RC" = 0 ] || fail "k: seed run 2 rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+
+        # ── a truncated history is named, and --show refuses ────────────
+        hist="$state/runs/history.jsonl"
+        size=$(/usr/bin/stat -c %s "$hist")
+        /usr/bin/sudo -n truncate -s $((size * 8 / 10)) "$hist"
+        run_engine "$ws" -Mh --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "k: -Mh over a torn history is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F 'corrupt-row runs' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: -Mh must name the torn history line: $FIXTURE_OUTPUT"
+        run_engine "$ws" -Mh --show 1 --state-dir "$state"
+        [ "$FIXTURE_RC" != 0 ] \
+            || fail "k: --show over a damaged history must refuse (ids shift): $FIXTURE_OUTPUT"
+        grep -F 'run history is unreadable' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: --show must name the damage: $FIXTURE_OUTPUT"
+
+        # ── a truncated binpkg index is a refusal, never a fold ─────────
+        index="$state/index/binpkg.jsonl"
+        size=$(/usr/bin/stat -c %s "$index")
+        /usr/bin/sudo -n truncate -s $((size * 7 / 10)) "$index"
+        run_engine "$ws" -Qi histone --state-dir "$state"
+        [ "$FIXTURE_RC" != 0 ] \
+            || fail "k: -Qi over a torn binpkg index must refuse: $FIXTURE_OUTPUT"
+        grep -F 'binpkg index is unreadable' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: -Qi must name the torn index: $FIXTURE_OUTPUT"
+        for verb in -Qb -Q; do
+            run_engine "$ws" "$verb" --state-dir "$state"
+            [ "$FIXTURE_RC" != 0 ] \
+                || fail "k: $verb over a torn binpkg index must refuse: $FIXTURE_OUTPUT"
+            grep -F 'binpkg index is unreadable' <<<"$FIXTURE_OUTPUT" >/dev/null \
+                || fail "k: $verb must name the torn index: $FIXTURE_OUTPUT"
+        done
+
+        # ── -Ma reports the torn index and never calls it clean ─────────
+        run_engine "$ws" -Ma --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "k: -Ma is report-only rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -E '^audit +state-integrity +[1-9]' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: -Ma must report state-integrity findings: $FIXTURE_OUTPUT"
+        grep -F 'corrupt-row index' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: -Ma must name the torn index line: $FIXTURE_OUTPUT"
     )
 fi
 

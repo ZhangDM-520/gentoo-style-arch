@@ -24,6 +24,11 @@
 //!    machinery is not landed) and saying so in its rows.
 //! 7. `installed-pgo` — installed files of PGO-instrumenting recipes still
 //!    carrying a baked profiling destination (`.gcda`/`.profraw` bytes).
+//! 8. `state-integrity` — the side-car's own truth (rule 71): unusable lines
+//!    in the binpkg index, the run history and the kv store, plus every index
+//!    row whose archive is gone, unreadable or no longer the recorded size.
+//!    A store the reader could not use is never "clean", and the audit is the
+//!    one report a user reads to decide whether state is trustworthy.
 //!
 //! Rows: `audit <family> <clean|N finding(s)>` summary, then
 //! `<family> <subject> <detail…>` findings.
@@ -326,7 +331,64 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     let pgo = installed_pgo(ctx);
     push_family(&mut rows, "installed-pgo", pgo);
 
+    let integrity = state_integrity(ctx);
+    push_family(&mut rows, "state-integrity", integrity);
+
     rows
+}
+
+/// The side-car's own truth (rule 71). Three silent-loss classes used to pass
+/// as clean here while `--local-db-check health` named them exactly
+/// (blind-review 2026-11-11, skeptic): a torn `index/binpkg.jsonl` folded as
+/// fact, a truncated `runs/history.jsonl` losing runs, and an index row whose
+/// archive was deleted or truncated. The audit is report-only (§E.4), so this
+/// family REPORTS rather than refuses — but it never calls such a store
+/// clean.
+fn state_integrity(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    match gsa_state::BinpkgIndex::load(ctx.state) {
+        Ok(index) => {
+            for line in &index.corrupt {
+                out.push((format!("{}:{}", line.store, line.line), line.render()));
+            }
+            for row in &index.rows {
+                let path = std::path::Path::new(&row.archive);
+                match std::fs::metadata(path) {
+                    Err(error) => out.push((
+                        row.recipe_id.clone(),
+                        format!(
+                            "archive-unreadable instance={} {} ({error})",
+                            row.instance,
+                            path.display()
+                        ),
+                    )),
+                    Ok(meta) if meta.len() != row.size => out.push((
+                        row.recipe_id.clone(),
+                        format!(
+                            "archive-size-mismatch instance={} {} recorded={} actual={}",
+                            row.instance,
+                            path.display(),
+                            row.size,
+                            meta.len()
+                        ),
+                    )),
+                    Ok(_) => {}
+                }
+            }
+        }
+        Err(error) => out.push(("(index)".to_string(), error.to_string())),
+    }
+    if let Ok((_records, corrupt)) = gsa_state::RunHistory::read(ctx.state) {
+        for line in &corrupt {
+            out.push((format!("{}:{}", line.store, line.line), line.render()));
+        }
+    }
+    if let Ok((_pairs, corrupt)) = gsa_state::Kv::list(ctx.state) {
+        for line in &corrupt {
+            out.push((format!("{}:{}", line.store, line.line), line.render()));
+        }
+    }
+    out
 }
 
 fn push_family(rows: &mut Vec<Row>, family: &str, findings: Vec<(String, String)>) {

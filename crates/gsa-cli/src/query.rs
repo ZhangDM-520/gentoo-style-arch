@@ -54,6 +54,9 @@ pub fn query_binpkg(
     // run unprivileged against a pristine root and report an empty side-car.
     let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
+    if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
+        return Err(message);
+    }
     for row in &index.rows {
         if let Some(wanted) = &wanted {
             if !wanted.contains(&row.recipe_id) {
@@ -113,6 +116,9 @@ pub fn query_probe(
     // run unprivileged against a pristine root and report an empty side-car.
     let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
+    if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
+        return Err(message);
+    }
     for arg in &inv.targets {
         let path = Path::new(arg);
         let row = index.find_archive(path);
@@ -323,6 +329,9 @@ pub fn query_abi(
     // run unprivileged against a pristine root and report an empty side-car.
     let root = StateRoot::open_readonly(&state_dir);
     let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
+    if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
+        return Err(message);
+    }
     let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(root.path()))
         .map_err(|e| e.to_string())?;
     for line in &subs.corrupt {
@@ -479,7 +488,14 @@ fn side_car_index(inv: &Invocation) -> Result<Option<BinpkgIndex>, String> {
     // A query NEVER creates or chowns state (2026-11-11): a -Q verb must
     // run unprivileged against a pristine root and report an empty side-car.
     let root = StateRoot::open_readonly(&state_dir);
-    Ok(Some(BinpkgIndex::load(&root).map_err(|e| e.to_string())?))
+    let index = BinpkgIndex::load(&root).map_err(|e| e.to_string())?;
+    // The side-car columns are presented as fact, so a torn index may not
+    // supply them ("a corrupt index is an error, never a silent skip" — the
+    // rule this function's own header states; blind-review 2026-11-11).
+    if let Some(message) = gsa_state::CorruptLine::refusal(&index.corrupt, "the binpkg index") {
+        return Err(message);
+    }
+    Ok(Some(index))
 }
 
 /// The newest index row for one recipe (rows are registration order = the

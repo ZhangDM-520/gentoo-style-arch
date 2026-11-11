@@ -35,7 +35,15 @@ pub fn records(state: &StateRoot) -> Result<(Vec<RunRecord>, Vec<CorruptLine>), 
 /// stamps). That is the recovery user's only answer to "was a run in flight
 /// when I lost the terminal?" — the history alone cannot answer it.
 pub fn list_rows(state: &StateRoot) -> Result<Vec<Row>, String> {
-    let (records, _corrupt) = records(state)?;
+    list_rows_with_corrupt(state).map(|(rows, _corrupt)| rows)
+}
+
+/// [`list_rows`] carrying the unusable lines the store reader found: an
+/// unreadable line is not an absent one (rule 71), so a listing must never
+/// present the surviving runs as the whole history (blind-review 2026-11-11:
+/// a truncated `runs/history.jsonl` silently lost three runs).
+pub fn list_rows_with_corrupt(state: &StateRoot) -> Result<(Vec<Row>, Vec<CorruptLine>), String> {
+    let (records, corrupt) = records(state)?;
     let mut rows: Vec<Row> = records
         .iter()
         .enumerate()
@@ -67,7 +75,7 @@ pub fn list_rows(state: &StateRoot) -> Result<Vec<Row>, String> {
             ),
         ));
     }
-    Ok(rows)
+    Ok((rows, corrupt))
 }
 
 /// The one run on disk with no history row: `runs/current` names it, its
@@ -175,7 +183,13 @@ fn unfinished_dir(state: &StateRoot, id: &str) -> Option<Unfinished> {
 /// persistence is storage of the same structure — the renderings can never
 /// drift). `run_id` is 1-based over the history.
 pub fn show(state: &StateRoot, run_id: usize) -> Result<String, String> {
-    let (records, _corrupt) = records(state)?;
+    let (records, corrupt) = records(state)?;
+    // Run ids are positions over the history, so an unusable line shifts
+    // every id after it: re-rendering "run 7" from a damaged store could
+    // show a different run (rule 71).
+    if let Some(message) = CorruptLine::refusal(&corrupt, "the run history") {
+        return Err(message);
+    }
     match records.get(run_id.wrapping_sub(1)) {
         Some(record) if run_id > 0 => Ok(record.render_machine()),
         _ => Err(format!(

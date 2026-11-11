@@ -593,8 +593,13 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                 return Ok(finish(result, out, err, "-Mh --prune"));
             }
             if inv.show.is_none() {
-                match gsa_maint::history::list_rows(&state) {
-                    Ok(listed) => rows.extend(listed),
+                match gsa_maint::history::list_rows_with_corrupt(&state) {
+                    Ok((listed, corrupt)) => {
+                        for line in &corrupt {
+                            let _ = writeln!(err, "gsa: note: {}", line.render());
+                        }
+                        rows.extend(listed)
+                    }
                     Err(message) => {
                         let _ = writeln!(err, "gsa: -Mh: {message}");
                         return Ok(RC_REFUSAL);

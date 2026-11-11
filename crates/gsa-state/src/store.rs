@@ -35,6 +35,27 @@ pub struct CorruptLine {
 }
 
 impl CorruptLine {
+    /// The one refusal a READER owes when a store has unusable lines: an
+    /// unreadable line is not an absent one (rule 71), and a surface that
+    /// folded the surviving rows as the whole truth misreported state as
+    /// fact (blind-review 2026-11-11: `-Qb` resurrected pruned rows from a
+    /// truncated index and `-Ma` called it clean).
+    ///
+    /// `None` for an intact store, so the clean path costs one emptiness
+    /// test. The message names every offender and the one probe that
+    /// explains the file.
+    pub fn refusal(corrupt: &[CorruptLine], what: &str) -> Option<String> {
+        if corrupt.is_empty() {
+            return None;
+        }
+        let lines: Vec<String> = corrupt.iter().map(CorruptLine::render).collect();
+        Some(format!(
+            "{what} is unreadable: {} — the surviving rows are not the whole truth, so nothing is reported; inspect it with 'gsa --local-db-check health'{}",
+            lines.join("; "),
+            if corrupt.len() > 1 { " (all offenders listed)" } else { "" }
+        ))
+    }
+
     /// The health-report row (contract §E.2-ish prose: kind name detail…).
     pub fn render(&self) -> String {
         let name = if self.name.is_empty() {
