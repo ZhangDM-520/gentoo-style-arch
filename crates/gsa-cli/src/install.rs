@@ -675,7 +675,13 @@ fn run_upgrade_inner(
                 let recipe_dir = root.join(&record.path);
                 match discover_recipe(&recipe_dir) {
                     Ok(found) => {
-                        if !found.missing.is_empty() || found.mixed_versions {
+                        // ZERO archives is the empty-list class (the `all`
+                        // branch above skips it too): the expectation that
+                        // makes `missing` non-empty must not relabel
+                        // "nothing was built" as a shrunken set.
+                        if !found.candidates.is_empty()
+                            && (!found.missing.is_empty() || found.mixed_versions)
+                        {
                             items.push(Item::Rejected(vec![partial_set_row(
                                 record.id.as_str(),
                                 &recipe_dir,

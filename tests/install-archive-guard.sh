@@ -720,15 +720,18 @@ record_section plan | grep -Fx -- '- noop empty-list' >/dev/null ||
     fail "J: the unknown-version archive must surface as the empty-list noop row: $FIXTURE_OUTPUT"
 [ "$(pacman_mut_count "$ws/pacman.log")" = 0 ] ||
     fail "J: -Ua installed an archive despite its missing version metadata:" "$ws/pacman.log"
-# the sharp half: with a versioned neighbour present, only the neighbour
-# installs — the unversioned archive is never added to the transaction
-make_pkg_archive "$ws/packages/p1/other-2.0.0-1-any.pkg.tar.zst" p1 other 2.0.0 1
+# the sharp half: with a VERSIONED archive of the same output present, only
+# that one installs — the unversioned archive is never added to the
+# transaction. (The neighbour must carry the recipe's own pkgname: discovery
+# is scoped to the recipe's declared names, so an archive with a foreign
+# pkgname is not this recipe's at all — 2026-11-11.)
+make_pkg_archive "$ws/packages/p1/p1-2.0.0-1-any.pkg.tar.zst" p1 p1 2.0.0 1
 : >"$ws/pacman.log"
 run_inst "$ws" -Ua --state-dir "$ws/state-b" --config "$ws/pacman.conf"
 [ "$FIXTURE_RC" = 0 ] || fail "J2: -Ua over one eligible archive must succeed: $FIXTURE_OUTPUT"
 [ "$(txn_count "$ws/pacman.log")" = 1 ] ||
     fail "J2: want exactly one transaction:" "$ws/pacman.log"
-txn_argv "$ws/pacman.log" | grep -F -- 'other-2.0.0-1-any.pkg.tar.zst' >/dev/null ||
+txn_argv "$ws/pacman.log" | grep -F -- 'p1-2.0.0-1-any.pkg.tar.zst' >/dev/null ||
     fail "J2: the eligible archive was not installed:" "$ws/pacman.log"
 if txn_argv "$ws/pacman.log" | grep -F -- 'p1-1.0.0-1-any.pkg.tar.zst' >/dev/null; then
     fail "J2: an unknown-version archive rode along in the transaction:" "$ws/pacman.log"

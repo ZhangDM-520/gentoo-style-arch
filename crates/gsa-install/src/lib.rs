@@ -1069,7 +1069,11 @@ pub fn install_built_package(
 
     // Discovery damage owns the plan: a shrunken set is never installed
     // silently (rule 11; fish `install_plan`'s `_GSA_DISCOVER_REFUSALS`).
-    if !discovered.missing.is_empty() {
+    // ZERO archives is the EMPTY-LIST class, never a shrunken set: the
+    // expectation that makes `missing` non-empty must not relabel "nothing
+    // was built" as "part of the set is missing" (2026-11-11 blind review:
+    // a recipe with no archive reported `partial-set … p1`).
+    if !discovered.candidates.is_empty() && !discovered.missing.is_empty() {
         return Ok((
             vec![row(
                 "-",
