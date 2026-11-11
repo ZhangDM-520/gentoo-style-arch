@@ -688,10 +688,14 @@ impl RunRecord {
             ));
         }
         out.push_str("--- continuation ---\n");
-        out.push_str(&format!(
-            "command: {}\n",
-            scalar(&self.continuation.command)
-        ));
+        // A successful run has nothing to replay, so it omits `command:`
+        // (§H.2): a selection-less `gsa -S` cannot be pasted.
+        if !self.continuation.command.is_empty() {
+            out.push_str(&format!(
+                "command: {}\n",
+                scalar(&self.continuation.command)
+            ));
+        }
         let remaining = self
             .continuation
             .remaining

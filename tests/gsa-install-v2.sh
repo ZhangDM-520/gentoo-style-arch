@@ -537,23 +537,22 @@ $rows"
         grep -Eq '^INFO build-run packages=0 ' <<<"$FIXTURE_OUTPUT" \
             || fail "an empty -Ua must report packages=0: $FIXTURE_OUTPUT"
         # The `-` placeholder is not a package in the CONTINUATION either:
-        # `remaining:` renders the row-derived empty set, and the restated
-        # command carries no trailing `-` (a paste used to exit 2 "unknown
-        # reference '-'"; blind-review finding, 2026-11-11).
+        # `remaining:` renders the row-derived empty set, and an empty plan
+        # with no standalone paths has nothing to replay, so `command:` is
+        # OMITTED (§H.2) — the `-` placeholder never becomes a subject a
+        # paste exits 2 on ("unknown reference '-'"; blind-review
+        # finding, 2026-11-11).
         [ -z "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" ] \
             || fail "an empty -Ua's remaining line must be empty, got: $(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")"
-        case " $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" in
-        *" - ") fail "the continuation must not name the '-' placeholder: $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" ;;
-        esac
+        if grep -q '^command: ' < <(rr2_continuation <<<"$FIXTURE_OUTPUT"); then
+            fail "an empty -Ua plan must omit the continuation command: $(rr2_continuation <<<"$FIXTURE_OUTPUT")"
+        fi
 
         # H3 (argv-scoped §H.2): the run carried the one-shot `-Ua` — the
-        # not-mirrored line lists exactly that spelling (the one the command
-        # drops) and nothing else, and the command never replays it.
+        # not-mirrored line lists exactly that spelling (the one a
+        # continuation command would drop) and nothing else.
         [ "$(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")" = "-Ua" ] ||
             fail "a -Ua run's not-mirrored line must be exactly '-Ua', got: $(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")"
-        case " $(rr2_continuation command <<<"$FIXTURE_OUTPUT") " in
-        *" -Ua "*) fail "the continuation must never replay -Ua (§H.2): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")" ;;
-        esac
 
         # ── the seam touches nothing (§D.1): every stub log above is still
         # empty (the -S park run below uses its own log paths)
@@ -1685,6 +1684,21 @@ if want p; then
         export GSA_FAKE_SPAWN_LOG="$fixture/p/spawn.log"
         : >"$GSA_FAKE_PACMAN_LOG"
 
+        # The continuation restates the root so a paste finds it again. A
+        # dry run leaves everything remaining, so its continuation CARRIES
+        # the command; the real run below succeeds completely and omits it
+        # (§H.2: an empty `remaining:` has nothing to replay).
+        run_engine "$ws" -U --dry-run --build-dir "$build_root" \
+            --state-dir "$fixture/p/state" --config "$ws/pacman.conf" moved
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "p: the -U --build-dir plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "p: the -U --build-dir plan must not transact:" "$GSA_FAKE_PACMAN_LOG"
+        grep < <(rr2_continuation command <<<"$FIXTURE_OUTPUT") -F -- "--build-dir $build_root" >/dev/null \
+            || fail "p: the plan's continuation must mirror --build-dir:" "$FIXTURE_OUTPUT"
+        grep -q '^command: ' < <(rr2_continuation <<<"$FIXTURE_OUTPUT") \
+            || fail "p: a dry-run continuation must carry its command: $FIXTURE_OUTPUT"
+
         # The flag alone finds it: one transaction naming the archive.
         run_engine "$ws" -U --build-dir "$build_root" --state-dir "$fixture/p/state" \
             --config "$ws/pacman.conf" moved
@@ -1699,9 +1713,9 @@ if want p; then
             || fail "p: exactly one transaction, got $(txn_count "$GSA_FAKE_PACMAN_LOG"):" "$GSA_FAKE_PACMAN_LOG"
         txn_argv "$GSA_FAKE_PACMAN_LOG" | grep -F -- "$build_root/pkgs/moved-$ver-any.pkg.tar.zst" >/dev/null \
             || fail "p: the transaction must name the archive under the pinned root:" "$GSA_FAKE_PACMAN_LOG"
-        # The continuation restates the root, so a paste finds it again.
-        grep < <(rr2_continuation command <<<"$FIXTURE_OUTPUT") -F -- "--build-dir $build_root" >/dev/null \
-            || fail "p: the continuation must mirror --build-dir:" "$fixture/p/run.txt"
+        if grep -q '^command: ' < <(rr2_continuation <<<"$FIXTURE_OUTPUT"); then
+            fail "p: a fully successful -U has nothing to replay and omits the command: $(rr2_continuation <<<"$FIXTURE_OUTPUT")"
+        fi
 
         # Without the flag the same discovery is empty — the documented
         # refusal, never a silent success.

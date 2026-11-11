@@ -24,7 +24,7 @@ set -euo pipefail
 # the `--install`/`--forceinstall` flag-EXISTENCE pins (:82-86, :100-108,
 # :227-228) retire — §B.9 drops both spellings — and the kept behaviour (a
 # resume preserves install/force semantics) re-pins as the continuation
-# `command:` family prefix (`gsa -S ` / `gsa -Sf ` / `gsa -B `, §H.2). The
+# `command:` family prefix (`sudo gsa -S ` / `sudo gsa -Sf ` / `sudo gsa -B `, §H.2). The
 # resume command is now DATA (`rr2_continuation command`, §H.2), never a prose
 # grep, and its `remaining:` is cross-checked against the rows-derived set
 # (`rr2_remaining`) instead of being trusted alone. The 'ambient environment'
@@ -186,7 +186,7 @@ run_expecting_failure() {
 dir="$fixture/with-install"
 make_case_workspace "$dir"
 run_expecting_failure "$dir" 'with -S' -S --leaf --fail-fast --config "$dir/pacman.conf"
-if [[ "$RESUME_CMD" != "gsa -S "* ]]; then
+if [[ "$RESUME_CMD" != "sudo gsa -S "* ]]; then
     printf 'with -S: resume command does not restate the install family:\n  %s\n' "$RESUME_CMD" >&2
     exit 1
 fi
@@ -217,11 +217,11 @@ fi
 dir="$fixture/with-forceinstall"
 make_case_workspace "$dir"
 run_expecting_failure "$dir" 'with -Sf' -Sf --leaf --fail-fast --config "$dir/pacman.conf"
-if [[ "$RESUME_CMD" != "gsa -Sf "* ]]; then
+if [[ "$RESUME_CMD" != "sudo gsa -Sf "* ]]; then
     printf 'with -Sf: resume command does not restate the force family:\n  %s\n' "$RESUME_CMD" >&2
     exit 1
 fi
-if [[ "$RESUME_CMD" == "gsa -S "* ]]; then
+if [[ "$RESUME_CMD" == "sudo gsa -S "* ]]; then
     printf 'with -Sf: resume carries both the -S and -Sf spellings:\n  %s\n' \
         "$RESUME_CMD" >&2
     exit 1
@@ -242,11 +242,11 @@ fi
 dir="$fixture/without-install"
 make_case_workspace "$dir"
 run_expecting_failure "$dir" 'without -S' -B --leaf --fail-fast
-if [[ "$RESUME_CMD" == gsa\ -S* ]]; then
+if [[ "$RESUME_CMD" == sudo\ gsa\ -S* ]]; then
     printf 'without -S: resume command invented install semantics:\n  %s\n' "$RESUME_CMD" >&2
     exit 1
 fi
-if [[ "$RESUME_CMD" != "gsa -B "* ]]; then
+if [[ "$RESUME_CMD" != "sudo gsa -B "* ]]; then
     printf 'without -S: resume command does not restate the build-only family:\n  %s\n' \
         "$RESUME_CMD" >&2
     exit 1
@@ -361,7 +361,7 @@ fi
         exit 1
     fi
     RESUME_CMD=$(rr2_continuation command <<<"$RESUME_OUTPUT")
-    if [[ "$RESUME_CMD" != "gsa -S "* ]]; then
+    if [[ "$RESUME_CMD" != "sudo gsa -S "* ]]; then
         printf 'plan refusal: resume command dropped the install family:\n  %s\n' "$RESUME_CMD" >&2
         exit 1
     fi

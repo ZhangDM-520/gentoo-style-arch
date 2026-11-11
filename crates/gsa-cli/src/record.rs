@@ -113,6 +113,16 @@ pub const NOT_MIRRORED: &[&str] = &[
 /// restate the sync, never silently downgrade the spelling to `-Su`), the
 /// one action letter, and the `f` cluster letter — the only modifier that
 /// mirrors.
+/// The continuation's command prefix (§H.2): a run that needed root is
+/// replayed as root from the operator's shell, a read-only plan is not.
+fn command_prefix(inv: &Invocation) -> &'static str {
+    if inv.dry_run {
+        "gsa "
+    } else {
+        "sudo gsa "
+    }
+}
+
 pub fn mirror_verb(inv: &Invocation) -> String {
     let mut verb = String::from(inv.family.as_str());
     if inv.sync_first {
@@ -456,7 +466,7 @@ pub fn build_run_record(
     // the resolved `--lanes`/`--jobs`/`--intensity` values), then the
     // remaining package ids and the `-- <pacman args…>` an install run
     // forwards to its transactions.
-    let mut command = String::from("gsa ");
+    let mut command = String::from(command_prefix(inv));
     command.push_str(&mirror_verb(inv));
     if inv.leaf {
         command.push_str(" --leaf");
@@ -477,6 +487,13 @@ pub fn build_run_record(
         command.push_str(id.as_str());
     }
     command.push_str(&mirror_pacman_args(inv));
+    // A run with nothing left has NO replay: `remaining:` is empty and a
+    // selection-less `gsa -S` is a usage error (§B.1), so the line is
+    // omitted rather than emitting a command that cannot be pasted
+    // (owner decision 2026-11-11).
+    if remaining.is_empty() {
+        command.clear();
+    }
 
     RunRecord {
         selection_source,
@@ -522,7 +539,7 @@ pub fn build_fetch_record(
 ) -> RunRecord {
     let selection_source = selection_source(targets, inv.leaf, ranges);
 
-    let mut command = format!("gsa {}", mirror_verb(inv));
+    let mut command = format!("{}{}", command_prefix(inv), mirror_verb(inv));
     if inv.dry_run {
         // §H.2: `--dry-run` is mirrored — a fetch run's continuation for a
         // dry run reissues the fetch plan, never a surprise real fetch.
@@ -542,6 +559,9 @@ pub fn build_fetch_record(
     for id in &remaining {
         command.push(' ');
         command.push_str(id.as_str());
+    }
+    if remaining.is_empty() {
+        command.clear();
     }
 
     RunRecord {
@@ -709,7 +729,7 @@ pub fn build_txn_record(
     // A `-U` run installs exactly what it names — no consumer expansion.
     let selection_source = selection_source(&source_targets, true, &[]);
 
-    let mut command = String::from("gsa ");
+    let mut command = String::from(command_prefix(inv));
     command.push_str(&mirror_verb(inv));
     // `--dry-run` mirrors (§H.2) — a dry txn run's continuation reissues
     // the decision plan, never a surprise real transaction.
@@ -741,6 +761,9 @@ pub fn build_txn_record(
         }
     }
     command.push_str(&mirror_pacman_args(inv));
+    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
+        command.clear();
+    }
 
     // The empty-list plan carries the `-` placeholder subject (§E.3); it is
     // NOT a package. Keeping it in `order` made an empty `-Ua` report
@@ -1104,7 +1127,7 @@ mod tests {
         );
         assert_eq!(
             record.continuation.command,
-            "gsa -B --fail-fast --state-dir /scratch/state pkg1 pkg2"
+            "sudo gsa -B --fail-fast --state-dir /scratch/state pkg1 pkg2"
         );
         // H3 (argv-scoped): a run whose argv carried no hidden seam lists
         // none — a seam appears in NEITHER the command NOR the line.
@@ -1346,12 +1369,14 @@ mod tests {
             "--register-ignorepkg".to_string(),
         ];
         inv.pacman_args = Some(vec!["--overwrite".to_string(), "*".to_string()]);
+        // One failed row keeps a subject for the continuation: a fully
+        // successful run has nothing to replay (§H.2).
         let outcomes = vec![OutcomeRow {
             pkg: RecipeId::new("pkg1").unwrap(),
-            status: RowStatus::Succeeded,
-            rc: Some(0),
+            status: RowStatus::Failed,
+            rc: Some(1),
             dur: Some(1),
-            reason: "ok".to_string(),
+            reason: "build-failed".to_string(),
         }];
         let run_outcome = gsa_model::RunOutcome::compute(&outcomes, true, false, false);
         let (plan, order) = plan_and_order(&selection(1), PlanAction::BuildInstall);
@@ -1367,6 +1392,8 @@ mod tests {
             None,
         );
         let command = record.continuation.command.clone();
+        // A privileged run replays as root from the operator's shell.
+        assert!(command.starts_with("sudo gsa -S"), "{command}");
         assert!(command.contains("--fail-fast"), "{command}");
         assert!(command.contains("--config /etc/pacman.conf"), "{command}");
         assert!(command.contains("--no-register-ignorepkg"), "{command}");
@@ -1502,22 +1529,24 @@ mod tests {
             decision: Decision::Install,
             reason: "ok".to_string(),
         })];
+        // A failed row keeps a subject for the continuation (§H.2: a
+        // successful run has nothing to replay and omits `command:`).
         let outcomes = vec![OutcomeRow {
             pkg: RecipeId::new("mesa-git").unwrap(),
-            status: RowStatus::Succeeded,
-            rc: Some(0),
+            status: RowStatus::Failed,
+            rc: Some(1),
             dur: Some(2),
-            reason: "ok".to_string(),
+            reason: "install-failed boom".to_string(),
         }];
-        let run_outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let run_outcome = gsa_model::RunOutcome::compute(&outcomes, true, false, false);
         let record = build_txn_record(&inv, &[], plan, outcomes, &run_outcome);
         assert_eq!(record.plan[0].action, PlanAction::Install);
         assert_eq!(record.selection_source, "sets=all leaf=yes range=-");
-        assert_eq!(record.rc, 0);
+        assert_eq!(record.rc, 1);
         // `-Ua` is one-shot (never mirrored); `f` mirrors.
         assert_eq!(record.continuation.not_mirrored, vec!["-Ua".to_string()]);
         assert!(
-            record.continuation.command.starts_with("gsa -Uf"),
+            record.continuation.command.starts_with("sudo gsa -Uf"),
             "{}",
             record.continuation.command
         );
@@ -1639,8 +1668,10 @@ mod tests {
             &run_outcome,
             None,
         );
-        assert_eq!(record.continuation.command, "gsa -Syu");
-        // The full spelling is restated, so nothing is withheld for it.
+        // A successful run has nothing to replay: the command is omitted
+        // rather than emitted selection-less (§H.2, owner decision
+        // 2026-11-11). The full spelling still withholds nothing.
+        assert_eq!(record.continuation.command, "");
         assert!(record.continuation.not_mirrored.is_empty());
     }
 }

@@ -716,16 +716,18 @@ if want g; then
             sed -n '/^--- run record begin ---$/,/^--- run record end ---$/p' >"$fixture/g/emitted2"
         [ -s "$fixture/g/emitted2" ] || fail "run 2 emitted no machine block: $FIXTURE_OUTPUT"
 
-        # The listing shows both runs with their continuations (rc 0,
-        # empty remaining, the restated gsa command).
+        # The listing shows both runs with their continuations. Both runs
+        # succeeded completely, so `remaining:` is empty and the continuation
+        # carries no `command:` (§H.2: nothing to replay) — the row renders
+        # the empty command as `-`.
         run_engine "$ws" -Mh --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "-Mh lists at rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         rows=$(printf '%s\n' "$FIXTURE_OUTPUT")
         [ "$(printf '%s\n' "$rows" | wc -l)" = 2 ] || fail "-Mh must list 2 recorded runs: $rows"
-        printf '%s\n' "$rows" | awk '$1 == "1" && $3 == "0" && $4 == "0"' | grep -F "gsa" >/dev/null ||
-            fail "run 1's list row carries its rc/remaining/command: $rows"
-        printf '%s\n' "$rows" | awk '$1 == "2" && $3 == "0" && $4 == "0"' | grep -F "gsa" >/dev/null ||
-            fail "run 2's list row carries its rc/remaining/command: $rows"
+        printf '%s\n' "$rows" | awk '$1 == "1" && $3 == "0" && $4 == "0" && $5 == "-" { found = 1 } END { exit !found }' ||
+            fail "run 1's list row carries rc/remaining and the empty-command dash: $rows"
+        printf '%s\n' "$rows" | awk '$1 == "2" && $3 == "0" && $4 == "0" && $5 == "-" { found = 1 } END { exit !found }' ||
+            fail "run 2's list row carries rc/remaining and the empty-command dash: $rows"
         # §H.2's record truth, read through the listing: both recorded runs
         # answer WHEN (epoch seconds; `-` only for a record without a stamp).
         printf '%s\n' "$rows" | awk '$1 == "1" || $1 == "2"' |
@@ -889,18 +891,17 @@ source=("git+https://example.invalid/gsrc.git")' git
             fail "the build run must emit a strict format: 2 block: $FIXTURE_OUTPUT"
 
         # Continuation hygiene (H3, argv-scoped §H.2/§L.1): the seeding
-        # build carried no -M spelling or sub-flag, so NEITHER the command
-        # NOR the not-mirrored line may name one — the line lists only the
-        # run's own argv spellings the command does not restate.
+        # build carried no -M spelling or sub-flag, so the not-mirrored line
+        # lists nothing. The build succeeded completely, so there is nothing
+        # to replay and the continuation OMITS `command:` (§H.2).
         nm=$(rr2_continuation not-mirrored <<<"$FIXTURE_OUTPUT")
-        cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
+        if grep -q '^command: ' < <(rr2_continuation <<<"$FIXTURE_OUTPUT"); then
+            fail "a fully successful run must omit the continuation command (§H.2): $(rr2_continuation <<<"$FIXTURE_OUTPUT")"
+        fi
         for token in -Ma -Mc -Mcc -Mccc -Md -Mi -Ml -Mm -Ms -Mw -Mh \
             --fix --prune --backfill --tail --keep --show --add --remove --noconfirm; do
             case " $nm " in
             *" $token "*) fail "continuation not-mirrored must not list $token (the run carried none), got: $nm" ;;
-            esac
-            case " $cmd " in
-            *" $token "*) fail "the continuation must never replay $token (§H.2): $cmd" ;;
             esac
         done
         [ "$nm" = "-" ] ||

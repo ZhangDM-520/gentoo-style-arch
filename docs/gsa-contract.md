@@ -1149,7 +1149,10 @@ already explain a refusal (every candidate rejected before the seam — a
 shrunken split set, a failed discovery) never synthesizes an `empty-list`
 row: `empty-list` belongs to a genuinely empty candidate plan.
 
-Continuation lines: `command:` (the restated invocation), `remaining:` (space-
+Continuation lines: `command:` (the restated invocation — `sudo gsa …` when
+the run needed root, because §B.10's `-S`/`-B`/`-Sw`/`-Sy`/`-Su`/`-Syu`/`-U`
+refuse to run as a plain user, and OMITTED when `remaining:` is empty: a
+selection-less continuation cannot be pasted, §B.1), `remaining:` (space-
 separated package IDs — every row not `succeeded`, in row order: failed,
 parked, deferred, never-started, interrupted — a failed package must rebuild
 before its consumers; the `-` placeholder subject of an empty-list plan is

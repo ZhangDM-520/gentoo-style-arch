@@ -851,7 +851,10 @@ EOF
 
     # re-drive the continuation's command: itself (translated to the current
     # engine argv) — same semantics: the same set, no growth, no upstream x
-    read -ra cmd_argv <<<"${cmd#gsa }"
+    # A privileged run's continuation replays as root (§H.2): strip the
+    # optional `sudo ` before handing the rest to the engine under test.
+    replay=${cmd#sudo }
+    read -ra cmd_argv <<<"${replay#gsa }"
     run_engine "$ws" "${cmd_argv[@]}"
     r_output=$FIXTURE_OUTPUT
     printf '%s\n' "$r_output" >"$fixture/expansion/resume.txt"

@@ -246,15 +246,12 @@ remaining_matches() {
     [ -z "$(remaining_matches "$fixture/s1.out")" ] ||
         fail "a clean run must leave an empty resume set:" "$fixture/s1.out"
 
-    # The continuation mirrors the run's own flags (§H.2) and never the
-    # hidden seams.
-    command=$(rr2_continuation command <"$fixture/s1.out")
-    for flag in '--leaf' '--lanes 1' '--jobs 2' '--intensity low'; do
-        case "$command" in
-        *"$flag"*) ;;
-        *) fail "continuation command dropped '$flag': $command" "$fixture/s1.out" ;;
-        esac
-    done
+    # A successful run has NOTHING to replay: `remaining:` is empty and a
+    # selection-less `gsa -B` cannot be pasted, so the command line is
+    # omitted (§H.2, owner decision 2026-11-11).
+    if rr2_continuation command <"$fixture/s1.out" >/dev/null 2>&1; then
+        fail "a successful run must omit command:, got [$(rr2_continuation command <"$fixture/s1.out")]" "$fixture/s1.out"
+    fi
     # H3 (argv-scoped §H.2): the run's argv carried no hidden seam, so a
     # seam may appear in NEITHER the command NOR the not-mirrored line (the
     # line lists only spellings the command drops — never a roster).
@@ -262,9 +259,6 @@ remaining_matches() {
     for seam in --lane-job --stale-lock-check --install-decide --fetch-job; do
         case " $nm " in
         *" $seam "*) fail "hidden seam $seam must not be listed (the run carried none): $nm" ;;
-        esac
-        case " $command " in
-        *" $seam "*) fail "hidden seam $seam leaked into the command: $command" ;;
         esac
     done
     [ "$nm" = "-" ] ||
@@ -318,6 +312,11 @@ remaining_matches() {
     # The continuation restates the run's flags and ends with the resume set
     # (the fish-era prose suggestion, re-pinned from the record's fields).
     command=$(rr2_continuation command <"$fixture/s2.out")
+    # §H.2: the run needed root (§B.10), so the replay says so.
+    case "$command" in
+    'sudo gsa '*) ;;
+    *) fail "a privileged run's continuation must replay as sudo: $command" "$fixture/s2.out" ;;
+    esac
     for flag in '--leaf' '--fail-fast' '--lanes 1' '--jobs 2' '--intensity low'; do
         case "$command" in
         *"$flag"*) ;;
@@ -553,12 +552,14 @@ EOF
     [ "$FIXTURE_RC" = 0 ] || fail "the mirror-probe run failed: $FIXTURE_OUTPUT"
     printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s6.out"
     record_ok "$fixture/s6.out"
-    command=$(rr2_continuation command <"$fixture/s6.out")
+    # A successful run carries no command line at all (§H.2); the deferred
+    # spellings can therefore only appear in `not-mirrored:` if someone
+    # listed the roster — which H3 forbids.
+    if rr2_continuation command <"$fixture/s6.out" >/dev/null 2>&1; then
+        fail "a successful run must omit command: [$(rr2_continuation command <"$fixture/s6.out")]" "$fixture/s6.out"
+    fi
     nm=$(rr2_continuation not-mirrored <"$fixture/s6.out")
     for flag in --quiet --verbose; do
-        case " $command " in
-        *" $flag"* | *"$flag "*) fail "$flag leaked into the continuation command: $command" ;;
-        esac
         case " $nm " in
         *" $flag "*) fail "$flag must not be listed not-mirrored (the run carried none): $nm" ;;
         esac
@@ -597,6 +598,11 @@ EOF
     # The continuation carries the resolved budget: a resumed real run must
     # not fall back to the profile because the plan dropped the request.
     command=$(rr2_continuation command <"$fixture/s7.out")
+    # A READ-ONLY plan replays unprivileged: no sudo prefix (§B.10).
+    case "$command" in
+    'gsa '*) ;;
+    *) fail "a dry-run plan's continuation must not be privileged: $command" "$fixture/s7.out" ;;
+    esac
     for flag in '--dry-run' '--lanes 3' '--jobs 5' '--intensity low'; do
         case " $command " in
         *" $flag "*) ;;

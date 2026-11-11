@@ -332,6 +332,16 @@ if want c; then
         done
         export GSA_FAKE_BUILD_SECONDS=2
 
+        # A dry run leaves everything remaining, so its continuation carries
+        # the command and must mirror the window knob (§H.2). The real run
+        # below succeeds completely: nothing remains and the line is omitted.
+        run_engine "$ws" -B --dry-run --state-dir "$ws/state" --prefetch-ahead 2 p1
+        [ "$FIXTURE_RC" = 0 ] || fail_out "c: the --dry-run plan is rc 0 (rc $FIXTURE_RC):"
+        case $(rr2_continuation command <<<"$FIXTURE_OUTPUT") in
+        *"--prefetch-ahead 2"*) ;;
+        *) fail "c: the plan's continuation must mirror --prefetch-ahead 2" ;;
+        esac
+
         run_engine "$ws" -B --state-dir "$ws/state" --prefetch-ahead 2 p1
         [ "$FIXTURE_RC" = 0 ] || fail_out "c: the run must succeed (rc $FIXTURE_RC):"
 
@@ -339,11 +349,9 @@ if want c; then
         [ "$max" -le 2 ] || fail "c: more than 2 fetched-but-unstarted packages at once (max $max)" "$GSA_FAKE_FETCH_LOG"
         [ "$max" = 2 ] || fail "c: the window must actually reach its bound of 2 (max $max)" "$GSA_FAKE_FETCH_LOG"
 
-        cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
-        case $cmd in
-        *"--prefetch-ahead 2"*) ;;
-        *) fail "c: the continuation must mirror --prefetch-ahead 2 (got: $cmd)" ;;
-        esac
+        if grep -q '^command: ' < <(rr2_continuation <<<"$FIXTURE_OUTPUT"); then
+            fail "c: a fully successful run has nothing to replay and omits the command (§H.2): $(rr2_continuation <<<"$FIXTURE_OUTPUT")"
+        fi
         assert_no_transactions c
     )
 fi

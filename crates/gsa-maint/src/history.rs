@@ -57,7 +57,11 @@ pub fn list_rows_with_corrupt(state: &StateRoot) -> Result<(Vec<Row>, Vec<Corrup
                     "{} {} {} started={}",
                     record.rc,
                     record.continuation.remaining.len(),
-                    record.continuation.command,
+                    if record.continuation.command.is_empty() {
+                        "-".to_string()
+                    } else {
+                        record.continuation.command.clone()
+                    },
                     record
                         .stamp
                         .started

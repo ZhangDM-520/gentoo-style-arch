@@ -63,7 +63,7 @@ gtk4-git parked - - waits-on-failed
 gimp-git parked - - waits-on-failed
 niri-spicy-git succeeded 0 1450 ok
 --- continuation ---
-command: gsa -S glib2-git gtk4-git gimp-git
+command: sudo gsa -S glib2-git gtk4-git gimp-git
 remaining: glib2-git gtk4-git gimp-git
 not-mirrored: -Mcc -Mccc -Sy
 env-required: GSA_STATE_DIR
@@ -122,7 +122,7 @@ EOF
         || fail "rr2_outcome niri-spicy-git status wrong"
 
     # continuation lines, and derived vs declared resume set
-    [[ $(rr2_continuation command <"$fixture/golden.txt") == "gsa -S glib2-git gtk4-git gimp-git" ]] \
+    [[ $(rr2_continuation command <"$fixture/golden.txt") == "sudo gsa -S glib2-git gtk4-git gimp-git" ]] \
         || fail "rr2_continuation command wrong"
     [[ $(rr2_continuation remaining <"$fixture/golden.txt") == "glib2-git gtk4-git gimp-git" ]] \
         || fail "rr2_continuation remaining wrong"
