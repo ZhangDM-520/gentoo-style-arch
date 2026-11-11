@@ -14,7 +14,8 @@
 //!
 //! Per key the USER layer wins over the system layer, which wins over the
 //! built-ins (locked decision 5). The keys are `project`, `recipe_url`,
-//! `build_dir`, `state_dir`, `recipe_dir`, `srcdest`; an unknown key is an ERROR naming
+//! `build_dir`, `state_dir`, `recipe_dir`, `srcdest`, `extra_cflags`,
+//! `extra_ldflags`; an unknown key is an ERROR naming
 //! file:line — a typo'd key must never silently mean "built-in default". The plan's fifth
 //! key group ("defaults") is deliberately not implemented: the project's
 //! `build-defaults.conf` already owns per-project defaults and a second
@@ -305,13 +306,15 @@ pub fn checkout_roots(
 }
 
 /// The known key roster — one place, reused by the parse error message.
-const KEYS: [&str; 6] = [
+const KEYS: [&str; 8] = [
     "project",
     "recipe_url",
     "build_dir",
     "state_dir",
     "recipe_dir",
     "srcdest",
+    "extra_cflags",
+    "extra_ldflags",
 ];
 
 /// One config layer's values. `None` = the key was not set in this layer
@@ -326,6 +329,31 @@ pub struct GsaConfig {
     /// The makepkg source cache (contract §B.11): the engine owns it now, so a
     /// build domain that was retired from makepkg.conf still has one ladder.
     pub srcdest: Option<PathBuf>,
+    /// Caller compiler flags APPENDED to the composite (`CFLAGS+=` /
+    /// `CXXFLAGS+=`), never replacing what the site body set: the shipped
+    /// flags are a base an operator extends, not a value it loses by editing
+    /// `gsa.conf` (contract §B.11).
+    pub extra_cflags: Option<String>,
+    /// Caller linker flags, appended the same way (`LDFLAGS+=`).
+    pub extra_ldflags: Option<String>,
+}
+
+/// The appended-flag levers from the merged layers (contract §B.11): both
+/// `None` means the composite is the site body alone.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct BuildFlags {
+    pub cflags: Option<String>,
+    pub ldflags: Option<String>,
+}
+
+/// Resolve the two appended-flag levers through the same layer ladder as
+/// every other `gsa.conf` key.
+pub fn extra_build_flags() -> Result<BuildFlags, String> {
+    let cfg = load()?;
+    Ok(BuildFlags {
+        cflags: cfg.extra_cflags,
+        ldflags: cfg.extra_ldflags,
+    })
 }
 
 impl GsaConfig {
@@ -338,6 +366,8 @@ impl GsaConfig {
             state_dir: over.state_dir.or(self.state_dir),
             recipe_dir: over.recipe_dir.or(self.recipe_dir),
             srcdest: over.srcdest.or(self.srcdest),
+            extra_cflags: over.extra_cflags.or(self.extra_cflags),
+            extra_ldflags: over.extra_ldflags.or(self.extra_ldflags),
         }
     }
 }
@@ -376,6 +406,16 @@ pub fn parse_layer(text: &str, origin: &str, home: &Path) -> Result<GsaConfig, S
             "recipe_dir" => cfg.recipe_dir = Some(expand_home(value, home)),
             "srcdest" => cfg.srcdest = Some(expand_home(value, home)),
             "recipe_url" => cfg.recipe_url = Some(value.to_string()),
+            "extra_cflags" | "extra_ldflags" => {
+                // A shell flag list, kept VERBATIM (expanded neither as a
+                // path nor as `~`); the composite single-quotes it.
+                let slot = if key == "extra_cflags" {
+                    &mut cfg.extra_cflags
+                } else {
+                    &mut cfg.extra_ldflags
+                };
+                *slot = Some(value.to_string());
+            }
             _ => unreachable!("KEYS is the roster"),
         }
     }
@@ -953,6 +993,30 @@ mod tests {
         assert_eq!(cfg.build_dir, Some(PathBuf::from("/var/tmp/bd")));
         assert_eq!(cfg.state_dir, Some(PathBuf::from("/home/u")));
         assert_eq!(cfg.recipe_dir, Some(PathBuf::from("/home/u/store")));
+    }
+
+    #[test]
+    fn the_flag_levers_parse_verbatim_and_merge_per_key() {
+        let system = parse_layer(
+            "extra_cflags = -fstack-clash-protection\nextra_ldflags = -Wl,-z,now\n",
+            "s",
+            &home(),
+        )
+        .unwrap();
+        // Flags are shell text, not paths: no `~` expansion, spaces kept.
+        assert_eq!(
+            system.extra_cflags.as_deref(),
+            Some("-fstack-clash-protection")
+        );
+        assert_eq!(system.extra_ldflags.as_deref(), Some("-Wl,-z,now"));
+        let user = parse_layer("extra_cflags = -O2 -pipe\n", "u", &home()).unwrap();
+        let merged = system.merged_with(user);
+        assert_eq!(merged.extra_cflags.as_deref(), Some("-O2 -pipe"));
+        assert_eq!(
+            merged.extra_ldflags.as_deref(),
+            Some("-Wl,-z,now"),
+            "an unset user key falls through"
+        );
     }
 
     #[test]

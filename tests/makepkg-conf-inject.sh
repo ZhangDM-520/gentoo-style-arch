@@ -242,6 +242,45 @@ else
         fail 'G: rustc rejects its own shipped RUSTFLAGS:'$'\n'"$(cat "$fixture/g-rust.log")"
 fi
 
+# ── I. caller flags APPEND to the site body (extra_cflags/extra_ldflags) ─────
+# The shipped flags are a BASE. Before the lever, editing gsa.conf had no way
+# to extend `CFLAGS`/`CXXFLAGS`/`LDFLAGS` — a site body had to replace them
+# (blind review 2026-11-11, F8). The composite appends the caller's text
+# after every site body and the engine block, and the appended text is part
+# of the toolchain identity (rule 6), so editing it forces the one-time clean.
+run_engine "$ws" --build-identity gcc
+[ "$FIXTURE_RC" -eq 0 ] || fail 'I: --build-identity failed before the flags:'$'\n'"$FIXTURE_OUTPUT"
+identity_before=$FIXTURE_OUTPUT
+printf 'extra_cflags = -fstack-clash-protection\n' >>"$conf_dir/gsa.conf"
+printf 'extra_ldflags = -Wl,--build-id=sha1\n' >>"$conf_dir/gsa.conf"
+add_package "$ws" p3
+run_engine "$ws" -B --leaf p3
+[ "$FIXTURE_RC" -eq 0 ] || fail 'I: the build failed after adding extra_cflags:'$'\n'"$FIXTURE_OUTPUT"
+appended=$(grep -n '^# caller flags from gsa.conf' "$composite" | head -n 1 | cut -d: -f1)
+site=$(grep -n "source '$conf_dir/gcc-makepkg.conf'" "$composite" | head -n 1 | cut -d: -f1)
+[ -n "$appended" ] || fail 'I: the composite carries no caller-flag block' "$composite"
+[ "$site" -lt "$appended" ] || fail 'I: the caller flags must follow the site body' "$composite"
+for line in "CFLAGS+='-fstack-clash-protection'" \
+    "CXXFLAGS+='-fstack-clash-protection'" "LDFLAGS+='-Wl,--build-id=sha1'"; do
+    grep -Fq "$line" "$composite" || fail "I: the composite lost '$line'" "$composite"
+done
+# `+=` composes: sourcing yields the site/base flags PLUS the caller's.
+sourced=$(bash --noprofile --norc -c '
+  set +u
+  source "$1" >/dev/null 2>&1
+  printf "%s\n%s\n" "$CFLAGS" "$LDFLAGS"
+' _ "$composite")
+vgrep "$sourced" -Fq -- '-march=native' ||
+    fail 'I: the caller tail replaced the shipped CFLAGS instead of extending:'$'\n'"$sourced"
+vgrep "$sourced" -Fq -- '-fstack-clash-protection' ||
+    fail 'I: the caller CFLAGS never reached the composite:'$'\n'"$sourced"
+vgrep "$sourced" -Fq -- '-Wl,--build-id=sha1' ||
+    fail 'I: the caller LDFLAGS never reached the composite:'$'\n'"$sourced"
+run_engine "$ws" --build-identity gcc
+[ "$FIXTURE_RC" -eq 0 ] || fail 'I: --build-identity failed after the flags:'$'\n'"$FIXTURE_OUTPUT"
+[ "$FIXTURE_OUTPUT" != "$identity_before" ] ||
+    fail "I: extra_cflags did not move the toolchain identity: $identity_before"
+
 # ── H. --print-conf IS the body the composite carries ───────────────────────
 for family in gcc clang; do
     composite_file="$composite"

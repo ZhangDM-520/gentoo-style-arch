@@ -799,6 +799,26 @@ pub fn select(
     }
 }
 
+/// The `CC`/`CXX` a lane exports for its decided family, or `None` when the
+/// PKGBUILD names a driver itself.
+///
+/// The flag (`--toolchain`) and the topology tag SELECT the family, but a
+/// lane used to configure only the flag body: a recipe that never set a
+/// driver still built with the host's `cc` (often gcc under a clang
+/// selection). Exporting the family's driver makes the decision real; a
+/// PKGBUILD that names its own driver keeps it — overriding a deliberate
+/// `CC=...` would be the same class of surprise in reverse (blind review
+/// 2026-11-11, F).
+pub fn driver_env(family: Toolchain, pkgbuild: &str) -> Option<(&'static str, &'static str)> {
+    if !matches!(infer(pkgbuild), Inference::None) {
+        return None;
+    }
+    match family {
+        Toolchain::Clang => Some(("clang", "clang++")),
+        Toolchain::Gcc => Some(("gcc", "g++")),
+    }
+}
+
 /// Driver markers that pin a family explicitly. Deliberately narrow: a
 /// `clang` entry in `makedepends` is NOT enough (bindgen and BPF helpers need
 /// clang while the C/C++ build stays gcc), so only an explicit driver
@@ -915,6 +935,29 @@ mod selection_tests {
     }
 
     #[test]
+    fn a_decided_family_exports_its_driver_unless_the_recipe_names_one() {
+        // `--toolchain clang` on a driverless recipe: the lane exports the
+        // driver, or the build keeps the host's `cc` (blind review F).
+        assert_eq!(
+            driver_env(Toolchain::Clang, "build() {\n  make\n}\n"),
+            Some(("clang", "clang++"))
+        );
+        assert_eq!(
+            driver_env(Toolchain::Gcc, "build() {\n  make\n}\n"),
+            Some(("gcc", "g++"))
+        );
+        // A recipe that names its own driver keeps it — even the other family.
+        assert_eq!(
+            driver_env(Toolchain::Gcc, "build() {\n  CC=clang make\n}\n"),
+            None
+        );
+        assert_eq!(
+            driver_env(Toolchain::Clang, "build() {\n  CC=gcc make\n}\n"),
+            None
+        );
+    }
+
+    #[test]
     fn two_families_refuse_naming_the_recipe_and_both_markers() {
         let both = "prepare() {\n  CC=clang ./configure\n  CXX=g++ make\n}\n";
         let err = select("demo", None, None, both).unwrap_err();
@@ -1024,7 +1067,12 @@ fn syntax_check(path: &std::path::Path) -> io::Result<()> {
 /// unreadable file is an error, never a silent "absent" (rule 71).
 fn digest_of(toolchain: Toolchain, sources: &[std::path::PathBuf]) -> io::Result<String> {
     use sha2::{Digest, Sha256};
-    let body = gsa_model::makepkg_conf::render(toolchain, sources);
+    // The gsa.conf appended-flag levers are part of the composite (and of the
+    // effective build), so they are part of the identity: editing
+    // `extra_cflags` forces the one-time clean exactly like a site-body edit.
+    let flags = gsa_model::config::extra_build_flags()
+        .map_err(|e| io::Error::other(format!("cannot resolve gsa.conf build flags: {e}")))?;
+    let body = gsa_model::makepkg_conf::render_with(toolchain, sources, &flags);
     let mut hasher = Sha256::new();
     hasher.update(body.as_bytes());
     for source in sources {

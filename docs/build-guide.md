@@ -643,19 +643,31 @@ counting names. Planning defaults and the intensity formulas live in
 clone) — user wins, per file. Each holds `gsa.conf` (the engine's keys) and
 the per-compiler makepkg bodies `gcc-makepkg.conf` / `clang-makepkg.conf`.
 The keys are `project`, `recipe_url`, `build_dir`, `state_dir`, `recipe_dir`,
-`srcdest`; `~` expands to the build user's home (`SUDO_UID`'s home under
+`srcdest`, `extra_cflags`, `extra_ldflags`; `~` expands to the build user's home (`SUDO_UID`'s home under
 `sudo`). An unknown key or malformed line is an error naming file:line and
 key — never a silent default. `GSA_CONF` replaces the `gsa.conf` layers with
 one file; `GSA_CONF_DIR` replaces the whole directory resolution with one
 directory. Missing files are legal at every rung: the engine's built-in
 bodies are the floor, so an engine upgraded ahead of the recipe still builds.
 
+**Compiler selection.** `--toolchain gcc|clang` (or a record's
+`toolchain=` tag) selects the family AND its driver: the lane exports
+`CC`/`CXX` (`clang`/`clang++` or `gcc`/`g++`) unless the PKGBUILD names a
+driver itself. The per-package log records `toolchain <family> (<rung>)` and,
+when it exported, why.
+
 **The engine owns makepkg's configuration.** Every `makepkg` spawn — build
 lane and `--verifysource` fetch alike — carries
 `--config <build root>/lane-makepkg-<family>.conf`. That composite is the
 built-in universal body, the built-in per-compiler body, then the site files
 (baseline before the user clone), then the engine's own
-`BUILDDIR`/`PKGDIR`/`PKGDEST`/`SRCDEST` and lane job flags. `/etc/makepkg.conf`,
+`BUILDDIR`/`PKGDIR`/`PKGDEST`/`SRCDEST` and lane job flags, and finally the
+caller's appended flags. `extra_cflags`/`extra_ldflags` are the lever to
+EXTEND the shipped flags from `gsa.conf` (e.g.
+`extra_cflags = -fstack-clash-protection`): they emit `CFLAGS+=`,
+`CXXFLAGS+=` and `LDFLAGS+=`, so a site body's base survives, and the
+appended text is part of the toolchain identity — editing it forces the
+one-time clean (rule 6). `/etc/makepkg.conf`,
 `/etc/makepkg.conf.d/*.conf` and `~/.makepkg.conf` are never read. A recipe
 that needs a package-specific flag appends it (`CFLAGS+=" …"`) as before; the
 base values come from the engine.

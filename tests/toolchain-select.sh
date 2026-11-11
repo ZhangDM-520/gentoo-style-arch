@@ -175,4 +175,36 @@ PATH="$empty_bin" run_engine "$ws" -B --leaf --no-sync \
 grep -Fq 'toolchain-unavailable' <<<"$FIXTURE_OUTPUT" ||
     fail "H: the build path accepted an absent compiler (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
 
-printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo, inherited env, absent compiler, build refusal)\n'
+# ── I. a decided family exports its CC/CXX driver ───────────────────────────
+# `--toolchain`/the tag SELECTS the family, but the lane used to configure
+# only the flag body: a driverless recipe still built with the host's `cc`
+# (often gcc under a clang selection). The lane now exports the decided
+# family's driver; a recipe that names its own driver keeps it.
+cat >"$ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'cc=%s cxx=%s\n' "${CC:-}" "${CXX:-}" >>"${GSA_FAKE_DRIVER_LOG:?}"
+id=$(basename "$PWD")
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+exit 0
+EOF
+chmod +x "$ws/bin/makepkg"
+export GSA_FAKE_DRIVER_LOG="$fixture/driver.log"
+: >"$GSA_FAKE_DRIVER_LOG"
+
+add_package "$ws" p8
+run_engine "$ws" -B --leaf --toolchain clang p8
+[ "$FIXTURE_RC" -eq 0 ] || fail 'I: the driverless clang build did not succeed'
+vgrep "$(cat "$GSA_FAKE_DRIVER_LOG")" -Fq 'cc=clang cxx=clang++' ||
+    fail 'I: --toolchain clang did not export CC/CXX:'$'\n'"$(cat "$GSA_FAKE_DRIVER_LOG")"
+: >"$GSA_FAKE_DRIVER_LOG"
+
+add_package "$ws" p9 'build() {
+  CC=gcc make
+}'
+run_engine "$ws" -B --leaf --toolchain clang p9
+[ "$FIXTURE_RC" -eq 0 ] || fail 'I: the declared-driver build did not succeed'
+vgrep "$(cat "$GSA_FAKE_DRIVER_LOG")" -Fq 'cc= cxx=' ||
+    fail 'I: a recipe naming its own driver must keep it (no export):'$'\n'"$(cat "$GSA_FAKE_DRIVER_LOG")"
+
+printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo, inherited env, absent compiler, build refusal, driver export)\n'

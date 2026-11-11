@@ -267,6 +267,22 @@ pub fn lane_conf_name(toolchain: Toolchain) -> String {
 /// `key = value` file, not shell. Universal makepkg settings are overridden in
 /// the per-compiler body, which every lane sources.
 pub fn render(toolchain: Toolchain, sources: &[std::path::PathBuf]) -> String {
+    render_with(toolchain, sources, &crate::config::BuildFlags::default())
+}
+
+/// [`render`] with the caller's `gsa.conf` `extra_cflags`/`extra_ldflags`
+/// appended after every site body. The levers EXTEND the shipped flags
+/// (`CFLAGS+=`/`CXXFLAGS+=`/`LDFLAGS+=`) instead of replacing them: the
+/// shipped base is tuned policy, and an operator edit must not silently drop
+/// `-march=native` or the mold link. `extra_cflags` reaches both C and C++
+/// (a site body expands `CXXFLAGS` from `CFLAGS` at its own assignment, so
+/// appending to CFLAGS alone would miss C++). The appended text is
+/// single-quoted shell, never evaluated.
+pub fn render_with(
+    toolchain: Toolchain,
+    sources: &[std::path::PathBuf],
+    flags: &crate::config::BuildFlags,
+) -> String {
     let mut body = String::new();
     body.push_str("# gsa lane makepkg.conf (generated — do not edit; contract §B.11)\n");
     body.push_str("# Replaces makepkg's own config layering: the engine owns the flags.\n");
@@ -312,6 +328,24 @@ NINJAFLAGS=\"${GSA_LANE_NINJAFLAGS:-$NINJAFLAGS}\"
 export RUSTFLAGS NINJAFLAGS
 ",
     );
+    // The caller's appended flags go LAST, after every site body and the
+    // engine-owned block: the tail is the operator's, and `+=` composes with
+    // whatever the body above assigned (contract §B.11).
+    let mut appended = false;
+    let mut push_flag = |name: &str, value: &Option<String>| {
+        if let Some(value) = value.as_deref().filter(|v| !v.trim().is_empty()) {
+            if !appended {
+                body.push_str(
+                    "# caller flags from gsa.conf (extra_cflags/extra_ldflags) — APPENDED, not replaced:\n",
+                );
+                appended = true;
+            }
+            body.push_str(&format!("{name}+='{}'\n", shell_single_quote(value.trim())));
+        }
+    };
+    push_flag("CFLAGS", &flags.cflags);
+    push_flag("CXXFLAGS", &flags.cflags);
+    push_flag("LDFLAGS", &flags.ldflags);
     body
 }
 
@@ -327,7 +361,8 @@ fn shell_single_quote(value: &str) -> String {
 /// return its path. Idempotent: concurrent lanes write identical bytes.
 pub fn install(root: &std::path::Path, toolchain: Toolchain) -> Result<std::path::PathBuf, String> {
     let (_, sources) = crate::config::makepkg_conf_sources(toolchain)?;
-    let body = render(toolchain, &sources);
+    let flags = crate::config::extra_build_flags()?;
+    let body = render_with(toolchain, &sources, &flags);
     // The fetch path installs the composite BEFORE any lane creates the
     // cache, so the root is materialized here — with the ownership handoff,
     // or the build-user's makepkg could not read its own config.
@@ -380,6 +415,40 @@ mod render_tests {
             .find("PKGEXT='.pkg.tar.zst'\nMAKEFLAGS=")
             .expect("the engine re-asserts PKGEXT after every site file");
         assert!(path < owned, "{body}");
+    }
+
+    #[test]
+    fn caller_flags_are_appended_after_every_body() {
+        let site = std::path::PathBuf::from("/etc/gsa/gcc-makepkg.conf");
+        let flags = crate::config::BuildFlags {
+            cflags: Some("-fstack-clash-protection -pipe".to_string()),
+            ldflags: Some("-Wl,--build-id=sha1".to_string()),
+        };
+        let body = render_with(Toolchain::Gcc, std::slice::from_ref(&site), &flags);
+        let tail = body
+            .find("# caller flags from gsa.conf")
+            .expect("the appended block names its source");
+        let owned = body.find("export RUSTFLAGS NINJAFLAGS").unwrap();
+        assert!(owned < tail, "the caller tail must be last: {body}");
+        // `+=` composes with the body above; it never replaces it.
+        assert!(body.contains("CFLAGS+='-fstack-clash-protection -pipe'"));
+        assert!(
+            body.contains("CXXFLAGS+='-fstack-clash-protection -pipe'"),
+            "a site body expands CXXFLAGS from CFLAGS at its own assignment"
+        );
+        assert!(body.contains("LDFLAGS+='-Wl,--build-id=sha1'"));
+        assert!(
+            !body.contains("CFLAGS=\"-fstack"),
+            "a replacement, not a lever"
+        );
+        // A value carrying a quote stays literal shell text.
+        let flags = crate::config::BuildFlags {
+            cflags: Some("-DVALUE='x'".to_string()),
+            ldflags: None,
+        };
+        let body = render_with(Toolchain::Gcc, &[], &flags);
+        assert!(body.contains(r#"CFLAGS+='-DVALUE='\''x'\'''"#), "{body}");
+        assert!(!body.contains("LDFLAGS+="));
     }
 
     #[test]

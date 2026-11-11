@@ -534,7 +534,7 @@ file. A half-populated directory is legal: a site may tune only `gcc`.
 directory (fixture and hermetic control, like `GSA_STATE_DIR`).
 
 `gsa.conf` keys: `project`, `recipe_url`, `build_dir`, `state_dir`,
-`recipe_dir`, `srcdest`. `~` expands to the build user's home (`SUDO_UID`'s
+`recipe_dir`, `srcdest`, `extra_cflags`, `extra_ldflags`. `~` expands to the build user's home (`SUDO_UID`'s
 home when running under `sudo`, else `HOME`); an unknown key or malformed
 line is an error naming file:line and key — never a silent default (usage
 class, rc 2). The retired `/etc/gsa.conf` is still read (as the LOWEST rung,
@@ -548,7 +548,12 @@ concurrent lanes cannot race it). The composite is, lowest precedence first:
 the built-in universal body, the built-in per-compiler body, every site file
 in source order, then the engine-owned `BUILDDIR`/`PKGDIR`/`PKGDEST`/
 `SRCDEST` and the lane's `MAKEFLAGS`/`NINJAFLAGS` re-asserted from
-`GSA_LANE_*`. `/etc/makepkg.conf`, `/etc/makepkg.conf.d/*.conf` and
+`GSA_LANE_*`, and finally the caller's appended flags (§B.11 lever, 2026-11-11
+F8): `extra_cflags` emits `CFLAGS+=` and `CXXFLAGS+=`, `extra_ldflags` emits
+`LDFLAGS+=` — single-quoted shell, APPENDING to the site body's value rather
+than replacing it (a replacement lever would silently drop the shipped
+`-march=native`/mold tuning). The appended text is part of the composite the
+toolchain identity hashes (rule 6), so editing it forces the one-time clean. `/etc/makepkg.conf`, `/etc/makepkg.conf.d/*.conf` and
 `~/.makepkg.conf` are NEVER sourced (`crates/gsa-model/src/makepkg_conf.rs`).
 `SRCDEST` resolves through the `srcdest` key only — the environment rung and
 both makepkg.conf rungs are retired.
@@ -588,7 +593,11 @@ markers only: `CC=clang`, `CXX=clang++`, `-DCMAKE_C_COMPILER=clang`, … — a
 `clang` makedepend is not evidence), which beats the `gcc` default. Two
 families with no decision REFUSE (lane reason `toolchain-ambiguous`, naming
 the recipe and both markers); the lane records its decision as
-`toolchain <family> (<rung>)` in the per-package log. The build-identity
+`toolchain <family> (<rung>)` in the per-package log. A decided family also
+exports its driver (`CC=clang`/`CXX=clang++`, or `gcc`/`g++`) to the lane
+UNLESS the PKGBUILD names a driver itself — otherwise the flag body selected
+the flags while the recipe still built with the host's `cc` (2026-11-11,
+embedded-cross-compiler F). The build-identity
 marker (§J.1) is `<family>|<compiler version line>|<sha256 of the effective
 config>` — the composite's bytes plus the bytes of every site file it sources,
 because the composite only names those files and a flag edit in `/etc/gsa`

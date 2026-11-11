@@ -172,7 +172,7 @@ fn lane_toolchain(
     pkg: &str,
     record: &gsa_model::TopologyRecord,
     recipe_dir: &Path,
-) -> Result<gsa_recipe::toolchain::SelectedToolchain, String> {
+) -> Result<(gsa_recipe::toolchain::SelectedToolchain, String), String> {
     let over = match std::env::var("GSA_LANE_TOOLCHAIN") {
         Ok(value) if !value.trim().is_empty() => {
             Some(gsa_model::toolchain::Toolchain::parse(value.trim())?)
@@ -180,7 +180,8 @@ fn lane_toolchain(
         _ => None,
     };
     let pkgbuild = std::fs::read_to_string(recipe_dir.join("PKGBUILD")).unwrap_or_default();
-    gsa_recipe::toolchain::select(pkg, over, record.toolchain(), &pkgbuild)
+    let selected = gsa_recipe::toolchain::select(pkg, over, record.toolchain(), &pkgbuild)?;
+    Ok((selected, pkgbuild))
 }
 
 pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
@@ -327,7 +328,7 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     // A decision (the run's --toolchain, the record's tag) always beats the
     // PKGBUILD guess; two families with no decision refuse the lane rather
     // than configure half its build with the wrong flag set.
-    let selected = match lane_toolchain(pkg, record, &recipe_dir) {
+    let (selected, pkgbuild) = match lane_toolchain(pkg, record, &recipe_dir) {
         Ok(selected) => selected,
         Err(message) => {
             let _ = writeln!(err, "gsa --lane-job: {message}");
@@ -368,6 +369,17 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
                 };
             }
         };
+    // A decided family configures its DRIVER too, unless the recipe names one
+    // itself (`gsa_recipe::toolchain::driver_env`): the flag body selects the
+    // flags, but a recipe that never set `CC`/`CXX` would otherwise still
+    // build with the host's `cc`.
+    if let Some((cc, cxx)) = gsa_recipe::toolchain::driver_env(toolchain, &pkgbuild) {
+        let _ = writeln!(
+            &log,
+            "gsa --lane-job: exported CC={cc} CXX={cxx} (the PKGBUILD declares no driver)"
+        );
+        cmd.env("CC", cc).env("CXX", cxx);
+    }
     let log_out = log.try_clone();
     let log_err = log.try_clone();
     cmd.stdin(Stdio::null());
