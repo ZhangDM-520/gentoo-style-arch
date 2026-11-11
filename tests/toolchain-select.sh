@@ -114,6 +114,20 @@ grep -Fq "unknown toolchain 'icx'" <<<"$FIXTURE_OUTPUT" ||
 grep -Fq 'gcc, clang' <<<"$FIXTURE_OUTPUT" ||
     fail 'F: the refusal does not name the alternatives:'$'\n'"$FIXTURE_OUTPUT"
 
+# ── F2. an inherited GSA_LANE_TOOLCHAIN is not a run decision ───────────────
+# The lane child channel is engine OUTPUT (like GSA_BUILD_JOBS). An exported
+# caller value used to build with the other makepkg body while the drift
+# marker kept the old family, so the next default run reused a wrong tree
+# (blind-review 2026-11-11, embedded-cross-compiler F4).
+add_package "$ws" p6
+GSA_LANE_TOOLCHAIN=clang run_engine "$ws" -B --leaf p6
+[ "$FIXTURE_RC" -eq 0 ] || fail 'F2: the build did not succeed'
+want_selection p6 gcc 'the built-in default'
+add_package "$ws" p7
+GSA_LANE_TOOLCHAIN=gcc run_engine "$ws" -B --leaf --toolchain clang p7
+[ "$FIXTURE_RC" -eq 0 ] || fail 'F2: the --toolchain build did not succeed'
+want_selection p7 clang '--toolchain'
+
 # ── G. the marker's identity follows the family ─────────────────────────────
 # `--build-identity` is the seam the drift gate and the fixtures share: the
 # family prefix must match the config the lane was handed.
@@ -161,4 +175,4 @@ PATH="$empty_bin" run_engine "$ws" -B --leaf --no-sync \
 grep -Fq 'toolchain-unavailable' <<<"$FIXTURE_OUTPUT" ||
     fail "H: the build path accepted an absent compiler (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
 
-printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo, absent compiler, build refusal)\n'
+printf 'toolchain-select: PASS (default, scan, tag, flag, ambiguity refusal, typo, inherited env, absent compiler, build refusal)\n'

@@ -639,10 +639,17 @@ fn spawn_lane(setup: &RunSetup, index: usize, jobs: u32) -> Result<Child, String
         .process_group(0);
     // §B.11: the run's --toolchain rides to the lane as engine output, the
     // same way GSA_BUILD_JOBS does, so the lane child resolves the family a
-    // decision already made instead of re-deriving it.
-    if let Some(toolchain) = gsa_model::toolchain::override_value() {
-        cmd.env("GSA_LANE_TOOLCHAIN", toolchain.as_str());
-    }
+    // decision already made instead of re-deriving it. Set ALWAYS — an
+    // inherited caller value (`GSA_LANE_TOOLCHAIN=clang sudo -E gsa -B …`)
+    // otherwise reached the lane with no run decision behind it, built with
+    // the other makepkg body and left the drift marker claiming the old
+    // family (blind-review 2026-11-11, embedded-cross-compiler F4).
+    cmd.env(
+        "GSA_LANE_TOOLCHAIN",
+        gsa_model::toolchain::override_value()
+            .map(|family| family.as_str())
+            .unwrap_or(""),
+    );
     cmd.spawn()
         .map_err(|e| format!("cannot spawn lane for {}: {e}", node.id))
 }
