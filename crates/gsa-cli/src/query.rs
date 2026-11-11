@@ -834,11 +834,34 @@ pub fn query_info(
     if inv.targets.is_empty() {
         return Err("requires at least one reference".to_string());
     }
-    let indices = crate::resolve_records(ctx, &inv.targets, err)?;
-    if indices.is_empty() {
+    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
+    // `-Qi` is MERGED info (§B.3), so an INSTALLED name resolves even when no
+    // recipe owns it: refusing `bash` with "unknown reference (nearest
+    // candidates: a, b)" for a package `-Q` itself just listed made the two
+    // verbs disagree (blind review, 2026-11-11). A token that is neither a
+    // recipe nor installed keeps the unknown-reference error and its hint.
+    let mut indices: Vec<usize> = Vec::new();
+    let mut installed_only: Vec<String> = Vec::new();
+    for token in &inv.targets {
+        match crate::select::resolve_ref(ctx, token, 0) {
+            Ok((found, notes)) => {
+                crate::write_notes(err, &notes);
+                indices.extend(found);
+            }
+            Err(error) => {
+                if db.get(token).is_some() {
+                    installed_only.push(token.clone());
+                } else {
+                    return Err(crate::cmd_error(error.to_string()));
+                }
+            }
+        }
+    }
+    indices.sort_by_key(|&i| ctx.graph.position(i));
+    indices.dedup();
+    if indices.is_empty() && installed_only.is_empty() {
         return Err("no recipes resolved".to_string());
     }
-    let db = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
     let index = side_car_index(inv)?;
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref())?;
     let subs = gsa_abi::Subscriptions::load(&gsa_abi::subscriptions_path(&state_dir))
@@ -934,6 +957,27 @@ pub fn query_info(
                 )
             );
         }
+    }
+    // An installed package no house recipe owns: the pacman fields are the
+    // whole answer, and the block says so instead of pretending a recipe
+    // exists (the `-Q` row that listed it carries the same facts).
+    for name in &installed_only {
+        let Some(pkg) = db.get(name) else { continue };
+        if !first {
+            let _ = writeln!(out);
+        }
+        first = false;
+        let _ = writeln!(out, "Name            : {}", pkg.name);
+        let _ = writeln!(out, "Version         : {}", pkg.version);
+        let _ = writeln!(
+            out,
+            "Recipe          : (not a house recipe — installed package only)"
+        );
+        if let Some(desc) = &pkg.desc {
+            let _ = writeln!(out, "Description     : {desc}");
+        }
+        let _ = writeln!(out, "Provides        : {}", join_or_none(&pkg.provides));
+        let _ = writeln!(out, "Depends On      : {}", join_or_none(&pkg.depends));
     }
     Ok(())
 }

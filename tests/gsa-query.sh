@@ -238,6 +238,24 @@ if [ -z "$only" ] || [ "$only" = b ]; then
             grep -F "$probe" <<<"$FIXTURE_OUTPUT" >/dev/null \
                 || fail "b: the recipe section lost '$probe': $FIXTURE_OUTPUT"
         done
+
+        # An INSTALLED name no recipe owns resolves to its pacman fields:
+        # `-Q` lists `loose`, and `-Qi loose` used to answer "unknown
+        # reference (nearest candidates: foo)" (blind review, 2026-11-11).
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi loose
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "b: -Qi over an installed non-recipe name rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        flat=$(tr -s ' ' <<<"$FIXTURE_OUTPUT")
+        for probe in 'Name : loose' 'Version : 0:3.0-1' 'not a house recipe'; do
+            grep -F "$probe" <<<"$flat" >/dev/null \
+                || fail "b: the installed-only block is missing '$probe': $FIXTURE_OUTPUT"
+        done
+        # A name that is neither a recipe nor installed keeps the hint.
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi nosuchpkg
+        [ "$FIXTURE_RC" -eq 2 ] \
+            || fail "b: -Qi over an unknown name must stay rc 2, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F 'unknown reference' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "b: an unknown name must keep the unknown-reference error: $FIXTURE_OUTPUT"
     )
 fi
 
