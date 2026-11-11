@@ -189,7 +189,12 @@ pub fn sudo_credential_lost(stderr: &str) -> bool {
 /// bounded, never deleted) before the transaction spawns. A stale lock (no
 /// live holder) proceeds untouched.
 fn await_db_lock(db_root: &Path) -> Result<(), String> {
-    crate::register::wait_for_db_lock(db_root)
+    // A lock that turns stale DURING the wait is a refusal, exactly like the
+    // pre-check above: pacman cannot open the database while the file
+    // exists, and proceeding produced pacman's own lock error with retry
+    // advice that could never terminate (blind-review 2026-11-11,
+    // data-center-ops).
+    crate::register::wait_for_db_lock(db_root, crate::register::StalePolicy::Refuse)
 }
 
 /// Run the ONE `pacman -U` transaction for this call, serialized through the

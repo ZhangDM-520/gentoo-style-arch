@@ -258,17 +258,29 @@ fn lock_has_live_holder(lock: &Path) -> bool {
     false
 }
 
+/// What a caller wants when the lock it waited for turns out to be STALE (a
+/// file with no live holder).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StalePolicy {
+    /// Announce and continue: the caller only rewrites a config file and
+    /// never asks pacman to open the database.
+    Proceed,
+    /// Refuse with the deliberate-clear message: the caller is about to
+    /// transact, and pacman refuses to open the database while the file
+    /// exists however idle it is.
+    Refuse,
+}
+
 /// Bounded `db.lck` wait (rule 9/23): a held lock is polled (1s) until it
-/// clears, up to 300s; a stale lock (no live holder) proceeds loudly and is
-/// NEVER touched. Timeout → `Err` (the install refuses).
+/// clears, up to 300s; a stale lock follows `on_stale` and is NEVER touched.
+/// Timeout → `Err` (the install refuses).
 ///
-/// One policy for every pacman caller: the transaction executor waits through
-/// the same helper before spawning `pacman -U`, because registration is not
-/// the only step that can meet a live lock (blind-review finding,
-/// 2026-11-11: an `-U` run with the name already in IgnorePkg fired the
-/// transaction immediately and reported pacman's "you can remove db.lck"
-/// line as the reason).
-pub fn wait_for_db_lock(db_root: &Path) -> Result<(), String> {
+/// One policy per CALLER KIND: registration proceeds (it never opens the
+/// database), the transaction executor refuses. Proceeding in the executor
+/// made pacman fail on the file and the row blame "another package manager …
+/// wait for it to finish" for a lock nobody held — advice that never
+/// terminates (blind-review 2026-11-11, data-center-ops).
+pub fn wait_for_db_lock(db_root: &Path, on_stale: StalePolicy) -> Result<(), String> {
     let lock = db_root.join("db.lck");
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut waiting = false;
@@ -277,11 +289,16 @@ pub fn wait_for_db_lock(db_root: &Path) -> Result<(), String> {
             return Ok(());
         }
         if let Some(stale) = stale_db_lock(db_root) {
-            eprintln!(
-                "gsa: note: stale db.lck at {} (no live holder) — proceeding without touching it",
-                stale.display()
-            );
-            return Ok(());
+            match on_stale {
+                StalePolicy::Refuse => return Err(stale_db_lock_message(&stale)),
+                StalePolicy::Proceed => {
+                    eprintln!(
+                        "gsa: note: stale db.lck at {} (no live holder) — proceeding without touching it",
+                        stale.display()
+                    );
+                    return Ok(());
+                }
+            }
         }
         if !waiting {
             waiting = true;
@@ -448,7 +465,7 @@ pub fn register_ignorepkg(
     }
 
     // The conf rewrite is deferred until the pacman database lock clears.
-    wait_for_db_lock(db_root)?;
+    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
 
     // ~10 names per cumulative `IgnorePkg =` line, in sorted order.
     let mut new_lines: Vec<String> = Vec::new();
@@ -676,7 +693,7 @@ pub fn prune_ignorepkg(
     }
 
     // The conf rewrite is deferred until the pacman database lock clears.
-    wait_for_db_lock(db_root)?;
+    wait_for_db_lock(db_root, StalePolicy::Proceed)?;
 
     // Rewrite: the same section tracking as walk_conf; only in-[options]
     // `IgnorePkg =` assignments change, and only by dropping names.
@@ -771,6 +788,24 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A stale lock is the callers' own policy: registration (a config
+    /// rewrite, no database) proceeds loudly; the transaction executor
+    /// refuses with the deliberate-clear message, because pacman cannot open
+    /// the database while the file exists (blind-review 2026-11-11,
+    /// data-center-ops).
+    #[test]
+    fn a_stale_lock_refuses_the_transaction_policy_and_lets_registration_proceed() {
+        let dir = scratch("stale-policy");
+        let db = dir.join("db");
+        let lock = db.join("db.lck");
+        fs::write(&lock, b"").unwrap();
+        let refused = wait_for_db_lock(&db, StalePolicy::Refuse).unwrap_err();
+        assert!(refused.contains("clear it deliberately"), "{refused}");
+        assert!(refused.contains(&lock.display().to_string()), "{refused}");
+        assert!(wait_for_db_lock(&db, StalePolicy::Proceed).is_ok());
+        assert!(lock.exists(), "the lock is never deleted (rule 23)");
     }
 
     /// A name pacman cannot express refuses BEFORE the write: the file is
