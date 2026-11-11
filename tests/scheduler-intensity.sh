@@ -208,6 +208,23 @@ fi
 PATH="$fixture/bin:$PATH" \
     GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
     run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
+        --intensity turbo "${ids[0]}"
+plan_bad_intensity=$FIXTURE_OUTPUT
+if [[ $FIXTURE_RC -ne 2 ]]; then
+    fail "a plan with an unknown --intensity must be a usage error (rc 2), got rc=$FIXTURE_RC:
+$plan_bad_intensity"
+fi
+# The value names its own source, like the --lanes/--jobs ladder does
+# (blind-review finding, 2026-11-11): GSA_INTENSITY and the config rung
+# already say where the bad value came from; the flag must too.
+if [[ $plan_bad_intensity != *'--intensity:'* ]]; then
+    fail "an unknown --intensity does not name the flag that supplied it:
+$plan_bad_intensity"
+fi
+
+PATH="$fixture/bin:$PATH" \
+    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
+    run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
         --intensity max "${ids[0]}"
 plan_ok=$FIXTURE_OUTPUT
 [[ $FIXTURE_RC == 0 ]] || fail "a valid --dry-run plan failed rc=$FIXTURE_RC:

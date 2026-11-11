@@ -1139,6 +1139,9 @@ fn resolve_budget(
     package_count: usize,
 ) -> Result<Budget, String> {
     let intensity = match &inv.intensity {
+        // The profile error is `Budget::resolve`'s; a flag-supplied value
+        // names its source the way the `--lanes`/`--jobs` ladder does
+        // (blind-review finding, 2026-11-11).
         Some(value) => value.clone(),
         None => crate::resolve_intensity(project)?,
     };
@@ -1161,7 +1164,13 @@ fn resolve_budget(
         )?,
     };
     let facts = budget::host_facts()?;
-    Budget::resolve(&intensity, lanes, jobs, baselines, facts, package_count)
+    Budget::resolve(&intensity, lanes, jobs, baselines, facts, package_count).map_err(|e| {
+        if inv.intensity.is_some() {
+            format!("--intensity: {e}")
+        } else {
+            e
+        }
+    })
 }
 
 /// One parallelism override: the flag, else its env twin, else the
