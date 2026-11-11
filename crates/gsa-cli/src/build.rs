@@ -325,6 +325,7 @@ fn run_build_with(
                 }
             }
             gsa_build::clean::clean_recipe(
+                &root,
                 &recipe_dir,
                 &pkgbase,
                 &outputs,

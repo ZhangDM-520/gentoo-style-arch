@@ -1339,5 +1339,51 @@ if want m; then
     )
 fi
 
+# ─── n. -Mc never deletes outside its root (repository data is a NAME) ─────
+if want n; then
+    (
+        set -euo pipefail
+        ws="$fixture/n/ws"
+        state="$fixture/n/state"
+        build="$fixture/n/cache"
+        make_workspace "$ws" 1 auto low
+        maint_ws "$ws"
+        add_package "$ws" escape "$gsa_meta_any"
+
+        # `pkgbase` comes from committed `.SRCINFO` — repository data, and a
+        # NAME, never a path. `../../victim` used to join into the build root
+        # and delete a sibling cache tree as root (blind review, 2026-11-11).
+        printf 'pkgbase = ../../victim\n\tpkgver = 1.0\n\tpkgrel = 1\n\tarch = any\npkgname = escape\n' \
+            >"$ws/packages/escape/.SRCINFO"
+        victim="$fixture/n/victim"
+        mkdir -p "$victim/src" "$build/build"
+        printf 'survivor\n' >"$victim/src/marker"
+        export GSA_BUILD_DIR="$build"
+
+        run_engine "$ws" -Mc --dry-run --leaf --state-dir "$state" escape
+        [ "$FIXTURE_RC" = 0 ] || fail "n: dry-run rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "keep outside-workspace" >/dev/null \
+            || fail "n: a pkgbase that walks out of the build root must be KEPT: [$FIXTURE_OUTPUT] rc=$FIXTURE_RC"
+        run_engine "$ws" -Mc --leaf --state-dir "$state" escape
+        [ -f "$victim/src/marker" ] \
+            || fail "n: -Mc deleted a tree outside the build root: $FIXTURE_OUTPUT"
+
+        # A symlinked recipe directory moves the delete without a single `..`
+        # component: the recipe's own `src/` resolves outside the workspace.
+        add_package "$ws" linked "$gsa_meta_any"
+        mv "$ws/packages/linked" "$fixture/n/linked-out"
+        ln -s "$fixture/n/linked-out" "$ws/packages/linked"
+        mkdir -p "$fixture/n/linked-out/src"
+        printf 'survivor\n' >"$fixture/n/linked-out/src/marker"
+        run_engine "$ws" -Mc --dry-run --leaf --state-dir "$state" linked
+        [ "$FIXTURE_RC" = 0 ] || fail "n: symlink dry-run rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "keep outside-workspace" >/dev/null \
+            || fail "n: a symlinked recipe tree must be KEPT: [$FIXTURE_OUTPUT] rc=$FIXTURE_RC"
+        run_engine "$ws" -Mc --leaf --state-dir "$state" linked
+        [ -f "$fixture/n/linked-out/src/marker" ] \
+            || fail "n: -Mc followed a symlinked recipe directory: $FIXTURE_OUTPUT"
+    )
+fi
+
 # ─── the fixture never touched the real state root (§J.3) ──────────────────
 assert_varlib_unchanged

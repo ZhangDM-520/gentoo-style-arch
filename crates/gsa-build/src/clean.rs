@@ -32,6 +32,7 @@ pub struct CleanReport {
 /// archive's `.gsa-vcs-revisions` sidecar is pruned exactly when its
 /// archive is (gsa-maint's sidecar class).
 pub fn clean_recipe(
+    workspace_root: &Path,
     recipe_dir: &Path,
     pkgbase: &str,
     outputs: &[String],
@@ -43,6 +44,18 @@ pub fn clean_recipe(
         let Ok(meta) = std::fs::symlink_metadata(&path) else {
             continue;
         };
+        // A symlinked RECIPE directory is the escape this refuses: the join
+        // carries no `..`, yet `remove_dir_all` follows the link and deletes
+        // the target's tree. The guard resolves the path (`gsa_model::guard`,
+        // blind review 2026-11-11).
+        if !gsa_model::guard::delete_allowed(workspace_root, &path) {
+            report.errors.push(format!(
+                "refusing to prune {}: outside {}",
+                path.display(),
+                workspace_root.display()
+            ));
+            continue;
+        }
         let removed = if meta.file_type().is_symlink() {
             std::fs::remove_file(&path)
         } else {
@@ -70,6 +83,16 @@ pub fn clean_recipe(
         );
         for tree in [layout.builddir.join(pkgbase), layout.pkgdir.join(pkgbase)] {
             if !tree.exists() {
+                continue;
+            }
+            // `pkgbase` is committed `.SRCINFO` data: `pkgbase = ../../x`
+            // used to delete a sibling cache tree as root.
+            if !gsa_model::guard::delete_allowed(&layout.root, &tree) {
+                report.errors.push(format!(
+                    "refusing to prune {}: outside {}",
+                    tree.display(),
+                    layout.root.display()
+                ));
                 continue;
             }
             match std::fs::remove_dir_all(&tree) {
@@ -155,7 +178,7 @@ mod tests {
         std::fs::write(recipe.join("PKGBUILD"), "pkgname=pkg1\n").unwrap();
         std::fs::write(recipe.join(".SRCINFO"), "pkgbase = pkg1\n").unwrap();
         let mut report = CleanReport::default();
-        clean_recipe(&recipe, "a", &["a".to_string()], None, &mut report);
+        clean_recipe(&dir, &recipe, "a", &["a".to_string()], None, &mut report);
         assert!(!recipe.join("src").exists());
         assert!(!recipe.join("pkg").exists());
         assert!(!recipe.join("build").exists());
@@ -251,6 +274,7 @@ mod tests {
         );
         let mut report = CleanReport::default();
         clean_recipe(
+            &dir,
             &recipe,
             "python",
             &["python".to_string()],
@@ -303,7 +327,7 @@ mod tests {
         )
         .unwrap();
         let mut report = CleanReport::default();
-        clean_recipe(&recipe, "a", &["a".to_string()], None, &mut report);
+        clean_recipe(&dir, &recipe, "a", &["a".to_string()], None, &mut report);
         assert!(!recipe.join("a-1.0-1-any.pkg.tar.zst").exists());
         assert!(
             !recipe

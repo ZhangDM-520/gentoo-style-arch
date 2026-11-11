@@ -271,7 +271,7 @@ fn source_targets(home: &Path, root: &Path, meta: &RecipeMeta, patterns: &[Strin
             continue;
         }
         let path = home.join(&name);
-        if !path.starts_with(root) {
+        if !gsa_model::guard::delete_allowed(root, &path) {
             continue;
         }
         match source.kind {
@@ -349,7 +349,12 @@ fn run_targets(
             rows.push(protect::keep_row(&shown, "referenced-by-run"));
             continue;
         }
-        if !target.path.starts_with(&target.root) {
+        // Containment is PROVEN, never lexical: a `pkgbase` from committed
+        // `.SRCINFO` may carry `..`, and a symlinked recipe directory moves
+        // `remove_dir_all` outside the workspace without one
+        // (`gsa_model::guard`); both passed `Path::starts_with` and deleted
+        // as root (blind review, 2026-11-11).
+        if !gsa_model::guard::delete_allowed(&target.root, &target.path) {
             rows.push(protect::keep_row(&shown, "outside-workspace"));
             continue;
         }
