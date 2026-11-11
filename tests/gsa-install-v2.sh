@@ -1657,4 +1657,57 @@ STUB
     )
 fi
 
+if want p; then
+    # ─── 16. `-U` reads the build layout a `-B --build-dir` pinned ─────────
+    # `gsa -B --build-dir X` then `gsa -U <ref>` answered rc 2 ("deferred")
+    # for the flag and, without `GSA_BUILD_DIR`, refused `empty-list` — a
+    # message that reads as "everything is current" while the archive sat in
+    # `X/pkgs` (blind-review 2026-11-11, distro-maintainer).
+    (
+        set -euo pipefail
+        ws="$fixture/p/ws"
+        db="$fixture/p/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        add_package "$ws" moved "$gsa_meta_any" git
+        build_root="$fixture/p/build"
+        mkdir -p "$build_root/pkgs"
+        ver="1.0-1"
+        stage_pkginfo "$fixture/p/stage" moved moved "$ver" 0
+        make_archive "$build_root/pkgs/moved-$ver-any.pkg.tar.zst" "$fixture/p/stage"
+        export GSA_FAKE_PACMAN_LOG="$fixture/p/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/p/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/p/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+
+        # The flag alone finds it: one transaction naming the archive.
+        run_engine "$ws" -U --build-dir "$build_root" --state-dir "$fixture/p/state" \
+            --config "$ws/pacman.conf" moved
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/p/run.txt"
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "p: -U --build-dir is rc 0, got $FIXTURE_RC:" "$fixture/p/run.txt"
+        grep < <(record_section plan) -Fq 'moved install ok' \
+            || fail "p: the plan must install the archive under --build-dir: $(record_section plan)" "$fixture/p/run.txt"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 1 ] \
+            || fail "p: exactly one transaction, got $(txn_count "$GSA_FAKE_PACMAN_LOG"):" "$GSA_FAKE_PACMAN_LOG"
+        txn_argv "$GSA_FAKE_PACMAN_LOG" | grep -F -- "$build_root/pkgs/moved-$ver-any.pkg.tar.zst" >/dev/null \
+            || fail "p: the transaction must name the archive under the pinned root:" "$GSA_FAKE_PACMAN_LOG"
+        # The continuation restates the root, so a paste finds it again.
+        grep < <(rr2_continuation command <<<"$FIXTURE_OUTPUT") -F -- "--build-dir $build_root" >/dev/null \
+            || fail "p: the continuation must mirror --build-dir:" "$fixture/p/run.txt"
+
+        # Without the flag the same discovery is empty — the documented
+        # refusal, never a silent success.
+        : >"$GSA_FAKE_PACMAN_LOG"
+        run_engine "$ws" -U --state-dir "$fixture/p/state2" --config "$ws/pacman.conf" moved
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "p: no archive under the default root is a refusal (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "p: an empty-list refusal is pacman-free:" "$GSA_FAKE_PACMAN_LOG"
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'

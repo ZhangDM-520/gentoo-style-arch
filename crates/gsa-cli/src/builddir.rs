@@ -62,6 +62,23 @@ pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), Exit> {
     }
 }
 
+/// Apply ONLY an explicit `--build-dir` — no question, no environment read.
+///
+/// The archive side of the engine (`-U`) discovers the archives a build run
+/// wrote, so it must see the same layout when the build pinned one. Without
+/// this, `gsa -B --build-dir X` followed by `gsa -U <ref>` answered
+/// `empty-list` (reading as "everything is current") while the archive sat in
+/// `X/pkgs` (blind-review 2026-11-11, distro-maintainer). `-U` builds
+/// nothing, so it never asks and never prompts.
+pub fn resolve_flag(inv: &mut Invocation) -> Result<(), Exit> {
+    if let Some(raw) = inv.build_dir.clone() {
+        let root = operator_path(&raw)
+            .map_err(|message| Exit::Usage(format!("--build-dir: {message}")))?;
+        apply(inv, root);
+    }
+    Ok(())
+}
+
 /// `~` expansion plus the one validation a root needs before it becomes
 /// makepkg's `BUILDDIR`: an absolute path. A relative one would resolve
 /// against each lane's recipe directory.

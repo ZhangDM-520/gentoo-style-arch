@@ -217,9 +217,13 @@ behaviour is pinned elsewhere, no fixture changes.
 | `gsa -Ua` | install ALL index-complete archives in the workspace in one transaction (today `-ia`) — the group-install escape hatch: it cannot satisfy install-before-dependents and must never stand in for `-S` on a set whose members depend on each other (`AGENTS.md` rule 11) |
 | `gsa -Uf` | force: bypass the same-version already-installed skip (today `-fi` as applied to installs) |
 
-`-Ua` runs in force mode inherently (no same-version skip), matching today's
-`-ia` pipeline. An empty eligible set is `noop empty-list` under `-Ua` and a
-refusal under `-S` (§E). *Open decision (2026-10-28, I2):* an archive with
+`-U` accepts `--state-dir`, `--build-dir`, `--config`, `--no-register-ignorepkg`
+and `--fail-fast`; `--build-dir` is flag-only here (an install run asks
+nothing) so the archives a `-B --build-dir X` run wrote are found again —
+without it the same `-U` answered `empty-list`, which reads as "everything is
+current" (added 2026-11-11). `-Ua` runs in force mode inherently (no
+same-version skip), matching today's `-ia` pipeline. An empty eligible set is
+`noop empty-list` under `-Ua` and a refusal under `-S` (§E). *Open decision (2026-10-28, I2):* an archive with
 no index row (the unregistered named-path case) stands down at the §J.4 gate
 instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 

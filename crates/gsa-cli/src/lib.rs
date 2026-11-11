@@ -302,7 +302,7 @@ fn classify(inv: &Invocation) -> Disposition {
             ));
         }
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt, --toolchain; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config)"
+            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt, --toolchain; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config, --build-dir)"
         ));
     }
     let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();

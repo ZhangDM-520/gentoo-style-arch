@@ -45,9 +45,13 @@ use crate::{record, render};
 /// The long flags a `-U` install run accepts (contract §B.8): the
 /// install-related modifiers that are real here. The classifier consults
 /// this roster; everything else stays deferred.
-pub const REAL_UPGRADE_FLAGS: [&str; 4] = [
+pub const REAL_UPGRADE_FLAGS: [&str; 5] = [
     "--fail-fast",
     "--state-dir",
+    // The archives `-U` installs live under the build-cache layout, so the
+    // override a `-B`/`-S` pinned must be spellable here too (blind-review
+    // 2026-11-11: `-B --build-dir X` then `-U` answered `empty-list`).
+    "--build-dir",
     "--config",
     "--no-register-ignorepkg",
 ];
@@ -557,6 +561,14 @@ enum Item {
 /// named archives/refs from disk in one transaction; nothing is built.
 /// Returns the process exit code (§G.1).
 pub fn run_upgrade(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    // `--build-dir` is flag-only on this family: an install run pins the
+    // layout it reads, and never asks. The record's continuation mirror then
+    // reads the applied value.
+    let mut owned = inv.clone();
+    let inv = &mut owned;
+    if let Err(exit) = crate::builddir::resolve_flag(inv) {
+        return exit.render(err);
+    }
     exit::render(run_upgrade_inner(inv, out, err), err)
 }
 
