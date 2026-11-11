@@ -527,7 +527,15 @@ $rows"
         printf 'idle|packages/idle|git|\n' >>"$empty/config/topology.conf"
         run_engine "$empty" -Ua --dry-run --state-dir "$fixture/a/state" --config "$empty/pacman.conf"
         [ "$FIXTURE_RC" = 0 ] || fail "an empty -Ua plan is a noop, not a failure (§E.5), got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        assert_row "$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)" - noop 'empty-list' "noop empty-list under -Ua (§E.3)"
+        assert_row "$(printf '%s\n' "$FIXTURE_OUTPUT" | rows_only)" - noop 'empty-list' "noop empty-list under -Ua (§E.3)"        # An empty list plans ZERO packages: the `-` placeholder subject is
+        # a row spelling, never a package, so `packages=` counts real
+        # subjects and `order:` keeps the single empty spelling `-`
+        # (2026-11-11 blind-review finding: `packages=1`).
+        [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "-" ] \
+            || fail "an empty -Ua must record order '-' (§H.2), got '$(rr2_scalar order <<<"$FIXTURE_OUTPUT")'"
+        grep -Eq '^INFO build-run packages=0 ' <<<"$FIXTURE_OUTPUT" \
+            || fail "an empty -Ua must report packages=0: $FIXTURE_OUTPUT"
+
         # H3 (argv-scoped §H.2): the run carried the one-shot `-Ua` — the
         # not-mirrored line lists exactly that spelling (the one the command
         # drops) and nothing else, and the command never replays it.

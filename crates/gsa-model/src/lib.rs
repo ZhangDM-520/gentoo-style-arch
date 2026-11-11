@@ -588,6 +588,13 @@ impl RunRecord {
             .map(|id| id.as_str())
             .collect::<Vec<_>>()
             .join(" ");
+        // An empty order keeps the §H.2 `-` spelling: `order` is never a
+        // blank value, so the strict parser has exactly one empty form.
+        let order = if order.is_empty() {
+            "-".to_string()
+        } else {
+            order
+        };
         out.push_str(&format!("order: {}\n", scalar(&order)));
         out.push_str(&format!("lanes: {}\n", self.lanes.unwrap_or(0)));
         out.push_str(&format!("normal-jobs: {}\n", self.normal_jobs.unwrap_or(0)));

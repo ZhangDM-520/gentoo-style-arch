@@ -675,7 +675,15 @@ pub fn build_txn_record(
     }
     command.push_str(&mirror_pacman_args(inv));
 
-    let order: Vec<RecipeId> = plan.iter().map(|row| row.pkg.clone()).collect();
+    // The empty-list plan carries the `-` placeholder subject (§E.3); it is
+    // NOT a package. Keeping it in `order` made an empty `-Ua` report
+    // `packages=1` while its own row said `noop empty-list` (2026-11-11
+    // blind-review finding). An empty order still renders `order: -`.
+    let order: Vec<RecipeId> = plan
+        .iter()
+        .filter(|row| row.pkg.as_str() != "-")
+        .map(|row| row.pkg.clone())
+        .collect();
     RunRecord {
         selection_source,
         order,
