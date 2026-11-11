@@ -231,7 +231,7 @@ fn classify(inv: &Invocation) -> Disposition {
     // `maint::run`, so the flag gate stands down and the cluster error —
     // the root cause — is what the user reads.
     let maint_gate_stands_down = is_maint && maint::verb_of(inv).is_err();
-    let accepted: Vec<&str> = if is_build_run {
+    let mut accepted: Vec<&str> = if is_build_run {
         let mut flags = build::REAL_BUILD_FLAGS.to_vec();
         flags.extend_from_slice(&SYNC_FLAGS);
         flags
@@ -255,6 +255,17 @@ fn classify(inv: &Invocation) -> Disposition {
     } else {
         Vec::new()
     };
+    // `--state-dir` names the state root the whole process resolves through,
+    // and its env twin (`GSA_STATE_DIR`) is honoured on every spelling — so
+    // refusing the flag on a read-only verb made one input spellable two
+    // ways with two answers (rule 73), and a uniform per-job flag set
+    // (`gsa <verb> --state-dir …`, the natural CI pattern) died rc 2 on
+    // `-Qg`/`-Qs`/`-Ql`/`-Qu`/`-Qt`/`-Sl`/`-Bl` while the same set worked
+    // elsewhere (blind-review 2026-11-11, ci-fleet-operator). A verb that
+    // never opens the state root accepts it inertly.
+    if !accepted.contains(&"--state-dir") {
+        accepted.push("--state-dir");
+    }
     if let Some(flag) = inv
         .deferred_flags
         .iter()

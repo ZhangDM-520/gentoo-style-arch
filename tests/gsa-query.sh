@@ -8,8 +8,8 @@ set -euo pipefail
 # this fixture writes in the §J.4 storage format, and PATH pacman stubs
 # that record their argv.
 #
-# Pinned here (nine ( subshell ) sections, run one alone with
-# GSA_QUERY_ONLY=a…i):
+# Pinned here (( subshell ) sections, run one alone with
+# GSA_QUERY_ONLY=<letter>, the letters being the `if ... only` blocks below):
 #   a. `gsa -Q` lists the INSTALLED packages (never the recipe universe)
 #      with the side-car columns `abi= built= instances=` exactly where an
 #      index row exists (§B.3 "where a side-car row exists");
@@ -417,6 +417,36 @@ if [ -z "$only" ] || [ "$only" = i ]; then
         [ "$FIXTURE_RC" -eq 0 ] || fail "i: rc=$FIXTURE_RC want 0: $FIXTURE_OUTPUT"
         grep -c '^bulk-1 0:1.0-1$' <<<"$FIXTURE_OUTPUT" >/dev/null \
             || fail "i: the complete listing must carry every row: $FIXTURE_OUTPUT"
+    )
+fi
+
+# ── j. `--state-dir` is accepted by every dispatched verb ─────────────────
+# The same per-job flag set must survive read-only verbs: `-Qg -Qs -Ql -Qu
+# -Qt -Sl -Bl` used to answer rc 2 "deferred to a later phase: --state-dir"
+# while `GSA_STATE_DIR` was honoured by all of them, so one input had two
+# answers (rule 73) and CI could not preflight with the flags it builds
+# with (blind-review 2026-11-11, ci-fleet-operator).
+if [ -z "$only" ] || [ "$only" = j ]; then
+    (
+        ws="$fixture/j/ws"
+        state="$fixture/j/state"
+        make_workspace "$ws" 1 1 low
+        add_package "$ws" foo "$gsa_meta_any" git
+        make_local_db "$fixture/j/db"
+        make_pacman_stubs "$ws/bin" "$fixture/j/db"
+        export PATH="$ws/bin:$PATH"
+        export GSA_FAKE_PACMAN_LOG="$fixture/j/pacman.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        for spelling in "-Q" "-Qi foo" "-Qg" "-Qs foo" "-Ql foo" "-Qu" "-Qb" \
+            "-Qr" "-Qt" "-Sl" "-Bl foo" "-B --dry-run foo"; do
+            # shellcheck disable=SC2086 # the spelling is the argv under test
+            GSA_CONF="$conf" run_engine_user "$ws" $spelling --state-dir "$state"
+            [ "$FIXTURE_RC" -eq 0 ] \
+                || fail "j: '$spelling --state-dir' must be accepted (rc 0), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+            if grep -q 'deferred to a later phase' <<<"$FIXTURE_OUTPUT"; then
+                fail "j: '$spelling --state-dir' must not call the flag deferred: $FIXTURE_OUTPUT"
+            fi
+        done
     )
 fi
 

@@ -271,7 +271,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--no-register-ignorepkg` | skip the dynamic IgnorePkg registration an install run performs at archive acceptance; the skip is loud (kept) |
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
 | `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
-| `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR` |
+| `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR`. Accepted by every dispatched spelling, inert where the verb never opens the state root — the env twin is honoured process-wide, so refusing the flag made one input spellable two ways (rule 73) and broke a uniform per-job flag set on `-Qg`/`-Qs`/`-Ql`/`-Qu`/`-Qt`/`-Sl`/`-Bl` |
 | `--toolchain gcc\|clang` | the run's compiler family, selecting which engine-owned makepkg body every lane is given (§B.11); beats a recipe's `toolchain=` tag, which beats the PKGBUILD inference |
 | `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |
 | `--no-build-dir-prompt` | restore the pre-prompt behaviour: resolve the build root silently from the layers above instead of asking on a TTY. Mirrored into the continuation |
