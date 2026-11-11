@@ -511,14 +511,14 @@ The `-M` family is engine-state self-healing only — it never touches `/usr` or
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, recipe-contract lints, installed PGO payload report. Report-only: exit 0, read the report |
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation (logs, stale lane/run artifacts, binpkg index `sha256+size` consistency, side-car rows with no pacman counterpart); `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure of the target `pacman.conf` (`--config PATH`, default `/etc/pacman.conf`): default reports drift, `--prune` removes stale entries, `--backfill` adds missing ones |
-| `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
+| `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune. The live `logs/<pkg>.log` holds one run: a lane start rotates the previous generation to `.log.1` |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (`docs/source-sharing.md`). Build-user-only — never under a root supervisor |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (the `c` cluster letter on `-S`/`-B` does the same first, before the skip check) |
 | `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed |
 | `gsa -Mccc` | prune strength 3: additionally pulled sources — source clones, downloaded tarballs, staging dirs |
 | `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets (`config/sets/`; computed sets are read-only) |
 | `gsa -Mw [--add\|--remove <ref…>]` | the world set (what you explicitly want built) |
-| `gsa -Mh [--prune] [--show <run-id>]` | run history: recorded run records and their continuations; `--show` renders one, `--prune` enforces the bounded retention |
+| `gsa -Mh [--prune] [--show <run-id>]` | run history: recorded run records and their continuations; `--show` renders one, `--prune` keeps the newest 50 finished records plus one resume pointer per selection |
 
 The prune strengths are deliberately pacman's `-Sc`/`-Scc` cache-prune shape.
 `gsa -Mccc` removes downloaded sources, VCS clones, and makepkg staging
@@ -847,7 +847,8 @@ reason never claims more than its row means — a waiver row keeps
 while dispatch continues, and the run still exits non-zero (exit codes §G).
 
 The continuation section has four keys: `command:` (the restated
-invocation), `remaining:` (space-separated package IDs — every row not
+invocation, `sudo gsa …` for a privileged run and OMITTED when `remaining:`
+is empty — a settled run has nothing to replay), `remaining:` (space-separated package IDs — every row not
 `succeeded`, in row order; a failed package must rebuild before its
 consumers), `not-mirrored:` (the flags deliberately not replayed), and
 `env-required:` (ambient variables the resume must set). Which flags are

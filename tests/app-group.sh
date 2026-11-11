@@ -74,8 +74,8 @@ set -euo pipefail
 #     rr2_* in `gsa 7`.
 #   * dry-run records parse through the strict rr2_body reader like every
 #     other `format: 2` block: the §H.2 budget-conformance amendment renders
-#     `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` — for a record
-#     whose run dispatched nothing, and the pins assert those zeros
+#     `lanes`/`normal-jobs`/`core-jobs` as the plan the dry run accepted
+#     (F14) — integer, never `-` — and the pins assert that
 #     (tests/project.sh's early lenient extractor retired with its shape).
 #   * kept-fish sections 5/6 cross-check their prompt anchors against the
 #     scenario-4 listing file ($fixture/o4), which the flip now produces with
@@ -408,11 +408,16 @@ order=$(rr2_scalar order <<<"$FIXTURE_OUTPUT")
 assert_topological "$qt" "$order"
 [ "$(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" = 'sets=@app leaf=no range=-' ] \
     || fail "the non-TTY run did not record expanded selection: $(rr2_scalar selection-source <<<"$FIXTURE_OUTPUT")" "$fixture/o3"
-# §H.2 budget conformance: a record whose run dispatched nothing renders
-# `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-`.
+# §H.2 budget conformance: a plan renders the budget it accepted (F14) —
+# integer scalars ≥ 1, never `-` and never zeros. The values are
+# host-derived, so only the plan's own claim is pinned.
 for budget in lanes normal-jobs core-jobs; do
-    [ "$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")" = 0 ] \
-        || fail "dry-run budget scalar $budget is [$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")], want 0 (§H.2)" "$fixture/o3"
+    value=$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")
+    case $value in
+    '' | *[!0-9]*) fail "dry-run budget scalar $budget is [$value], want a planned integer (§H.2)" "$fixture/o3" ;;
+    esac
+    [ "$value" -ge 1 ] \
+        || fail "dry-run budget scalar $budget is [$value], want the plan it accepted (§H.2/F14)" "$fixture/o3"
 done
 # The count is DATA (the record's rows — the derived set above), never a
 # pinned count; and that set excludes extdep, the non-app workspace package

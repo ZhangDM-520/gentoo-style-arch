@@ -304,7 +304,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--allow-broken-rustc` | skip the rustc sanity probe; escape hatch for runs that compile no Rust (kept) |
 | `--no-register-ignorepkg` | skip the dynamic IgnorePkg registration an install run performs at archive acceptance; the skip is loud (kept) |
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
-| `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin) |
+| `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin; an explicit `--jobs` above the automatic per-lane ceiling is clamped to it, and the clamp is announced — `docs/portability.md`) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR`. Accepted by every dispatched spelling, inert where the verb never opens the state root — the env twin is honoured process-wide, so refusing the flag made one input spellable two ways (rule 73) and broke a uniform per-job flag set on `-Qg`/`-Qs`/`-Ql`/`-Qu`/`-Qt`/`-Sl`/`-Bl` |
 | `--toolchain gcc\|clang` | the run's compiler family, selecting which engine-owned makepkg body every lane is given (§B.11); beats a recipe's `toolchain=` tag, which beats the PKGBUILD inference |
 | `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |
@@ -1110,10 +1110,12 @@ render_machine`, `gsa-model::RunOutcome`, and the strict `format: 2` parser
 parser:
 
 1. **Budget scalars are always non-negative integers.** `lanes`,
-   `normal-jobs` and `core-jobs` render `0` — never `-` — for any record
-   whose run dispatched nothing (dry-run plan records, `-U` transaction
-   records, preflight refusals). `-` remains valid ONLY for a row's
-   `rc`/`dur`.
+   `normal-jobs` and `core-jobs` are integers — never `-`. A record whose
+   run resolved a budget renders that plan (a dry-run plan record, a build
+   record, a pre-dispatch refusal); a record that never resolved one (`-U`
+   transaction records, fetch-only records) renders `0`. (2026-11-11, F14: a
+   dry run used to render `0`, which hid the plan it accepted a budget for.)
+   `-` remains valid ONLY for a row's `rc`/`dur`.
 2. **`selection-source:` grammar** (previously example-only):
    `sets=<targets,…|-> leaf=<yes|no> range=<ranges,…|->`. The `leaf=no`
    VALUE is a value, not a flag spelling — see §B.8's `--leaf` mirroring.
@@ -1359,7 +1361,7 @@ escape flag**, and both are normative here:
 | `/var/lib/gsa/abi/` | ABI token records and subscription records (`consumer\|version\|provider\|token`), the installed-ELF view `-Qr` reads (live, on demand — F3, 2026-10-28), preserved-lib registry (Phase 4 — nothing writes it yet) |
 | `/var/lib/gsa/world`, `/var/lib/gsa/sets/` | the world file and user sets (`config/sets/` remains the committed source; the state root holds the runtime copy) |
 | `/var/lib/gsa/runs/` | run history: one recorded run record per run (the `format: 2` struct), its continuation, and the bounded retention bookkeeping |
-| `/var/lib/gsa/logs/` | per-package build logs (today `.state/logs/`) |
+| `/var/lib/gsa/logs/` | per-package build logs (today `.state/logs/`): `logs/<pkg>.log` is the live log, rotated once to `.log.1` at lane start, so the live file is bounded by one run |
 | `/var/lib/gsa/locks/` | the pacman mutex and run lock |
 | `/var/lib/gsa/toolchains/` | per-recipe toolchain identity records (GCC-identity invalidation, `docs/architecture.md` §4) |
 | `/var/lib/gsa/abi-repair/` | forced-rebuild markers for in-run ABI repair (rule 25(d)) |
@@ -1383,7 +1385,7 @@ event stream:
 | Path | Content |
 | --- | --- |
 | `/var/lib/gsa/runs/current` | a pointer file naming the live run id (atomically replaced at run start; keeps naming the last run after it ends) |
-| `/var/lib/gsa/runs/<run-id>/<pkg>.started` | one line `pid=<pid> epoch=<secs> log-offset=<bytes>` per spawned lane — the log offset is sampled BEFORE the spawn, because `logs/<pkg>.log` is appended across runs and the offset is what makes a tail run-scoped |
+| `/var/lib/gsa/runs/<run-id>/<pkg>.started` | one line `pid=<pid> epoch=<secs> log-offset=<bytes>` per spawned lane — the log offset is sampled BEFORE the spawn; the lane log is rotated at lane start, so the offset is normally `0` and only retains meaning when the rotation was refused |
 | `/var/lib/gsa/runs/<run-id>/run.open` | one line `pid=<supervisor pid> epoch=<secs>`, written at run start: the run's own liveness stamp |
 | `/var/lib/gsa/runs/<run-id>/run.closed` | one line `epoch=<secs>`, written only when the run reached its record |
 | `/var/lib/gsa/runs/<run-id>/run.died` | one line `epoch=<secs>`, stamped by the orphan sweep on a run that has `run.open` but no `run.closed` |
@@ -1403,6 +1405,27 @@ lane_state_markers_and_the_view_tick_land_during_a_run`,
 `lock::tests::a_died_run_keeps_its_markers_and_a_finished_one_is_swept` and
 `tests/gsa-maint-v2.sh`; consumed by the dashboard tails
 (`tests/dashboard-pty.sh` section A).
+
+*Amendment (2026-11-11, log rotation + run-history retention).* Two
+bounded-retention tightenings, both state truth:
+
+- **One lane-log generation.** The supervisor renames `logs/<pkg>.log` to
+  `logs/<pkg>.log.1` (replacing any previous `.1`) immediately before a lane
+  spawns, and samples the log offset afterwards. The live log therefore holds
+  the current run only, and `-Ml --keep` can actually shrink the store (a
+  single append-only file could not be pruned by count). A refused rotation
+  is a loud warning and never a gate: the lane's own append open still
+  decides whether it can log.
+
+- **One resume pointer per selection.** `gsa -Mh --prune` keeps the newest
+  unfinished record for each `selection-source`; older unfinished records for
+  the same selection are superseded (the newer record already names every
+  package that still needs work) and prune with
+  `superseded-resume-pointer remaining-<n>`. A chronic failure can no longer
+  grow the history without bound.
+
+Pinned by `tests/log-ownership.sh`, `tests/run-record.sh` and the
+`gsa-maint` history tests.
 
 ### J.2 What stays with the build user (W4's relocation)
 

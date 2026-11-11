@@ -557,8 +557,9 @@ fn park_marker_path(setup: &RunSetup, index: usize) -> PathBuf {
 
 /// `<run>/<pkg>.started` (ux lane state): one kv line naming the lane
 /// child's pid, its start epoch and the byte offset where this run's log
-/// output starts — `logs/<pkg>.log` is appended across runs
-/// (`gsa_model::log_path`), so the offset is what makes a tail run-scoped.
+/// output starts. The lane log is rotated at lane start, so the offset is
+/// normally `0`; it still makes the tail run-scoped when the rotation was
+/// refused (an unchanged log keeps the previous run's bytes in front).
 /// Written at spawn, before the `Started` event renders. The caller samples
 /// [`log_start_offset`] BEFORE spawning: once the child exists it appends.
 fn write_started(setup: &RunSetup, index: usize, pid: u32, log_offset: u64) -> Result<(), String> {
@@ -573,6 +574,27 @@ fn write_started(setup: &RunSetup, index: usize, pid: u32, log_offset: u64) -> R
         format!("pid={pid} epoch={epoch} log-offset={log_offset}\n"),
     )
     .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Rotate `logs/<pkg>.log` to `.log.1` at lane start (contract §J.1 log
+/// retention): ONE generation aside, replacing any previous `.1`, so the
+/// live log is bounded by the current run and `-Ml --keep` can actually
+/// shrink the store. Best-effort and never a gate — a refused rotation is
+/// announced, the append path then decides whether the lane can log.
+fn rotate_lane_log(setup: &RunSetup, index: usize, err: &mut dyn Write) {
+    let pkg = setup.nodes[index].id.as_str();
+    let log = gsa_model::log_path(&setup.state_dir, pkg);
+    if !log.exists() {
+        return;
+    }
+    let rotated = log.with_extension("log.1");
+    if let Err(error) = std::fs::rename(&log, &rotated) {
+        let _ = writeln!(
+            err,
+            "gsa: warning: cannot rotate build log {}: {error}",
+            log.display()
+        );
+    }
 }
 
 /// The log's size before a lane spawns — the byte where its output starts.
@@ -1307,6 +1329,10 @@ pub fn run(
             } else {
                 setup.budget.normal_jobs
             };
+            // One rotation at lane start (contract §J.1 log retention): the
+            // previous run's output moves to `.log.1` BEFORE this run
+            // appends, so the offset sampled below starts at the fresh file.
+            rotate_lane_log(&setup, index, err);
             // The log offset is sampled BEFORE the spawn: the child appends
             // from its first instruction (ux lane state).
             let log_offset = log_start_offset(&setup, index);

@@ -1,7 +1,7 @@
 //! Run history and log hygiene (contract §J.1/§B.7): run ids are 1-based
 //! history positions, `show` re-renders the stored record unchanged, the
-//! bounded retention keeps unfinished runs forever, and log retention keeps
-//! the newest N files per `<pkg>.log*` stem.
+//! bounded retention keeps the newest unfinished run per selection, and log
+//! retention keeps the newest N files per `<pkg>.log*` stem.
 
 mod common;
 
@@ -110,6 +110,41 @@ fn history_retention_keeps_unfinished_runs() {
     let rows = history::list_rows(&state).unwrap();
     assert_eq!(rows.len(), history::RUN_HISTORY_KEEP + 1);
     assert_eq!(rows.last().unwrap().subject, "51");
+}
+
+#[test]
+fn history_retention_keeps_one_resume_pointer_per_selection() {
+    let fx = Fixture::new("history-superseded");
+    let state = fx.state();
+    // Two failed attempts at the SAME selection (equal `selection-source`),
+    // then one for a different selection. The newer alpha record already
+    // names everything alpha still owes, so the older one is superseded.
+    append_run(&state, &run_record("alpha", &["alpha"]));
+    append_run(&state, &run_record("alpha", &["alpha", "beta"]));
+    append_run(&state, &run_record("beta", &["beta"]));
+
+    let rows = history::prune(&state, true).unwrap();
+    let superseded = common::find_row(&rows, "1", "pruned").expect("older alpha pointer pruned");
+    assert!(
+        superseded.reason.starts_with("superseded-resume-pointer"),
+        "{}",
+        superseded.reason
+    );
+    assert!(
+        common::find_row(&rows, "2", "keep").is_some(),
+        "the newest alpha resume pointer survives"
+    );
+    assert!(
+        common::find_row(&rows, "3", "keep").is_some(),
+        "a different selection keeps its own pointer"
+    );
+    let (records, _) = RunHistory::read(&state).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[0].continuation.remaining.len(),
+        2,
+        "the surviving alpha pointer is the newer, wider one"
+    );
 }
 
 #[test]

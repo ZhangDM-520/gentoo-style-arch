@@ -33,7 +33,10 @@ fail() {
 }
 
 ws=$fixture/ws
-make_workspace "$ws" 2 2 low
+# lanes 2 / jobs 1: the low profile's memory formula (8 threads, 16 GiB,
+# memory_per_job_gib=3 × factor 2.0 ⇒ a 2-job budget split across 2 lanes)
+# resolves one job per lane — an explicit 2 would be clamped (§B.8).
+make_workspace "$ws" 2 1 low
 add_package "$ws" p1 "$gsa_meta_any" git
 add_package "$ws" p2 "$gsa_meta_any" git
 # One core record the selection never names: on install runs it rides the
@@ -193,7 +196,7 @@ echo "B: dumb-TTY human event lines + STATUS hint; --human is a usage error"
 out=$fixture/pipe-human.out
 GSA_FIXTURE_TERM=dumb run_pty 6 "$fixture/state-human" "$out" \
     || fail "the dumb-TTY human run failed (rc=$RC)" "$out"
-grep -Fq '→ started p1 -j2' "$out" \
+grep -Fq '→ started p1 -j1' "$out" \
     || fail "the human event lines are gone:" "$out"
 grep -Eq '  STATUS: lane 1: p1 \([0-9]+s\) \| lane 2: p2 \([0-9]+s\)' "$out" \
     || fail "the 10 s STATUS hint never fired on the human stream:" "$out"

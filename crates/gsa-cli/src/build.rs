@@ -197,7 +197,7 @@ fn run_build_with(
                 out,
                 err,
                 RefusalClass::StartupRefused,
-                || resolve_budget(inv, &project, selection.listed.len()),
+                || resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b),
             ));
         }
     }
@@ -230,14 +230,18 @@ fn run_build_with(
                 out,
                 err,
                 RefusalClass::StartupRefused,
-                || resolve_budget(inv, &project, selection.listed.len()),
+                || resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b),
             ));
         }
     };
     extend_selection(&mut selection, &wave.additions);
 
     // ── resource budget (host-derived; the parallelism line is the truth) ─
-    let budget = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+    let (budget, jobs_warning) =
+        resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+    if let Some(warning) = &jobs_warning {
+        let _ = writeln!(err, "{warning}");
+    }
     // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
     let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
 
@@ -1015,7 +1019,11 @@ pub(crate) fn plan_only(
     // `--jobs`, `--intensity` or env twin is a usage error here too (the
     // plan used to accept it and then the real run refused it), and the
     // record's `intensity` scalar is the value the run would actually use.
-    let budget = resolve_budget(inv, project, selection.listed.len()).map_err(Exit::Usage)?;
+    let (budget, jobs_warning) =
+        resolve_budget(inv, project, selection.listed.len()).map_err(Exit::Usage)?;
+    if let Some(warning) = &jobs_warning {
+        let _ = writeln!(err, "{warning}");
+    }
     let _intensity = budget.intensity;
     // The note counts the POST-PROMPT closure: the prompt filters the
     // selection before the ordinary pipeline runs (§C.4), so its drops are
@@ -1159,7 +1167,7 @@ fn run_update_inner(
     if inv.sync_first && !inv.no_sync && !inv.dry_run {
         let phase = prepare::sync_phase(&root, &graph, &selection, out, err);
         if let Some(exit) = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
-            resolve_budget(inv, &project, selection.listed.len())
+            resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b)
         }) {
             return Err(exit);
         }
@@ -1264,12 +1272,15 @@ fn resolve_prefetch(inv: &Invocation) -> Result<Option<usize>, String> {
 
 /// Resolve the host-derived budget (contract §B.8 / docs/portability.md):
 /// `--lanes`/`--jobs`/`--intensity` beat their env twins, which beat
-/// `config/build-defaults.conf`.
+/// `config/build-defaults.conf`. The second value is the warning an explicit
+/// job count owes when it exceeded the host's automatic ceiling and
+/// [`Budget::resolve`] clamped it — the caller prints it once, next to the
+/// `parallelism:` line it qualifies.
 fn resolve_budget(
     inv: &Invocation,
     project: &ProjectConfig,
     package_count: usize,
-) -> Result<Budget, String> {
+) -> Result<(Budget, Option<String>), String> {
     let intensity = match &inv.intensity {
         // The profile error is `Budget::resolve`'s; a flag-supplied value
         // names its source the way the `--lanes`/`--jobs` ladder does
@@ -1296,13 +1307,39 @@ fn resolve_budget(
         )?,
     };
     let facts = budget::host_facts()?;
-    Budget::resolve(&intensity, lanes, jobs, baselines, facts, package_count).map_err(|e| {
-        if inv.intensity.is_some() {
-            format!("--intensity: {e}")
-        } else {
-            e
-        }
-    })
+    let budget = Budget::resolve(&intensity, lanes, jobs, baselines, facts, package_count)
+        .map_err(|e| {
+            if inv.intensity.is_some() {
+                format!("--intensity: {e}")
+            } else {
+                e
+            }
+        })?;
+    let warning = match jobs {
+        Override::Value(requested) if budget.normal_jobs < requested => Some(format!(
+            "gsa: warning: {} {} exceeds the host budget; using {} (jobs are capped by CPU threads and memory, docs/portability.md)",
+            jobs_source(inv),
+            requested,
+            budget.normal_jobs
+        )),
+        _ => None,
+    };
+    Ok((budget, warning))
+}
+
+/// The spelling an over-budget `--jobs` came from, so the clamp warning
+/// names the rung the §B.8 ladder actually used (flag, env twin, config).
+fn jobs_source(inv: &Invocation) -> &'static str {
+    if inv.jobs.is_some() {
+        "--jobs"
+    } else if std::env::var("GSA_JOBS")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        "GSA_JOBS"
+    } else {
+        "config jobs"
+    }
 }
 
 /// One parallelism override: the flag, else its env twin, else the

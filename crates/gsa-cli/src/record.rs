@@ -411,13 +411,14 @@ pub fn build_plan_record(
     RunRecord {
         selection_source,
         order: selection.listed.iter().map(|(_, id)| id.clone()).collect(),
-        // A plan dispatches nothing, so the budget scalars render `0` (§H.2
-        // amendment 1) even though the plan validated the request. The
-        // resolved values reach the CONTINUATION as explicit flags, so a
-        // plan→run paste keeps the budget it planned with.
-        lanes: Some(0),
-        normal_jobs: Some(0),
-        core_jobs: Some(0),
+        // A plan dispatches nothing, but it DID resolve a budget: the
+        // scalars carry the plan it accepted (F14, §H.2 amendment 1), so a
+        // dry run answers "what would this run use" instead of zeros. The
+        // resolved values also reach the CONTINUATION as explicit flags, so
+        // a plan→run paste keeps the budget it planned with.
+        lanes: Some(budget.lanes),
+        normal_jobs: Some(budget.normal_jobs),
+        core_jobs: Some(budget.core_jobs),
         intensity: budget.intensity.to_string(),
         outcome: "planned".to_string(),
         rc,
@@ -971,6 +972,11 @@ mod tests {
         );
         assert_eq!(record.plan.len(), 2);
         assert_eq!(record.plan[0].action, PlanAction::BuildInstall);
+        // A plan renders the budget it accepted (F14, §H.2 amendment 1),
+        // not zeros — a dry run answers "what would this run use".
+        assert_eq!(record.lanes, Some(4));
+        assert_eq!(record.normal_jobs, Some(4));
+        assert_eq!(record.core_jobs, Some(4));
         // The prune strength 'c' is never mirrored; --dry-run is; --leaf only
         // in its true form (G4 — absence IS the negation).
         assert_eq!(

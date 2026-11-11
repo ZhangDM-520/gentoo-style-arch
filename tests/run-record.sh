@@ -578,13 +578,18 @@ EOF
     [ "$FIXTURE_RC" = 0 ] || fail "the plan failed: $FIXTURE_OUTPUT"
     printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s7.out"
     record_ok "$fixture/s7.out"
-    # A plan dispatches nothing, so the scalars are 0 — never `-`, never a
-    # predicted budget (§H.2 amendment 1).
-    for scalar in lanes normal-jobs core-jobs; do
-        value=$(rr2_scalar "$scalar" <"$fixture/s7.out")
-        [ "$value" = 0 ] ||
-            fail "a plan's $scalar scalar must be 0 (§H.2 amendment 1), got '$value'" "$fixture/s7.out"
-    done
+    # A plan renders the budget it accepted (F14, §H.2 amendment 1), never
+    # zeros. `--jobs 5` is above the host's automatic per-lane ceiling for
+    # this workspace (8 threads / 16 GiB / low / 3 lanes ⇒ 1), so the plan
+    # clamps it — and ANNOUNCES the clamp rather than silently rewriting.
+    [ "$(rr2_scalar lanes <"$fixture/s7.out")" = 3 ] ||
+        fail "the plan's lanes scalar must be 3" "$fixture/s7.out"
+    [ "$(rr2_scalar normal-jobs <"$fixture/s7.out")" = 1 ] ||
+        fail "the plan's normal-jobs scalar must be the clamped 1: $(rr2_scalar normal-jobs <"$fixture/s7.out")" "$fixture/s7.out"
+    [ "$(rr2_scalar core-jobs <"$fixture/s7.out")" = 2 ] ||
+        fail "the plan's core-jobs scalar must be 2: $(rr2_scalar core-jobs <"$fixture/s7.out")" "$fixture/s7.out"
+    grep -qF -- 'gsa: warning: --jobs 5 exceeds the host budget; using 1' "$fixture/s7.out" ||
+        fail "an over-budget --jobs must warn with the value used" "$fixture/s7.out"
     [ "$(rr2_scalar intensity <"$fixture/s7.out")" = low ] ||
         fail "the plan's intensity scalar must be the resolved profile" "$fixture/s7.out"
     # A plan NAMES the family it would use and probes no compiler, so the
@@ -603,7 +608,7 @@ EOF
     'gsa '*) ;;
     *) fail "a dry-run plan's continuation must not be privileged: $command" "$fixture/s7.out" ;;
     esac
-    for flag in '--dry-run' '--lanes 3' '--jobs 5' '--intensity low'; do
+    for flag in '--dry-run' '--lanes 3' '--jobs 1' '--intensity low'; do
         case " $command " in
         *" $flag "*) ;;
         *) fail "the plan's continuation drops '$flag': $command" "$fixture/s7.out" ;;

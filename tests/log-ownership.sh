@@ -613,6 +613,40 @@ fi
 #  are retired WITHOUT replacement — docs/gsa-fixture-migration.md §6 R-1;
 #  the staging-exclusion BEHAVIOUR keeps at section 1b above.)
 
+# ─── A lane start rotates the previous generation aside ─────────────────────
+# Contract §J.1 (2026-11-11): `logs/<pkg>.log` is bounded by one run. The
+# supervisor renames the prior generation to `.log.1` immediately before the
+# lane spawns, so the live file holds this run's output only and `-Ml --keep`
+# can shrink the store. The prior generation is PRESERVED byte-for-byte —
+# rotation is not a truncate.
+(
+    set -euo pipefail
+    dir="$fixture/rotation"
+    make_case_workspace "$dir"
+    mkdir -p "$dir/state/logs"
+    sentinel='SENTINEL prior run output'
+    printf '%s\n' "$sentinel" >"$dir/state/logs/p1.log"
+
+    export PATH="$dir/bin:$PATH"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    run_engine "$dir" -B --leaf --state-dir "$dir/state" p1
+    output=$FIXTURE_OUTPUT
+    printf '%s\n' "$output" >"$dir/output.txt"
+    [ "$FIXTURE_RC" = 0 ] || fail "the rotation run is rc 0, got $FIXTURE_RC:" "$dir/output.txt"
+
+    rotated="$dir/state/logs/p1.log.1"
+    [ -f "$rotated" ] ||
+        fail "the prior generation must rotate to .log.1, never vanish:" "$(ls -la "$dir/state/logs")"
+    printf '%s\n' "$sentinel" | cmp -s - "$rotated" ||
+        fail "the rotated generation lost the prior run's bytes:" "$(cat "$rotated" 2>/dev/null)"
+    grep -q 'fake makepkg' "$dir/state/logs/p1.log" ||
+        fail "the live log must carry this run's output:" "$(cat "$dir/state/logs/p1.log" 2>/dev/null)"
+    if grep -qF "$sentinel" "$dir/state/logs/p1.log"; then
+        fail "the live log still carries the prior generation (rotation did not happen):" \
+            "$(cat "$dir/state/logs/p1.log" 2>/dev/null)"
+    fi
+)
+
 printf 'log-ownership fixture: PASS\n'
 
 # ==== log-ownership-root.sh ====

@@ -91,7 +91,12 @@ GSA_INTENSITY=low gsa -S @git
 
 A flag beats its env twin (`--lanes`/`--jobs`/`--intensity` over
 `GSA_LANES`/`GSA_JOBS`/`GSA_INTENSITY`); `--lanes`/`--jobs` accept `N` or
-`auto`, `--intensity` a profile name. `GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
+`auto`, `--intensity` a profile name. An explicit `--jobs` (or `GSA_JOBS`)
+BELOW the automatic per-lane ceiling is honoured; ABOVE it the value is
+clamped to that ceiling and the clamp is announced on stderr with the value
+used — the automatic value is the host's safe ceiling (threads and memory
+shared across the lanes), and an unbounded `--jobs` would reintroduce the
+oversubscription the budget exists to prevent. `GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
 override resource discovery for a container or a deterministic scheduler
 fixture — leave them unset on a normal host. `GSA_TARGET_CPU` is the
 intentional CPU-tuning override of the next section. The numeric defaults in

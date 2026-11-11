@@ -831,11 +831,13 @@ $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
         done
 
         # Derived retention math (history.rs: newest RUN_HISTORY_KEEP=50
-        # finished records + every unfinished one survive).
+        # finished records survive, plus ONE resume pointer per
+        # selection-source — both unfinished seeds carry the same selection,
+        # so the newest is kept and the older is superseded).
         finished=$((2 + seed_finished))
         keep_budget=50
         pruned=$((finished - keep_budget))
-        kept=$((keep_budget + seed_unfinished))
+        kept=$((keep_budget + 1))
         total=$((finished + seed_unfinished))
 
         run_engine "$ws" -Mh --prune --state-dir "$state"
@@ -846,9 +848,10 @@ $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
         for id in $(seq $((pruned + 1)) "$finished"); do
             has_row "$FIXTURE_OUTPUT" "$id keep retention newest" "kept record $id"
         done
-        for id in $(seq $((finished + 1)) "$total"); do
-            has_row "$FIXTURE_OUTPUT" "$id keep resume-pointer remaining-unfinished" "unfinished record $id"
-        done
+        has_row "$FIXTURE_OUTPUT" "$((finished + 1)) pruned superseded-resume-pointer remaining-1" \
+            "the older resume pointer for the same selection is superseded"
+        has_row "$FIXTURE_OUTPUT" "$total keep resume-pointer remaining-unfinished" \
+            "the newest resume pointer for the selection survives"
         lines=$(wc -l <"$hist")
         [ "$lines" = "$kept" ] ||
             fail "the compaction must rewrite history.jsonl to $kept records, got $lines"

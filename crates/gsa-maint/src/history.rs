@@ -2,12 +2,15 @@
 //! amendment): list recorded run records and their continuations, re-render
 //! one, and enforce the bounded retention.
 //!
-//! Retention policy (normative): [`RUN_HISTORY_KEEP`] newest records stay;
-//! a record whose continuation still has `remaining:` work is NEVER pruned —
-//! it is the resume pointer (`command:` + `remaining:`), and dropping it
-//! would strand a failed run. `--prune` compacts `runs/history.jsonl`
-//! atomically (temp + rename in `runs/`); unusable lines are reported by the
-//! readers and dropped by the compaction.
+//! Retention policy (normative): [`RUN_HISTORY_KEEP`] newest finished
+//! records stay; an unfinished record (`remaining:` non-empty) is a resume
+//! pointer and is never dropped while it is the NEWEST unfinished record for
+//! its selection. A chronic failure appends one unfinished record per retry,
+//! so older resume pointers for the same selection are superseded — the
+//! newer record already names every package that still needs work.
+//! `--prune` compacts `runs/history.jsonl` atomically (temp + rename in
+//! `runs/`); unusable lines are reported by the readers and dropped by the
+//! compaction.
 
 use std::path::PathBuf;
 
@@ -232,10 +235,16 @@ pub fn prune(state: &StateRoot, apply: bool) -> Result<Vec<Row>, String> {
     let total = records.len();
     let mut keep: Vec<bool> = vec![false; total];
     let mut budget = RUN_HISTORY_KEEP;
+    // Newest-first: one resume pointer per selection survives (the first
+    // unfinished record seen for a `selection-source`); every older
+    // unfinished record for the same selection is superseded.
+    let mut resumed: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (idx, record) in records.iter().enumerate().rev() {
         let unfinished = !record.continuation.remaining.is_empty();
         if unfinished {
-            keep[idx] = true;
+            if resumed.insert(record.selection_source.as_str()) {
+                keep[idx] = true;
+            }
             continue;
         }
         if budget > 0 {
@@ -253,6 +262,15 @@ pub fn prune(state: &StateRoot, apply: bool) -> Result<Vec<Row>, String> {
                 "retention newest"
             };
             rows.push(protect::keep_row(&id, reason));
+        } else if !record.continuation.remaining.is_empty() {
+            rows.push(Row::new(
+                id,
+                if apply { "pruned" } else { "prune" },
+                format!(
+                    "superseded-resume-pointer remaining-{}",
+                    record.continuation.remaining.len()
+                ),
+            ));
         } else {
             rows.push(Row::new(
                 id,

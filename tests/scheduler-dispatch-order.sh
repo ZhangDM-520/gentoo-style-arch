@@ -59,12 +59,9 @@ set -euo pipefail
 # pins become format: 2 rr2_* pins (§H.2 scalar `order` + outcome rows); the
 # listing-footer and loader-diagnostic byte pins retire — closed roster and
 # dual-count now mean exactly what the topology records, `gsa -Qt` and
-# `gsa -Sl @<name>` say about membership. One deviation: the `--dry-run`
-# record's `order:` scalar is read by the local `record_order` helper because
-# rr2_body (tests/lib/rr-v2.bash, frozen this wave) requires integer
-# lanes/normal-jobs/core-jobs scalars and a dry-run record renders them `-`
-# (it dispatches nothing and never predicts a plan) — real-run records still
-# parse with rr2_*.
+# `gsa -Sl @<name>` say about membership. A `--dry-run` record parses with
+# rr2_* like any real run: its budget scalars are the plan it accepted
+# (§H.2 amendment 1, F14), integers, never `-`.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
@@ -143,25 +140,6 @@ record_field() { # QT-FILE ID COLUMN(2=path 3=groups 4=edges 5=tags)
 expected_members() {
     awk -v g="$2" \
         '{ n = split($2, gs, ","); for (i = 1; i <= n; i++) if (gs[i] == g) print $1 }' "$1" | sort
-}
-
-# record_order — the `order:` scalar of the run-record block on stdin. WHY NOT
-# rr2_scalar: rr2_body (tests/lib/rr-v2.bash, frozen this wave) requires
-# integer lanes/normal-jobs/core-jobs scalars, while a `--dry-run` record
-# deliberately renders them `-` (it dispatches nothing and never predicts a
-# plan). Real-run records still parse with rr2_*; this reads exactly the one
-# §H.2 scalar the dry-run block carries (recorded deviation).
-record_order() {
-    awk '
-        /^--- run record begin ---$/ { inb = 1; next }
-        /^--- plan ---$/ { exit }
-        inb && /^order: / { sub(/^order: /, ""); print; found = 1 }
-        END {
-            if (!found) {
-                print "record_order: no order scalar in the run record" > "/dev/stderr"
-                exit 1
-            }
-        }'
 }
 
 spawn_ids() { # $1 = spawn log -> SPAWN ids in dispatch order
@@ -439,7 +417,7 @@ assert_clean() { # $1 = workspace, $2 = state dir — children drained, no temp 
 
     run_engine "$ws" -B --dry-run --leaf p2 p1 p3
     ((FIXTURE_RC == 0)) || fail "the plain dry run failed (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
-    dry=$(record_order <<<"$FIXTURE_OUTPUT") \
+    dry=$(rr2_scalar order <<<"$FIXTURE_OUTPUT") \
         || fail "the dry run emitted no parseable plan order: $FIXTURE_OUTPUT"
     [[ $(printf '%s\n' "$dry" | tr ' ' '\n' | sort | tr '\n' ' ') == "p1 p2 p3 " ]] \
         || fail "the dry run lost a package: [$dry]"

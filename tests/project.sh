@@ -74,10 +74,10 @@ set -euo pipefail
 #     and re-drive the bare spelling through the continuation.
 #   * dry-run records parse through the strict rr2_body reader like every
 #     other `format: 2` block: the §H.2 budget-conformance amendment renders
-#     `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` — for a record
-#     whose run dispatched nothing (dry-run plan records), and the pins below
-#     assert those zeros. The early lenient rr_dry_* extractors retired with
-#     the `lanes: -` shape they were written for.
+#     `lanes`/`normal-jobs`/`core-jobs` as the plan the dry run accepted
+#     (F14) — integer, never `-` — and the pins below derive them from the
+#     record's own continuation. The early lenient rr_dry_* extractors
+#     retired with the `lanes: -` shape they were written for.
 #   * the fish-era parallel pre-executor (column-0 run/run_split scraping and
 #     its self-pin) retires with the fish argv it cached: gsa invocations are
 #     cheap and every call now goes through run_engine (tests/lib/rr-v2.bash).
@@ -748,13 +748,27 @@ fi
     [ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" = planned ] ||
         fail "f: a dry run must record outcome 'planned': $FIXTURE_OUTPUT"
     [ "$(rr2_scalar rc <<<"$FIXTURE_OUTPUT")" = 0 ] || fail "f: a dry run exits 0: $FIXTURE_OUTPUT"
-    # §H.2 budget conformance: a record whose run dispatched nothing renders
-    # `lanes`/`normal-jobs`/`core-jobs` as `0` — never `-` (rr2_body's
-    # integer rule is the same promise enforced a second time).
+    # §H.2 budget conformance: a plan renders the budget it accepted (F14)
+    # — integer scalars, never `-`, never zeros. The values are host-derived,
+    # so derive the expectation from the same record's continuation (one
+    # derivation, two views) instead of pinning a host's numbers.
     for budget in lanes normal-jobs core-jobs; do
-        [ "$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")" = 0 ] ||
-            fail "f: dry-run budget scalar $budget is [$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")], want 0 (§H.2)"
+        value=$(rr2_scalar "$budget" <<<"$FIXTURE_OUTPUT")
+        case $value in
+        '' | *[!0-9]*) fail "f: dry-run budget scalar $budget is [$value], want a planned integer (§H.2)" ;;
+        esac
+        [ "$value" -ge 1 ] ||
+            fail "f: dry-run budget scalar $budget is [$value], want the plan it accepted (§H.2/F14)"
     done
+    plan_cmd=$(rr2_continuation command <<<"$FIXTURE_OUTPUT")
+    case " $plan_cmd " in
+    *" --lanes $(rr2_scalar lanes <<<"$FIXTURE_OUTPUT") "*) ;;
+    *) fail "f: the plan's lanes scalar disagrees with its continuation: [$plan_cmd]" ;;
+    esac
+    case " $plan_cmd " in
+    *" --jobs $(rr2_scalar normal-jobs <<<"$FIXTURE_OUTPUT") "*) ;;
+    *) fail "f: the plan's normal-jobs scalar disagrees with its continuation: [$plan_cmd]" ;;
+    esac
     [[ $(rr2_continuation command <<<"$FIXTURE_OUTPUT") == *'--dry-run'* ]] ||
         fail "f: the dry-run continuation does not mirror --dry-run (§H.2): $(rr2_continuation command <<<"$FIXTURE_OUTPUT")"
     [ "$(rr2_continuation remaining <<<"$FIXTURE_OUTPUT")" = 'x c1 c2' ] ||

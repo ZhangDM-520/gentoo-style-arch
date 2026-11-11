@@ -246,13 +246,20 @@ impl Budget {
         .min(package_count)
         .max(1);
 
+        // The automatic per-lane job count is the host's safe ceiling: CPU
+        // threads and memory shared across the lanes. An explicit `--jobs`
+        // below it is honoured (under-subscribing is never unsafe); above it
+        // the request is clamped, because an unbounded value reintroduces the
+        // oversubscription the auto budget exists to prevent — the caller
+        // announces the clamp rather than silently rewriting the request.
+        let auto_jobs = {
+            let cpu_jobs = threads / lanes;
+            let memory_jobs = normal_job_budget / lanes;
+            cpu_jobs.min(memory_jobs).max(1)
+        };
         let normal_jobs = match jobs_override {
-            Override::Value(n) => n,
-            Override::Auto => {
-                let cpu_jobs = threads / lanes;
-                let memory_jobs = normal_job_budget / lanes;
-                cpu_jobs.min(memory_jobs).max(1)
-            }
+            Override::Value(n) => n.min(auto_jobs),
+            Override::Auto => auto_jobs,
         };
 
         let core_memory_per_job =
@@ -337,6 +344,33 @@ mod tests {
         .unwrap();
         assert_eq!(b.lanes, 2);
         assert_eq!(b.normal_jobs, 6);
+    }
+
+    #[test]
+    fn explicit_jobs_above_the_host_budget_is_clamped() {
+        // Same host as the formula test: normal_jobs auto = min(24/4, 18/4)
+        // = 4 with 4 lanes. A larger explicit request is clamped to it; a
+        // smaller one is honoured.
+        let clamped = Budget::resolve(
+            "xhigh",
+            Override::Auto,
+            Override::Value(12),
+            Baselines::default(),
+            facts(24, 29),
+            10,
+        )
+        .unwrap();
+        assert_eq!(clamped.normal_jobs, 4);
+        let under = Budget::resolve(
+            "xhigh",
+            Override::Auto,
+            Override::Value(2),
+            Baselines::default(),
+            facts(24, 29),
+            10,
+        )
+        .unwrap();
+        assert_eq!(under.normal_jobs, 2);
     }
 
     #[test]
