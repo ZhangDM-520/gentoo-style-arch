@@ -293,8 +293,12 @@ NINJAFLAGS=\"${GSA_LANE_NINJAFLAGS:-$NINJAFLAGS}\"
 # makepkg exports its buildenv list (CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS, plus
 # FFLAGS for Fortran) but never RUSTFLAGS, so a `RUSTFLAGS=` assignment in a
 # config file would reach build() and stop there. Export it here or cargo — a
-# child process — never sees the native codegen the body asked for.
-export RUSTFLAGS
+# child process — never sees the native codegen the body asked for. The lane
+# job count has the identical requirement for every non-make build system:
+# NINJAFLAGS is what `ninja`/`cmake --build`/`meson compile` read, and a plain
+# assignment left it invisible to them — the budget bound Make only (blind
+# review, 2026-11-11).
+export RUSTFLAGS NINJAFLAGS
 ",
     );
     body

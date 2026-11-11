@@ -1094,7 +1094,7 @@ implemented).* The mirrored set is exactly what
 `crates/gsa-cli/src/record.rs` (`mirror_flags`/`NOT_MIRRORED`) replays, and
 the resume fixtures pin that a dropped semantic flag is a bug. Mirrored:
 `--dry-run`, `--leaf` (**true form only**), `--skip`, `--skip-built`,
-`--vcs-skip-tolerance N`, `--no-sync`, `--allow-broken-rustc`, `--fail-fast`,
+`--vcs-skip-tolerance N`, `--no-sync`, `--allow-broken-rustc`, `--toolchain gcc|clang`, `--fail-fast`,
 `--state-dir PATH`, `--build-dir PATH`, `--no-build-dir-prompt`,
 `--config PATH`, `--no-register-ignorepkg`,
 `--no-prefetch`, `--prefetch-ahead N` (non-default only), the `f` cluster
@@ -1115,7 +1115,11 @@ are not spellings §B.8 defines and must never appear in `command:` — a
 non-leaf continuation mirrors nothing and the absence IS the negation.**
 `--state-dir`/`--config` are mirrored because a resume that loses the state
 root or the IgnorePkg registration target changes behaviour — the previous
-list here was incomplete, not the code excessive.
+list here was incomplete, not the code excessive. `--toolchain` joins them for
+the same reason (amendment 2026-11-11): it selects the compiler family AND
+feeds the toolchain identity digest, so a continuation without it rebuilds
+under the other family — and takes a surprise clean — while claiming to be the
+same run.
 
 *Amendment (2026-10-28, H3 — argv-scoped `not-mirrored:`, vocabulary sync).*
 The `not-mirrored:` line lists **only the run's own argv spellings** the

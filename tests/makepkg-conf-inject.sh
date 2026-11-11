@@ -153,6 +153,19 @@ vgrep "$child_env" -Fq 'target-cpu=native' ||
 vgrep "$child_env" -Fq -- '-C link-arg=-fuse-ld=mold' ||
     fail 'F: the child process RUSTFLAGS lost the mold link arg:'$'\n'"$child_env"
 
+# ── F'. the composite exports NINJAFLAGS, the lane job count's other home ───
+# `ninja`, `cmake --build` and `meson compile` read the job count from the
+# environment; makepkg exports only its buildenv list, so a plain assignment
+# bound `make` and left every other build system at its default (blind
+# review, 2026-11-11).
+ninja_env=$(GSA_LANE_NINJAFLAGS=-j7 bash --noprofile --norc -c '
+  set +u
+  source "$1" >/dev/null 2>&1
+  env | grep "^NINJAFLAGS=" || true
+' _ "$composite")
+vgrep "$ninja_env" -Fq 'NINJAFLAGS=-j7' ||
+    fail "F': a child process does not inherit NINJAFLAGS from the composite:"$'\n'"$ninja_env"
+
 # ── G. each family's flags are accepted by that family's compiler ───────────
 # The bodies are shipped text, so the only proof that clang will not choke on
 # the clang composite (or gcc on the gcc one) is to hand them to the driver.

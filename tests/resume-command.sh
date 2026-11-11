@@ -462,6 +462,21 @@ if [[ "$RESUME_CMD" != *'--vcs-skip-tolerance 3'* ]]; then
     exit 1
 fi
 
+# `--toolchain` selects the COMPILER FAMILY and its identity digest: a resume
+# without it rebuilds under the other family while claiming to be the same run
+# (blind review, 2026-11-11). Nothing is built here (the run fails on its own
+# selection), so no compiler has to exist.
+dir="$fixture/mirror-flags-toolchain"
+make_case_workspace "$dir"
+export GSA_BUILD_DIR="$dir/build-cache"
+run_expecting_failure "$dir" 'mirror --toolchain' \
+    -B --leaf --fail-fast --toolchain clang
+unset GSA_BUILD_DIR
+if [[ "$RESUME_CMD" != *'--toolchain clang'* ]]; then
+    printf 'mirror --toolchain: resume command dropped the compiler family (§H.2):\n  %s\n' "$RESUME_CMD" >&2
+    exit 1
+fi
+
 dir="$fixture/mirror-flags-skip-built"
 make_case_workspace "$dir"
 export GSA_BUILD_DIR="$dir/build-cache"

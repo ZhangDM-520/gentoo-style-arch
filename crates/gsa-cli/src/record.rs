@@ -243,6 +243,13 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     if inv.allow_broken_rustc {
         out.push_str(" --allow-broken-rustc");
     }
+    // The compiler FAMILY is part of the build environment (§B.8): a resume
+    // that drops it rebuilds under a different toolchain — and a different
+    // toolchain identity — while claiming to be the same run (blind review,
+    // 2026-11-11; this function's own doc already listed it as mirrored).
+    if let Some(toolchain) = &inv.toolchain {
+        out.push_str(&format!(" --toolchain {toolchain}"));
+    }
     if inv.fail_fast {
         out.push_str(" --fail-fast");
     }
