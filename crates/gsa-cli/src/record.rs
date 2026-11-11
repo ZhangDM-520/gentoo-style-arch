@@ -746,6 +746,12 @@ fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) 
             if *name == "GSA_BUILD_DIR" && inv.build_dir.is_some() {
                 return false;
             }
+            // `NO_COLOR` is PRESENTATION (like `--machine`, never mirrored):
+            // a resume picks its own rendering, so it is refused nothing by
+            // a continuation that does not restate it.
+            if *name == "NO_COLOR" {
+                return false;
+            }
             lookup(name).is_some()
         })
         .map(|name| name.to_string())
@@ -1066,6 +1072,11 @@ mod tests {
         // The roster is help's table (§B.8): every input the help prints is
         // listable, so a documented variable can never be dropped silently.
         for (name, _) in crate::help::ENV_INPUTS {
+            // Presentation inputs are documented but never `env-required`:
+            // a continuation picks its own rendering (the `--machine` rule).
+            if *name == "NO_COLOR" {
+                continue;
+            }
             assert!(
                 env_required_with(&inv, |n| (n == *name).then(|| "1".to_string()))
                     .iter()

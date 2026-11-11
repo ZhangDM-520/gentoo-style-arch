@@ -33,12 +33,77 @@ fn join_list(values: &[String]) -> String {
     }
 }
 
+/// Wrap `text` so no line exceeds `width` VISIBLE columns: the first line
+/// starts at column `start_column`, continuations at `indent`. Words break on
+/// spaces; a single token that cannot fit on a line of its own is SPLIT, so a
+/// long URL or a `name::url` override never overflows the terminal.
+fn wrap_at(text: &str, start_column: usize, width: usize, indent: usize) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut column = start_column;
+    let mut first = true;
+    let mut rest = text.to_string();
+    while !rest.is_empty() {
+        let (word, tail) = match rest.find(' ') {
+            Some(split) => {
+                let word = rest[..split].to_string();
+                let tail = rest[split + 1..].to_string();
+                (word, tail)
+            }
+            None => (std::mem::take(&mut rest), String::new()),
+        };
+        rest = tail;
+        if !first && column + 1 + style::visible_width(&word) > width {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            column = indent;
+            first = true;
+        }
+        if !first {
+            out.push(' ');
+            column += 1;
+        }
+        let room = width.saturating_sub(column);
+        if style::visible_width(&word) > room && room > 1 {
+            // The token cannot fit on this line: keep what fits, carry the
+            // rest to the next one (a URL has no spaces to break on).
+            let (head, back) = style::split_visible(&word, room);
+            out.push_str(&head);
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            column = indent;
+            first = true;
+            rest = if rest.is_empty() {
+                back
+            } else {
+                format!("{back} {rest}")
+            };
+            continue;
+        }
+        column += style::visible_width(&word);
+        out.push_str(&word);
+        first = false;
+    }
+    out
+}
+
+/// A row's STATE as one role — the streaming event and the run summary ask
+/// the same question, so they cannot disagree (rule 75). The word and glyph
+/// stay in the text: colour is the second cue, never the first.
+fn row_role(status: RowStatus) -> Role {
+    match status {
+        RowStatus::Succeeded => Role::Ok,
+        RowStatus::Failed => Role::Fail,
+        RowStatus::Parked | RowStatus::Interrupted => Role::Warn,
+        RowStatus::Deferred => Role::Accent,
+        RowStatus::NeverStarted => Role::Dim,
+    }
+}
+
 /// One `-Qi` row. The label is dim so the eye runs down the values; the
-/// several "no value" spellings are dim too. A long value wraps at the
-/// terminal with a hanging indent — but only in the human rendering, so a
-/// captured `-Qi` stays byte-identical and a fixture pin cannot depend on a
-/// terminal width.
-fn field(label: &str, value: &str) -> String {
+/// several "no value" spellings are dim too. `width` is the wrap budget of
+/// the human rendering (`None`: no wrapping, so a captured `-Qi` stays
+/// byte-identical); the caller probes it once per block, never per field.
+fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
     let label_cell = style::styled(Role::Dim, format!("{label:<18}"));
     if value.is_empty() {
         return format!("{label_cell}:");
@@ -50,30 +115,14 @@ fn field(label: &str, value: &str) -> String {
     } else {
         Cow::Borrowed(value)
     };
-    let indent = " ".repeat(20);
-    let width = crate::dashboard::terminal_width();
     let mut out = String::with_capacity(label_cell.len() + painted.len() + 2);
     out.push_str(&label_cell);
     out.push_str(": ");
-    if !output::is_human() || 20 + style::visible_width(&painted) <= width {
-        out.push_str(&painted);
-        return out;
-    }
-    let mut column = 20;
-    let mut first = true;
-    for word in painted.split(' ') {
-        let word_width = style::visible_width(word);
-        if !first && column + 1 + word_width > width {
-            out.push('\n');
-            out.push_str(&indent);
-            column = 20;
-        } else if !first {
-            out.push(' ');
-            column += 1;
+    match width {
+        Some(width) if 20 + style::visible_width(&painted) > width => {
+            out.push_str(&wrap_at(&painted, 20, width, 20));
         }
-        out.push_str(word);
-        column += word_width;
-        first = false;
+        _ => out.push_str(&painted),
     }
     out
 }
@@ -104,7 +153,9 @@ pub fn render_listing(ctx: &Ctx<'_>, listed: &[(usize, RecipeId)], whole_set: bo
     }
     out.push('\n');
     for (anchor, id) in listed {
-        out.push_str(&format!("{anchor:>4}. {id}\n"));
+        // The index is dim; the id stays plain so a copy is clean.
+        let index = style::styled(Role::Dim, format!("{anchor:>4}"));
+        out.push_str(&format!("{index}. {id}\n"));
     }
     out.push('\n');
     if whole_set {
@@ -152,12 +203,12 @@ fn edges_line(record: &gsa_model::TopologyRecord) -> String {
     }
 }
 
-fn sources_block(meta: &RecipeMeta) -> String {
+fn sources_block(meta: &RecipeMeta, wrap: Option<usize>) -> String {
     let sources = meta.sources();
     if sources.is_empty() {
-        return format!("{}\n", field("Sources", "(none)"));
+        return format!("{}\n", field_w("Sources", "(none)", wrap));
     }
-    let mut out = format!("{}\n", field("Sources", ""));
+    let mut out = format!("{}\n", field_w("Sources", "", wrap));
     for source in sources {
         let label = match source.kind {
             SourceKind::Vcs(kind) => format!("vcs:{}", kind.as_str()),
@@ -165,11 +216,15 @@ fn sources_block(meta: &RecipeMeta) -> String {
             SourceKind::Local => "local".to_string(),
         };
         let name = source.name.map(|n| format!("{n}::")).unwrap_or_default();
-        out.push_str(&format!(
-            "    {} {name}{}\n",
-            style::styled(Role::Dim, format!("[{label}]")),
-            source.location
-        ));
+        let tag = style::styled(Role::Dim, format!("[{label}]"));
+        let start_column = 4 + label.chars().count() + 3;
+        let location = match wrap {
+            Some(width) if start_column + source.location.chars().count() > width => {
+                wrap_at(&source.location, start_column, width, 4)
+            }
+            _ => source.location.clone(),
+        };
+        out.push_str(&format!("    {tag} {name}{location}\n"));
     }
     out
 }
@@ -202,12 +257,25 @@ pub fn render_package_info(
     extra: &[(String, String)],
 ) -> String {
     let meta = ctx.db.get(record.id.as_str());
+    // One width probe per block (a captured `-Qi` probes none at all).
+    let wrap = output::is_human().then(crate::dashboard::terminal_width);
+    let f = |label: &str, value: &str| field_w(label, value, wrap);
     let mut out = String::new();
-    out.push_str(&field("Name", &style::paint(Role::Bold, pkgname)));
+    out.push_str(&f("Name", &style::paint(Role::Bold, pkgname)));
     out.push('\n');
-    out.push_str(&field("Version", &style::paint(Role::Bold, version)));
+    // A recipe version that differs from the INSTALLED one means the next
+    // install moves the package; yellow says so without changing a word.
+    let installed = extra
+        .iter()
+        .find(|(label, _)| label == "Installed-Version")
+        .map(|(_, value)| value.as_str());
+    let version_role = match installed {
+        Some(value) if !is_absent(value) && value != version => Role::Warn,
+        _ => Role::Bold,
+    };
+    out.push_str(&f("Version", &style::paint(version_role, version)));
     out.push('\n');
-    out.push_str(&field(
+    out.push_str(&f(
         "Description",
         meta.as_ref()
             .and_then(|m| m.pkgdesc().ok().flatten())
@@ -223,33 +291,30 @@ pub fn render_package_info(
             info.map(|i| join_list(&get(i)))
                 .unwrap_or_else(|| "(scan)".to_string())
         };
-        out.push_str(&field(
+        out.push_str(&f(
             "URL",
             info.and_then(|i| i.url.as_deref()).unwrap_or("(none)"),
         ));
         out.push('\n');
-        out.push_str(&field("Architecture", &multi(|i| i.arch.clone())));
+        out.push_str(&f("Architecture", &multi(|i| i.arch.clone())));
         out.push('\n');
-        out.push_str(&field("Licenses", &multi(|i| i.license.clone())));
+        out.push_str(&f("Licenses", &multi(|i| i.license.clone())));
         out.push('\n');
-        out.push_str(&field("Depends On", &multi(|i| i.depends.clone())));
+        out.push_str(&f("Depends On", &multi(|i| i.depends.clone())));
         out.push('\n');
-        out.push_str(&field("Make Depends On", &multi(|i| i.makedepends.clone())));
+        out.push_str(&f("Make Depends On", &multi(|i| i.makedepends.clone())));
         out.push('\n');
-        out.push_str(&field(
-            "Check Depends On",
-            &multi(|i| i.checkdepends.clone()),
-        ));
+        out.push_str(&f("Check Depends On", &multi(|i| i.checkdepends.clone())));
         out.push('\n');
-        out.push_str(&field("Opt Depends On", &multi(|i| i.optdepends.clone())));
+        out.push_str(&f("Opt Depends On", &multi(|i| i.optdepends.clone())));
         out.push('\n');
-        out.push_str(&field("Provides", &multi(|i| i.provides.clone())));
+        out.push_str(&f("Provides", &multi(|i| i.provides.clone())));
         out.push('\n');
-        out.push_str(&field("Conflicts With", &multi(|i| i.conflicts.clone())));
+        out.push_str(&f("Conflicts With", &multi(|i| i.conflicts.clone())));
         out.push('\n');
-        out.push_str(&field("Replaces", &multi(|i| i.replaces.clone())));
+        out.push_str(&f("Replaces", &multi(|i| i.replaces.clone())));
         out.push('\n');
-        out.push_str(&field(
+        out.push_str(&f(
             "pkgver() Function",
             // The function table comes from the read-only scan — a fact
             // committed .SRCINFO cannot carry (contract §A.2.3).
@@ -265,18 +330,18 @@ pub fn render_package_info(
             },
         ));
         out.push('\n');
-        out.push_str(&sources_block(meta));
+        out.push_str(&sources_block(meta, wrap));
     }
     for (label, value) in extra {
-        out.push_str(&field(label, value));
+        out.push_str(&f(label, value));
         out.push('\n');
     }
     let fields = record_fields(record);
     for (label, value) in &fields {
-        out.push_str(&field(label, value));
+        out.push_str(&f(label, value));
         out.push('\n');
     }
-    out.push_str(&field(
+    out.push_str(&f(
         "Metadata-Source",
         meta.as_ref()
             .map(|m| m.source.as_str())
@@ -421,7 +486,9 @@ pub fn render_plan_prose(
     }
     out.push('\n');
     for (anchor, id) in listed {
-        out.push_str(&format!("{anchor:>4}. {id}\n"));
+        // The index is dim; the id stays plain so a copy is clean.
+        let index = style::styled(Role::Dim, format!("{anchor:>4}"));
+        out.push_str(&format!("{index}. {id}\n"));
     }
     out
 }
@@ -492,32 +559,22 @@ fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String
                 .map(|rc| rc.to_string())
                 .unwrap_or_else(|| "-".to_string());
             let dur = row.dur.map(fmt_dur).unwrap_or_else(|| "-".to_string());
-            match row.status {
-                RowStatus::Succeeded => (format!("✓ {} ({dur})", row.pkg), Role::Ok),
-                RowStatus::Failed => (
-                    format!(
-                        "✗ {}: BUILD FAILED (rc {rc}, {dur}, {}) — see the run's failed rows for the log",
-                        row.pkg, row.reason
-                    ),
-                    Role::Fail,
+            let line = match row.status {
+                RowStatus::Succeeded => format!("✓ {} ({dur})", row.pkg),
+                RowStatus::Failed => format!(
+                    "✗ {}: BUILD FAILED (rc {rc}, {dur}, {}) — see the run's failed rows for the log",
+                    row.pkg, row.reason
                 ),
-                RowStatus::Parked => (
-                    format!("⚠ {}: parked ({})", row.pkg, row.reason),
-                    Role::Warn,
-                ),
-                RowStatus::Deferred => (
-                    format!("⚠ {}: DEFERRED ({})", row.pkg, row.reason),
-                    Role::Accent,
-                ),
-                RowStatus::NeverStarted => (
-                    format!("· {}: never started ({})", row.pkg, row.reason),
-                    Role::Dim,
-                ),
-                RowStatus::Interrupted => (
-                    format!("⚠ {}: interrupted (rc {rc}, {dur}, {})", row.pkg, row.reason),
-                    Role::Warn,
-                ),
-            }
+                RowStatus::Parked => format!("⚠ {}: parked ({})", row.pkg, row.reason),
+                RowStatus::Deferred => format!("⚠ {}: DEFERRED ({})", row.pkg, row.reason),
+                RowStatus::NeverStarted => {
+                    format!("· {}: never started ({})", row.pkg, row.reason)
+                }
+                RowStatus::Interrupted => {
+                    format!("⚠ {}: interrupted (rc {rc}, {dur}, {})", row.pkg, row.reason)
+                }
+            };
+            (line, row_role(row.status))
         }
         SupEvent::Parked { index, reason } => {
             (format!("⚠ {}: parked ({reason})", pkg(*index)), Role::Warn)
@@ -813,7 +870,7 @@ fn run_prose(
             RowStatus::Failed => {
                 if human {
                     out.push_str(&style::styled(
-                        Role::Fail,
+                        row_role(row.status),
                         format!(
                             "✗ failed: {} (rc {rc}, {}) — log: {log}\n",
                             row.pkg, row.reason
@@ -848,7 +905,7 @@ fn run_prose(
                 };
                 if human {
                     out.push_str(&style::styled(
-                        Role::Warn,
+                        row_role(row.status),
                         format!("⚠ parked: {} ({}) — parked by {by}\n", row.pkg, row.reason),
                     ));
                 } else {
@@ -869,7 +926,7 @@ fn run_prose(
             RowStatus::Deferred => {
                 if human {
                     out.push_str(&style::styled(
-                        Role::Accent,
+                        row_role(row.status),
                         format!("⚠ deferred: {} ({})\n", row.pkg, row.reason),
                     ));
                 } else {
@@ -889,7 +946,7 @@ fn run_prose(
             RowStatus::NeverStarted => {
                 if human {
                     out.push_str(&style::styled(
-                        Role::Dim,
+                        row_role(row.status),
                         format!("· never started: {} ({})\n", row.pkg, row.reason),
                     ));
                 } else {
@@ -909,7 +966,7 @@ fn run_prose(
             RowStatus::Interrupted => {
                 if human {
                     out.push_str(&style::styled(
-                        Role::Warn,
+                        row_role(row.status),
                         format!("⚠ interrupted: {} (rc {rc}, {})\n", row.pkg, row.reason),
                     ));
                 } else {
@@ -930,7 +987,7 @@ fn run_prose(
             RowStatus::Succeeded => {
                 if human {
                     out.push_str(&style::styled(
-                        Role::Ok,
+                        row_role(row.status),
                         format!("✓ succeeded: {} ({})\n", row.pkg, row.reason),
                     ));
                 } else {

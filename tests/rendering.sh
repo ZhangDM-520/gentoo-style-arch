@@ -206,8 +206,7 @@ GSA_CONF="$conf" GSA_STATE_DIR="$state" PATH="$bin:$PATH" \
 [ "$FIXTURE_RC" -eq 0 ] || fail "c2: rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
 grep -q $'\x1b\[' <<<"$FIXTURE_OUTPUT" \
     || fail "c2: --color=always through a pipe emitted no escape"
-if ! sed -e 's/\x1b\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT" \
-    | grep -Eq '^foo +0:1\.0-1 +abi='; then
+if ! grep -Eq '^foo +0:1\.0-1 +abi=' < <(sed -e 's/\x1b\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT"); then
     fail "c2: --color=always did not render the human table row: $FIXTURE_OUTPUT"
 fi
 GSA_CONF="$conf" GSA_STATE_DIR="$state" PATH="$bin:$PATH" \

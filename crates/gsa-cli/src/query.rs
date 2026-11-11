@@ -334,25 +334,45 @@ pub fn query_abi(
                 (gsa_abi::token_declared(&declared, rev), "declared")
             }
         };
+        // Roles only: an `abi-rev=` override is a manual decision (warn),
+        // the hash is for the eye to skip (dim). The words never change, and
+        // a captured `-Qa` is byte-identical.
+        let override_state = token.override_state();
+        let override_role = if override_state == "-" {
+            style::Role::Dim
+        } else {
+            style::Role::Warn
+        };
         let _ = writeln!(
             out,
             "{id} token {} source={source} derived={} {}",
-            token.effective,
-            token.derived,
-            token.override_state()
+            style::styled(style::Role::Dim, token.effective.clone()),
+            style::styled(style::Role::Dim, token.derived.clone()),
+            style::styled(override_role, override_state)
         );
         if let Some(row) = index.rows_for(id).first() {
-            let _ = writeln!(out, "{id} index-token {}", row.abi_token);
+            let _ = writeln!(
+                out,
+                "{id} index-token {}",
+                style::styled(style::Role::Dim, row.abi_token.clone())
+            );
         }
         for sub in subs.for_provider(id) {
             let _ = writeln!(
                 out,
                 "{id} subscription-in {} {} {}",
-                sub.consumer, sub.version, sub.token
+                sub.consumer,
+                sub.version,
+                style::styled(style::Role::Dim, sub.token.clone())
             );
         }
         for sub in subs.for_consumer(id) {
-            let _ = writeln!(out, "{id} subscription-out {} {}", sub.provider, sub.token);
+            let _ = writeln!(
+                out,
+                "{id} subscription-out {} {}",
+                sub.provider,
+                style::styled(style::Role::Dim, sub.token.clone())
+            );
         }
     }
     Ok(())
@@ -519,49 +539,36 @@ fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
     const BUILT_CAP: usize = 22;
     const ABI_SHORT: usize = 8;
     const INSTANCES_W: usize = 4;
+    const NAME_FLOOR: usize = 8;
+    const VERSION_FLOOR: usize = 10;
+    // Keep one cell unused, the dashboard's rule: a line exactly as wide as
+    // the terminal can wrap on a terminal that pads a double-width glyph.
+    let terminal = terminal.saturating_sub(1).max(1);
 
     let widest = |f: &dyn Fn(&InstalledRow) -> usize, cap: usize| -> usize {
         rows.iter().map(f).max().unwrap_or(0).min(cap)
     };
-    let mut name_w = widest(&|row| row.name.chars().count(), NAME_CAP).max(1);
-    let version_w = widest(&|row| row.version.chars().count(), VERSION_CAP);
-    let built_w = widest(
-        &|row| {
-            row.side_car
-                .as_ref()
-                .map(|side_car| side_car.built.chars().count())
-                .unwrap_or(0)
-        },
-        BUILT_CAP,
-    );
-    let mut abi_w = 4 + ABI_SHORT + 1; // `abi=` + hex + `…`
-    let mut show_built = true;
-    let mut show_instances = true;
-
-    let total = |name_w: usize, abi_w: usize, built_w: usize| -> usize {
-        name_w + 1 + version_w + 2 + abi_w + 1 + built_w + 1 + INSTANCES_W
+    let layout = Layout {
+        name: widest(&|row| row.name.chars().count(), NAME_CAP).max(1),
+        version: widest(&|row| row.version.chars().count(), VERSION_CAP),
+        built: widest(
+            &|row| {
+                row.side_car
+                    .as_ref()
+                    .map(|side_car| side_car.built.chars().count())
+                    .unwrap_or(0)
+            },
+            BUILT_CAP,
+        ),
+        abi: 4 + ABI_SHORT + 1, // `abi=` + hex + `…`
+        show_built: true,
+        show_instances: true,
     };
-    // The fit ladder: instances, then built, then the token halved, then the
-    // name cap — the last thing truncated is the name.
-    let mut width = total(name_w, abi_w, built_w);
-    if width > terminal {
-        show_instances = false;
-        // Recompute without the instances column (and its separating space).
-        width -= INSTANCES_W + 1;
-    }
-    if width > terminal && built_w > 0 {
-        show_built = false;
-        width -= built_w + 1;
-    }
-    if width > terminal {
-        abi_w = 4 + 4 + 1;
-        width -= (4 + ABI_SHORT + 1) - abi_w;
-    }
-    while width > terminal && name_w > 16 {
-        let shrink = (name_w - 16).min(8);
-        name_w -= shrink;
-        width -= shrink;
-    }
+    let layout = layout.fit(terminal, NAME_FLOOR, VERSION_FLOOR);
+    let width = layout.width(INSTANCES_W);
+    // The last resort: a terminal narrower than every floor still gets a
+    // rectangle — truncate the rendered row, never overflow it.
+    let hard_fit = width > terminal;
 
     let mut out = String::with_capacity(rows.len() * (width + 1));
     for row in rows {
@@ -570,60 +577,118 @@ fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
             .as_ref()
             .map(|side_car| side_car.built != row.version)
             .unwrap_or(false);
-        // Truncate BEFORE painting: `truncate_middle` counts characters, so
-        // an escape byte in its input would spend width it does not own.
-        let version_text = style::truncate_middle(&row.version, version_w);
+        // Truncate BEFORE painting: the truncators count characters, so an
+        // escape byte in their input would spend width it does not own.
+        let version_text = style::truncate_end(&row.version, layout.version);
         let version = if stale {
             style::paint(style::Role::Warn, &version_text).into_owned()
         } else {
             version_text
         };
-        let mut line = style::pad(&style::truncate_middle(&row.name, name_w), name_w);
+        let mut line = style::pad(&style::truncate_middle(&row.name, layout.name), layout.name);
         line.push(' ');
-        line.push_str(&style::pad(&version, version_w));
+        line.push_str(&style::pad(&version, layout.version));
         match &row.side_car {
             Some(side_car) => {
                 line.push_str("  ");
-                let token = installed_token(&side_car.token, abi_w - 4 - 1);
+                let token = installed_token(&side_car.token, layout.abi - 4 - 1);
                 let short = style::paint(style::Role::Dim, &token);
-                line.push_str(&style::pad(&short, abi_w));
-                if show_built {
+                line.push_str(&style::pad(&short, layout.abi));
+                if layout.show_built {
                     line.push(' ');
-                    let built_text = style::truncate_middle(&side_car.built, built_w);
+                    let built_text = style::truncate_middle(&side_car.built, layout.built);
                     let built = if stale {
                         style::paint(style::Role::Warn, &built_text).into_owned()
                     } else {
                         style::paint(style::Role::Dim, &built_text).into_owned()
                     };
-                    line.push_str(&style::pad(&built, built_w));
+                    line.push_str(&style::pad(&built, layout.built));
                 }
-                if show_instances {
+                if layout.show_instances {
                     line.push(' ');
                     let count = side_car.instances.to_string();
-                    let cell = if side_car.instances > 1 {
-                        count
-                    } else {
+                    // One instance is the ordinary case — dim it. More than
+                    // one is worth the eye; zero is a fact, not a shade.
+                    let cell = if side_car.instances == 1 {
                         style::paint(style::Role::Dim, &count).into_owned()
+                    } else {
+                        count
                     };
-                    line.push_str(&style::pad(&cell, INSTANCES_W));
+                    line.push_str(&style::pad_left(&cell, INSTANCES_W));
                 }
             }
             None => {
                 // The absence is the information: keep the columns so the
                 // table stays rectangular, and leave them empty.
-                line.push_str(&" ".repeat(2 + abi_w));
-                if show_built {
-                    line.push_str(&" ".repeat(1 + built_w));
+                line.push_str(&" ".repeat(2 + layout.abi));
+                if layout.show_built {
+                    line.push_str(&" ".repeat(1 + layout.built));
                 }
-                if show_instances {
+                if layout.show_instances {
                     line.push_str(&" ".repeat(1 + INSTANCES_W));
                 }
             }
+        }
+        if hard_fit {
+            line = style::fit(&line, terminal + 1);
         }
         out.push_str(&line);
         out.push('\n');
     }
     out
+}
+
+/// The `-Q` column widths. The fit ladder lives in [`Layout::fit`], apart
+/// from the rendering, so a test can walk every rung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Layout {
+    name: usize,
+    version: usize,
+    built: usize,
+    abi: usize,
+    show_built: bool,
+    show_instances: bool,
+}
+
+impl Layout {
+    fn width(&self, instances_w: usize) -> usize {
+        let mut width = self.name + 1 + self.version + 2 + self.abi;
+        if self.show_built {
+            width += 1 + self.built;
+        }
+        if self.show_instances {
+            width += 1 + instances_w;
+        }
+        width
+    }
+
+    /// The fit ladder: `instances`, then `built`, then the token halved, then
+    /// the version, then the name — the name is the last thing shortened,
+    /// because it is what a reader copies. Every rung is bounded by a floor;
+    /// [`installed_table`] hard-truncates anything that survives them all.
+    fn fit(mut self, terminal: usize, name_floor: usize, version_floor: usize) -> Layout {
+        const INSTANCES_W: usize = 4;
+        if self.width(INSTANCES_W) > terminal {
+            self.show_instances = false;
+        }
+        if self.width(INSTANCES_W) > terminal && self.built > 0 {
+            self.show_built = false;
+        }
+        if self.width(INSTANCES_W) > terminal {
+            self.abi = 4 + 4 + 1;
+        }
+        while self.width(INSTANCES_W) > terminal && self.version > version_floor {
+            self.version -= 1;
+        }
+        while self.width(INSTANCES_W) > terminal && self.name > name_floor {
+            self.name -= 1;
+        }
+        if self.show_built && self.width(INSTANCES_W) > terminal && self.built > 6 {
+            // A built version is diagnostic-only: shrink it before the floors.
+            self.built = 6;
+        }
+        self
+    }
 }
 
 /// The shortened ABI token: `abi=` plus the first `keep` hex digits and `…`.
@@ -932,5 +997,94 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    fn row(name: &str, version: &str, side_car: Option<(&str, &str, usize)>) -> InstalledRow {
+        InstalledRow {
+            name: name.to_string(),
+            version: version.to_string(),
+            side_car: side_car.map(|(token, built, instances)| SideCar {
+                token: token.to_string(),
+                built: built.to_string(),
+                instances,
+            }),
+        }
+    }
+
+    fn sample() -> Vec<InstalledRow> {
+        vec![
+            row(
+                "foo",
+                "0:1.0-1",
+                Some((
+                    "f811e75af347c90fb6f130104d46cd2fe40ef76349be2bc8b2e894df15b4210511",
+                    "0.9-1",
+                    1,
+                )),
+            ),
+            row(
+                "a-very-long-package-name-that-must-be-truncated",
+                "0:2.0.0_devel.232390.18879c94176.2f181b7-1",
+                None,
+            ),
+        ]
+    }
+
+    fn widths(table: &str) -> Vec<usize> {
+        table.lines().map(crate::style::visible_width).collect()
+    }
+
+    #[test]
+    fn a_narrow_terminal_still_gets_one_rectangle() {
+        // A 22+-character version is the case the first ladder missed: the
+        // name floor alone could not pull the row under the terminal.
+        for terminal in [20, 30, 40, 60, 120] {
+            let table = installed_table(&sample(), terminal);
+            let widths = widths(&table);
+            assert!(
+                widths.iter().all(|width| *width <= terminal),
+                "terminal {terminal} rendered {widths:?}"
+            );
+            assert_eq!(
+                widths
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                1,
+                "terminal {terminal} is not rectangular: {widths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn instances_are_right_aligned_and_a_single_one_is_the_only_dim_cell() {
+        let table = installed_table(&sample(), 120);
+        let first = table.lines().next().expect("a row");
+        assert!(
+            first.ends_with("   1"),
+            "instances are not right-aligned: {first:?}"
+        );
+        // Two digits land in the same right edge as one.
+        let wider = installed_table(&[row("foo", "0:1.0-1", Some(("ab", "0.9-1", 12)))], 120);
+        assert!(wider.lines().next().unwrap().ends_with("  12"));
+    }
+
+    #[test]
+    fn the_version_is_cut_at_its_tail() {
+        let table = installed_table(&sample(), 30);
+        let long = table.lines().nth(1).expect("the second row");
+        assert!(
+            long.contains("…"),
+            "an over-long version was not truncated: {long:?}"
+        );
+        // Tail truncation keeps the head: the cut line still starts the
+        // version with its epoch and upstream series.
+        assert!(long.contains("0:2.0"), "{long:?}");
     }
 }

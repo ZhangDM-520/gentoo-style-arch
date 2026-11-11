@@ -163,10 +163,12 @@ Non-obvious, in order:
   strict `rr2_body` parser and `rr2_*` accessors in
   `tests/lib/rr-v2.bash` extract it from stdin (the strict rules they enforce
   are contract §H.2; cutover gap G12 in §M). The
-  parser is the interface under test. Prose output is
-  pinned in exactly ONE place, the rendering section of `tests/dashboard.sh`;
-  scenario-bound rendering pins (prompt layout, deferral label, sudo message
-  frequency) stay co-located with the scenario they describe.
+  parser is the interface under test. Prose WORDING is
+  pinned in exactly ONE place, the rendering section of `tests/dashboard.sh`
+  (cosmetic GEOMETRY — the `-Q` table, colour, width fitting, footer
+  alignment — lives in `tests/rendering.sh`, rule 75); scenario-bound rendering
+  pins (prompt layout, deferral label, sudo message frequency) stay co-located
+  with the scenario they describe.
 - `tests/project.sh` drives its topology commands through `run_engine`
   (`tests/lib/rr-v2.bash`), one runner for every gsa invocation. The fish-era
   parallel pre-executor and its `expected_invocations` self-scrape pin retired
@@ -516,15 +518,20 @@ split.
 75. **Colour is one seam, never in the machine channel, never the only
     signal.** Renderers ask `gsa-cli::style` for a ROLE (`Ok`/`Fail`/`Warn`/
     `Accent`/`Dim`/`Bold`/`Info`); a raw escape at a call site is the change to
-    reject. The ladder is resolved once at dispatch (`--machine` or a captured
-    stdout → off; `--color=never` → off; `always` → on; `auto` → terminal,
-    `TERM` not `dumb`, `NO_COLOR` unset) so the record, the kv lines and the
-    decision rows can never carry an escape byte (§L.9). Width is VISIBLE
-    width (`style::{visible_width,fit,pad,truncate_middle}`), because a row is
-    painted before it is fitted. Every state keeps its word and glyph — a
-    `NO_COLOR` reader loses nothing — and the `-Q` human table is the only
-    shape that changed (machine rows are byte-identical; `tests/rendering.sh`
-    pins both).
+    reject. The ladder is resolved once at dispatch (`--machine` → off; a
+    captured stdout → the machine vocabulary, uncoloured; `--color=never` →
+    off; `always` → the human rendering WITH colour, even through a pipe;
+    `auto` → a terminal whose `TERM` is not `dumb`, with `NO_COLOR` unset —
+    `NO_COLOR` is on the `ENV_INPUTS` roster but never `env-required`, because
+    presentation is not a resume dependency). Width is VISIBLE width
+    (`visible_width`, `fit`, `pad`, `pad_left`); the truncators
+    (`truncate_middle`, `truncate_end`) take PLAIN text and say so with a
+    debug assertion — paint after truncating. Every state keeps its word and
+    glyph, so a `NO_COLOR` reader loses nothing. The machine rows (the record,
+    the kv lines, the decision rows, `-Qb`'s wire row) are byte-stable; the
+    human shapes — the `-Q` table, the `-Qg`/`-Sl` footers, `-Qi` wrapping —
+    may change, and `tests/rendering.sh` is the one fixture that pins their
+    geometry (prose WORDING stays pinned in `tests/dashboard.sh`).
 
 ## 5 · Pitfalls
 

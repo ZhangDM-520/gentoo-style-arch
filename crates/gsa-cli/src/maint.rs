@@ -294,7 +294,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                     Ok((prune_rows, prune_rc)) => {
                         rows.extend(prune_rows);
                         if prune_rc != RC_OK {
-                            let _ = write!(out, "{}", gsa_maint::render_rows(&rows));
+                            let _ = write!(out, "{}", render_rows(&rows));
                             return Ok(prune_rc);
                         }
                     }
@@ -336,7 +336,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             if confirming {
                 match gsa_maint::mirrors::run(&ctx, false) {
                     Ok(plan) => {
-                        let _ = write!(out, "{}", gsa_maint::render_rows(&plan));
+                        let _ = write!(out, "{}", render_rows(&plan));
                     }
                     Err(message) => {
                         let _ = writeln!(err, "gsa: -Mm: {message}");
@@ -406,7 +406,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             if confirming {
                 match run_strength(false) {
                     Ok((plan_rows, _)) => {
-                        let _ = write!(out, "{}", gsa_maint::render_rows(&plan_rows));
+                        let _ = write!(out, "{}", render_rows(&plan_rows));
                     }
                     Err(message) => {
                         let _ = writeln!(err, "gsa: {}: {message}", inv.spelling());
@@ -538,7 +538,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             }
         }
     }
-    let _ = write!(out, "{}", gsa_maint::render_rows(&rows));
+    let _ = write!(out, "{}", render_rows(&rows));
     Ok(rc)
 }
 
@@ -595,16 +595,34 @@ fn mutating_rows(
     }
 }
 
+/// The rows of one `-M` verb, every one through [`render_row`] — one
+/// renderer, so a `clean` or a `failed` reads the same wherever it appears.
+fn render_rows(rows: &[Row]) -> String {
+    let mut out = String::new();
+    for row in rows {
+        out.push_str(&render_row(row));
+        out.push('\n');
+    }
+    out
+}
+
 /// One `-M` row, byte-identical to `gsa_maint::Row::render` with colour
 /// off. The row vocabulary is `gsa-maint`'s; this maps the states a reader
 /// hunts for onto a role — `clean` green, `failed` red, a drift or a gap
 /// yellow — and leaves everything else plain.
 fn render_row(row: &Row) -> String {
-    let action = match row.action.as_str() {
-        "clean" => style::styled(style::Role::Ok, row.action.clone()),
-        "failed" => style::styled(style::Role::Fail, row.action.clone()),
-        "drift" | "missing" | "absent" => style::styled(style::Role::Warn, row.action.clone()),
-        _ => row.action.clone(),
+    // `-Ma`'s count row carries `N finding(s)` as its action (gsa-maint's
+    // audit vocabulary), so a count is yellow without a second counter here.
+    let role = match row.action.as_str() {
+        "clean" => Some(style::Role::Ok),
+        "failed" => Some(style::Role::Fail),
+        "drift" | "missing" | "absent" => Some(style::Role::Warn),
+        action if action.ends_with("finding(s)") => Some(style::Role::Warn),
+        _ => None,
+    };
+    let action = match role {
+        Some(role) => style::styled(role, row.action.clone()),
+        None => row.action.clone(),
     };
     if row.reason.is_empty() {
         format!("{} {action}", row.subject)
@@ -621,9 +639,7 @@ fn finish(
 ) -> i32 {
     match result {
         Ok((rows, rc)) => {
-            for row in &rows {
-                let _ = writeln!(out, "{}", render_row(row));
-            }
+            let _ = write!(out, "{}", render_rows(&rows));
             rc
         }
         Err(message) if message.is_empty() => {

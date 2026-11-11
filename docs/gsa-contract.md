@@ -137,7 +137,7 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 
 | Spelling | Action |
 | --- | --- |
-| `gsa -Q` | list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists |
+| `gsa -Q` | list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists. On a terminal this is a headerless TABLE — one visible width for every row: name (cap 32, middle-ellipsis), version (tail-ellipsis), `abi=` + 8 hex + `…`, `built=`, `instances=` (right-aligned); a version that differs from `built=` is `Warn`. The columns are the §B.3 fields, not their bytes: the fit ladder drops `instances`, then `built`, then halves the token, then shortens the version, then the name — a name is what a reader copies, so it goes last, and every row is truncated rather than overflowed. A captured stdout (or `--machine`) prints the flat row `name version abi=<full> built=<full> instances=N`, byte-stable (§L.9) |
 | `gsa -Qi <ref…>` | info: pacman fields plus the side-car record (abi-token, subscriptions in/out, retained binpkg instances, VCS baseline), recipe metadata and the topology record — the merged home of the retired `-Si` (2026-10-28, H8) |
 | `gsa -Qs <pattern…>` | search installed names/descriptions (pacman `-Qs` semantics) |
 | `gsa -Qg [name…]` | groups/sets and their members (all with counts by default) — the home of the retired `-Sg` (2026-10-28, H5/H7) |
@@ -303,7 +303,10 @@ Engine environment inputs (the roster `gsa --help` must print; rendered from
 `GSA_CONF_DIR`, `GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`,
 `GSA_RECIPE_CHECKOUT`, `GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`,
 `GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
-`GSA_VCS_SKIP_TOLERANCE`. `SRCDEST` is NOT an input since the config rework
+`GSA_VCS_SKIP_TOLERANCE`, and `NO_COLOR` (the standard colour opt-out; the
+`--color` flag beats it, and the machine channel is never coloured, §L.9).
+`TERM` is read the way every terminal program reads it (colour only when it
+is set and not `dumb`) and is not an engine input; `SRCDEST` is NOT an input since the config rework
 (§B.11 amendment): the engine owns the source cache through the `srcdest`
 key. `GSA_BUILD_JOBS` is engine OUTPUT
 exported per lane, never an input. `GSA_FAKE_*` is not an engine vocabulary
@@ -1519,13 +1522,20 @@ dispatch; a failure parks a cone (§I).
    retired — presentation follows the terminal and never changes hands).
    Every event renders in BOTH vocabularies and the machine grammar is
    unit-pinned (`render::tests`), the box is fixture-pinned
-   (`tests/dashboard-pty.sh`). A wording change breaks exactly those pins,
+   (`tests/dashboard-pty.sh`), and the cosmetic shape — table geometry,
+   colour, width fitting — is pinned by `tests/rendering.sh` (the only
+   fixture allowed to assert on rendering geometry; prose WORDING stays
+   pinned in `tests/dashboard.sh` alone). A wording change breaks exactly those pins,
    never the record grammar (§H/§L.2). **Colour belongs to the human
    vocabulary only** (2026-11-11): one seam (`gsa-cli::style`) owns the
    roles and the `--color`/`NO_COLOR` ladder, the machine channel never
    carries an escape, width is measured in VISIBLE columns (so a coloured
    row still fits `width - 1`), and no state is ever signalled by colour
-   alone. `tests/rendering.sh` pins all four.
+   alone. `tests/rendering.sh` pins all four. **The one exception to
+   "presentation follows the terminal"**: `--color=always` is an explicit
+   request for the human rendering, so it crosses a pipe too (the machine
+   vocabulary has no colour to ask for); `--machine` still wins. `-Qb`
+   stays the verbatim wire row and is never styled.
 10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
    "it works" means the packaged `gsa` binary behaves. Every smoke check and
    the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and

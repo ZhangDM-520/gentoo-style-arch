@@ -200,10 +200,17 @@ pub fn pad(text: &str, width: usize) -> String {
 }
 
 /// Truncate in the MIDDLE with `…`: the head and the tail both survive,
-/// because a package id's and a version's ends are what a reader recognises
-/// (`qemu-hw-display-virtio-gpu-…-rutabaga`, `27.0.0_devel.232…1829aff-1`).
-/// A string that already fits is returned unchanged.
+/// because a package id's ends are what a reader recognises
+/// (`qemu-hw-display-virtio-gpu-…-rutabaga`). A string that already fits is
+/// returned unchanged.
+///
+/// PLAIN text only: this counts characters, so paint the result, never the
+/// input (a caller with a painted string would spend width on escapes).
 pub fn truncate_middle(text: &str, width: usize) -> String {
+    debug_assert!(
+        !text.contains('\x1b'),
+        "truncate_middle takes plain text; paint after truncating"
+    );
     let chars: Vec<char> = text.chars().collect();
     // A string that already fits is unchanged — the cap counts the ellipsis
     // only for a string that must be cut.
@@ -222,6 +229,74 @@ pub fn truncate_middle(text: &str, width: usize) -> String {
     out.push('…');
     out.extend(&chars[chars.len() - tail..]);
     out
+}
+
+/// Truncate the TAIL with `…`, keeping the head: a version reads front to
+/// back, so a cut tail loses the least. PLAIN text only (see
+/// [`truncate_middle`]).
+pub fn truncate_end(text: &str, width: usize) -> String {
+    debug_assert!(
+        !text.contains('\x1b'),
+        "truncate_end takes plain text; paint after truncating"
+    );
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    let Some(inner) = width.checked_sub(1) else {
+        return String::new();
+    };
+    let mut out: String = chars[..inner].iter().collect();
+    out.push('…');
+    out
+}
+
+/// Left-pad to `width` VISIBLE columns — the right-aligned cell (a count).
+pub fn pad_left(text: &str, width: usize) -> String {
+    let visible = visible_width(text);
+    if width <= visible {
+        return text.to_string();
+    }
+    let mut out = " ".repeat(width - visible);
+    out.push_str(text);
+    out
+}
+
+/// Split `text` after `budget` VISIBLE characters, escapes kept in the half
+/// they belong to and never split. `("", text)` when the budget is zero.
+pub fn split_visible(text: &str, budget: usize) -> (String, String) {
+    let mut head = String::with_capacity(text.len());
+    let mut visible = 0;
+    let mut chars = text.char_indices();
+    while let Some((offset, ch)) = chars.next() {
+        if ch == '\x1b' {
+            // Copy the whole sequence into the head, then keep scanning.
+            head.push(ch);
+            let mut next = chars.next();
+            let mut escaped = String::new();
+            if let Some((_, '[')) = next {
+                escaped.push('[');
+                for (_, byte) in chars.by_ref() {
+                    escaped.push(byte);
+                    if ('\x40'..='\x7e').contains(&byte) {
+                        break;
+                    }
+                }
+                head.push_str(&escaped);
+                continue;
+            }
+            if let Some((_, byte)) = next.take() {
+                head.push(byte);
+            }
+            continue;
+        }
+        if visible == budget {
+            return (head, text[offset..].to_string());
+        }
+        head.push(ch);
+        visible += 1;
+    }
+    (head, String::new())
 }
 
 /// Copy `budget` visible characters, escapes included verbatim, then `tail`;
@@ -318,6 +393,32 @@ mod tests {
                 visible_width(&fitted)
             );
         }
+    }
+
+    #[test]
+    fn truncate_end_keeps_the_head_and_pad_left_the_right_edge() {
+        assert_eq!(truncate_end("0:1.0-1", 10), "0:1.0-1");
+        assert_eq!(truncate_end("0:1.0.0_devel.232390-1", 10), "0:1.0.0_d…");
+        assert_eq!(visible_width(&truncate_end("xxxxxxxxxxxxxxxx", 6)), 6);
+        assert_eq!(pad_left("1", 4), "   1");
+        assert_eq!(pad_left("12", 4), "  12");
+        assert_eq!(pad_left("12345", 4), "12345");
+    }
+
+    #[test]
+    fn split_visible_counts_columns_and_never_splits_an_escape() {
+        let (head, tail) = split_visible(&"x".repeat(10), 4);
+        assert_eq!((head.as_str(), tail.as_str()), ("xxxx", "xxxxxx"));
+        let painted = "\x1b[2mabcdef\x1b[0m";
+        let (head, tail) = split_visible(painted, 3);
+        assert_eq!(visible_width(&head), 3);
+        assert!(tail.ends_with('\x1b') || tail.contains("def"), "{tail:?}");
+        assert_eq!(visible_width(&head) + visible_width(&tail), 6);
+        // A zero budget splits before the first visible character; the
+        // leading escape travels with the head it opens.
+        let (head, tail) = split_visible(painted, 0);
+        assert_eq!(visible_width(&head), 0);
+        assert_eq!(format!("{head}{tail}"), painted);
     }
 
     #[test]

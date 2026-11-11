@@ -166,6 +166,11 @@ if [ -z "$only" ] || [ "$only" = a ]; then
         if grep -q 'notinstalled' <<<"$FIXTURE_OUTPUT"; then
             fail "a: a recipe with no installed record leaked into -Q:" "$FIXTURE_OUTPUT"
         fi
+        # The machine channel never carries a style escape (contract §L.9):
+        # a captured stdout is the stable surface, whatever --color says.
+        if grep -q $'\x1b' <<<"$FIXTURE_OUTPUT"; then
+            fail "a: the -Q machine rows carried an escape byte:" "$FIXTURE_OUTPUT"
+        fi
     )
 fi
 

@@ -44,6 +44,7 @@ pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
     ("GSA_MEMORY_GIB", "budget override: the scheduler's memory truth, in GiB"),
     ("GSA_TARGET_CPU", "the target CPU class for recipe selection"),
     ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
+    ("NO_COLOR", "any non-empty value turns the human rendering's colour off (the --color flag beats it; the machine channel is never coloured)"),
 ];
 
 const SECTIONS: &[Section] = &[
@@ -425,6 +426,7 @@ mod tests {
             "GSA_MEMORY_GIB",
             "GSA_TARGET_CPU",
             "GSA_VCS_SKIP_TOLERANCE",
+            "NO_COLOR",
         ];
         assert_eq!(
             ENV_INPUTS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
