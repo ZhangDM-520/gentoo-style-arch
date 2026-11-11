@@ -663,6 +663,18 @@ bodies are the floor, so an engine upgraded ahead of the recipe still builds.
 driver itself. The per-package log records `toolchain <family> (<rung>)` and,
 when it exported, why.
 
+**Where the compiler is found.** The identity probe and every lane resolve
+`gcc`/`clang` through `PATH` — there is no built-in toolchain directory and no
+absolute tool path. A privileged run inherited `sudo`'s PATH, and hosts
+commonly set `secure_path` (`/usr/local/sbin:/usr/local/bin:/usr/bin`), so a
+toolchain installed anywhere else (`/opt/llvm/bin`, `~/.local/bin`) is
+invisible to the probe AND to the build even when the operator's own shell
+finds it. The engine refuses (`toolchain-unavailable`) and, under `sudo`,
+names the mechanism in the refusal; it never picks a compiler from outside
+`PATH`. Install the compiler into a `secure_path` directory (or widen
+sudoers' `secure_path`) — `sudo -E` does not help, because `secure_path`
+overrides the forwarded PATH.
+
 **The engine owns makepkg's configuration.** Every `makepkg` spawn — build
 lane and `--verifysource` fetch alike — carries
 `--config <build root>/lane-makepkg-<family>.conf`. That composite is the

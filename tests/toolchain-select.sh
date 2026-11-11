@@ -165,6 +165,11 @@ grep -Fq 'clang unavailable' <<<"$out" ||
     fail "H: the absent-compiler identity is not named: $out"
 grep -Fq 'is not installed' "$fixture/h/clang.err" ||
     fail 'H: --build-identity did not say the compiler is missing'
+# The secure_path hint belongs to a PRIVILEGED run only: this direct probe
+# runs as the caller, whose PATH is exactly what it sees.
+if grep -Fq 'secure_path' "$fixture/h/clang.err"; then
+    fail 'H: an unprivileged --build-identity claimed a sudo PATH reset'
+fi
 
 # The BUILD path refuses for the same reason: a plan that accepted the run
 # would write a marker certifying a phantom toolchain.
@@ -174,6 +179,13 @@ PATH="$empty_bin" run_engine "$ws" -B --leaf --no-sync \
     --toolchain clang p1
 grep -Fq 'toolchain-unavailable' <<<"$FIXTURE_OUTPUT" ||
     fail "H: the build path accepted an absent compiler (rc=$FIXTURE_RC): $FIXTURE_OUTPUT"
+# The refusal names the MECHANISM, not just the absence: a privileged run
+# inherits sudo's PATH (secure_path), so a compiler outside /usr/bin is
+# invisible here even when the operator's own shell finds it (blind review,
+# enhancement G1). Without this, "not installed" sends the operator to
+# reinstall a compiler that is already on the host.
+grep -Fq 'secure_path' <<<"$FIXTURE_OUTPUT" ||
+    fail 'H: the privileged refusal does not name secure_path:'$'\n'"$FIXTURE_OUTPUT"
 
 # ── I. a decided family exports its CC/CXX driver ───────────────────────────
 # `--toolchain`/the tag SELECTS the family, but the lane used to configure
