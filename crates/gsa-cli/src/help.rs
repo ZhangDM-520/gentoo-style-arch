@@ -42,7 +42,10 @@ pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
     ("GSA_INTENSITY", "default for --intensity (the flag beats it)"),
     ("GSA_CPU_THREADS", "budget override: the scheduler's CPU-thread truth"),
     ("GSA_MEMORY_GIB", "budget override: the scheduler's memory truth, in GiB"),
-    ("GSA_TARGET_CPU", "the target CPU class for recipe selection"),
+    (
+        "GSA_TARGET_CPU",
+        "CPU tuning passed through to recipes (the engine reads nothing; a resume preserves it)",
+    ),
     ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
     ("NO_COLOR", "any non-empty value turns the human rendering's colour off (the --color flag beats it; the machine channel is never coloured)"),
     ("CI", "any non-empty value other than 0/false marks an unattended run: no prompt is asked, even when the runner allocated a pty"),
