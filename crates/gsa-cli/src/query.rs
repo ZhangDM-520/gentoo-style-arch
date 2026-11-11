@@ -67,11 +67,18 @@ pub fn query_binpkg(
         let _ = writeln!(out, "{}", wire_row(row));
         printed += 1;
     }
-    // Zero bytes is not an answer: the human surface says the index is EMPTY
-    // so a clean query cannot be mistaken for a broken one. The machine
-    // channel stays row-only (a zero-row data surface is scriptable).
+    // Zero bytes is not an answer: the human surface states the verdict so a
+    // clean query cannot be mistaken for a broken one. A FILTER that matched
+    // nothing is not an empty index — claiming "no retained built instances"
+    // over a populated index sent the reader after the wrong problem. The
+    // machine channel stays row-only (a zero-row data surface is scriptable).
     if printed == 0 && crate::output::is_human() {
-        let _ = writeln!(out, "binpkg empty no retained built instances");
+        let message = if wanted.is_some() {
+            "binpkg empty no retained built instances match the selection"
+        } else {
+            "binpkg empty no retained built instances"
+        };
+        let _ = writeln!(out, "{message}");
     }
     Ok(())
 }

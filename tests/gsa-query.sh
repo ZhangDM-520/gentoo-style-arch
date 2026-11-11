@@ -428,6 +428,7 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         state="$fixture/h/never"
         make_workspace "$ws" 1 1 low
         add_package "$ws" foo "$gsa_meta_any"
+        add_package "$ws" notinstalled "$gsa_meta_any"
         make_local_db "$fixture/h/db"
         make_pacman_stubs "$ws/bin" "$fixture/h/db"
         export PATH="$ws/bin:$PATH"
@@ -447,6 +448,17 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         [ "$FIXTURE_RC" -eq 0 ] || fail "h: human -Qb failed: $FIXTURE_OUTPUT"
         grep -F 'binpkg empty' <<<"$FIXTURE_OUTPUT" >/dev/null \
             || fail "h: an empty binpkg index renders zero bytes on the human surface: $FIXTURE_OUTPUT"
+        # A FILTER that matches nothing is NOT an empty index: with `foo`
+        # retained, `-Qb notinstalled` must name the selection, not claim the
+        # index holds nothing. Its own state root keeps the pristine-root
+        # assertion above honest.
+        state_rows="$fixture/h/indexed"
+        write_index_row "$state_rows" \
+            '{"op":"row","recipe_id":"foo","pkgbase":"foo","pkgnames":["foo"],"version":"1.0-1","archive":"/x/foo-1.0-1-any.pkg.tar.zst","sha256":"00","size":1,"built_at":0,"abi_token":"tok-1","provides":[],"vcs_baseline":"abc123","instance":1}'
+        GSA_CONF="$conf" GSA_STATE_DIR="$state_rows" run_engine_user "$ws" -Qb --color always notinstalled
+        [ "$FIXTURE_RC" -eq 0 ] || fail "h: filtered -Qb failed: $FIXTURE_OUTPUT"
+        grep -F 'match the selection' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "h: a filtered -Qb must name the selection, not an empty index: $FIXTURE_OUTPUT"
         # An EMPTY recipe set is the clean stale-set case (an installed older
         # output would make `foo` stale by design).
         ws_empty="$fixture/h/empty-ws"

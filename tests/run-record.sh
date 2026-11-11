@@ -590,6 +590,17 @@ EOF
         fail "the plan's core-jobs scalar must be 2: $(rr2_scalar core-jobs <"$fixture/s7.out")" "$fixture/s7.out"
     grep -qF -- 'gsa: warning: --jobs 5 exceeds the host budget; using 1' "$fixture/s7.out" ||
         fail "an over-budget --jobs must warn with the value used" "$fixture/s7.out"
+    # An explicit --lanes above the selection is clamped to one lane per
+    # package — and announced, like the jobs clamp (a silent rewrite made
+    # `gsa -S one-pkg --lanes 8` look like it ran eight lanes).
+    run_engine "$ws" -B --dry-run --lanes 5 --jobs 1 --intensity low @git
+    [ "$FIXTURE_RC" = 0 ] || fail "the lanes-clamp plan failed: $FIXTURE_OUTPUT"
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s7b.out"
+    record_ok "$fixture/s7b.out"
+    [ "$(rr2_scalar lanes <"$fixture/s7b.out")" = 3 ] ||
+        fail "the plan's lanes scalar must be the clamped 3: $(rr2_scalar lanes <"$fixture/s7b.out")" "$fixture/s7b.out"
+    grep -qF -- 'gsa: warning: --lanes 5 exceeds the selection (3 package(s)); using 3' "$fixture/s7b.out" ||
+        fail "an over-count --lanes must warn with the value used" "$fixture/s7b.out"
     [ "$(rr2_scalar intensity <"$fixture/s7.out")" = low ] ||
         fail "the plan's intensity scalar must be the resolved profile" "$fixture/s7.out"
     # A plan NAMES the family it would use and probes no compiler, so the

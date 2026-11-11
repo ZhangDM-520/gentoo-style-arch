@@ -722,8 +722,9 @@ fn consent_to_destroy(
 }
 
 /// The same invocation made paste-safe for a refusal: the cluster spelling,
-/// its selection, and `--noconfirm`. `gsa -Mcc` is replayable as
-/// `gsa -Mcc --noconfirm`.
+/// its selection, the argv seams (`--state-dir`/`--build-dir`/`--config` —
+/// the SAME list the continuation mirrors) and `--noconfirm`. `gsa -Mcc
+/// --state-dir /s` is replayable as `gsa -Mcc --state-dir /s --noconfirm`.
 fn paste_command(inv: &Invocation) -> String {
     let mut command = format!("gsa {}", inv.spelling());
     for target in &inv.targets {
@@ -737,6 +738,7 @@ fn paste_command(inv: &Invocation) -> String {
     if inv.leaf {
         command.push_str(" --leaf");
     }
+    command.push_str(&crate::record::argv_seams(inv));
     command.push_str(" --noconfirm");
     command
 }

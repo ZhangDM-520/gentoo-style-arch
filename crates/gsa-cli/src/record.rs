@@ -228,6 +228,36 @@ pub fn decision_plan_row(row: &DecisionRow) -> PlanRow {
     }
 }
 
+/// The process's run start (contract §H.2 amendment): captured ONCE at
+/// dispatch, so a fetch or transaction record answers "when did this run
+/// start" instead of stamping its finish time as both ends. A record built
+/// outside a dispatched run (a unit test, a hidden seam) reads the clock.
+static RUN_STARTED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Capture the run's start. The first call wins; a later call (a re-entry in
+/// the same process) is a no-op.
+pub fn mark_run_started() {
+    let _ = RUN_STARTED.compare_exchange(
+        0,
+        gsa_model::epoch_now(),
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
+/// The captured run start, or the current clock when nothing dispatched.
+pub fn run_started() -> i64 {
+    match RUN_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => gsa_model::epoch_now(),
+        at => at,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_run_started_for_test(at: i64) {
+    RUN_STARTED.store(at, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// The mirrored flags of a continuation's `command:` line (contract §H.2) —
 /// everything the run made real restated as explicit flags: the five
 /// §B.8 sync/freshness/toolchain modifiers (`--skip`, `--skip-built`,
@@ -236,6 +266,30 @@ pub fn decision_plan_row(row: &DecisionRow) -> PlanRow {
 /// `--prefetch-ahead` (mirrored when non-default, per the flag-rule table —
 /// docs/adr/0004-prefetch-advisory.md), and the resolved
 /// `--lanes`/`--jobs`/`--intensity` values.
+/// The argv seams every RESTATED command must carry (contract §H.2): the
+/// state root, the build root and the pacman config. A replay through the
+/// continuation and a `-M` confirmation's paste-safe command both go through
+/// this ONE list — a second list is how `gsa -Mcc --state-dir /custom`
+/// printed a "paste-safe" command that pruned the DEFAULT root instead.
+pub(crate) fn argv_seams(inv: &Invocation) -> String {
+    let mut out = String::new();
+    if let Some(dir) = &inv.state_dir {
+        out.push_str(&format!(" --state-dir {}", shell_quote(dir)));
+    }
+    // The build root this run actually used (§J.2): a resume must not land in
+    // a different cache because the prompt was answered once.
+    if let Some(dir) = &inv.build_dir {
+        out.push_str(&format!(" --build-dir {}", shell_quote(dir)));
+    }
+    if inv.no_build_dir_prompt {
+        out.push_str(" --no-build-dir-prompt");
+    }
+    if let Some(conf) = &inv.config {
+        out.push_str(&format!(" --config {}", shell_quote(conf)));
+    }
+    out
+}
+
 fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) -> String {
     let mut out = String::new();
     if inv.skip {
@@ -263,20 +317,7 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     if inv.fail_fast {
         out.push_str(" --fail-fast");
     }
-    if let Some(dir) = &inv.state_dir {
-        out.push_str(&format!(" --state-dir {}", shell_quote(dir)));
-    }
-    // The build root this run actually used (§J.2): a resume must not land in
-    // a different cache because the prompt was answered once.
-    if let Some(dir) = &inv.build_dir {
-        out.push_str(&format!(" --build-dir {}", shell_quote(dir)));
-    }
-    if inv.no_build_dir_prompt {
-        out.push_str(" --no-build-dir-prompt");
-    }
-    if let Some(conf) = &inv.config {
-        out.push_str(&format!(" --config {}", shell_quote(conf)));
-    }
+    out.push_str(&argv_seams(inv));
     if inv
         .deferred_flags
         .iter()
@@ -582,7 +623,7 @@ pub fn build_fetch_record(
         // (owner decision 5); a fetch-only run's verdicts are its rows.
         prefetch_warnings: None,
         stamp: gsa_model::RecordStamp {
-            started: Some(gsa_model::epoch_now()),
+            started: Some(run_started()),
             ended: Some(gsa_model::epoch_now()),
             ..gsa_model::RecordStamp::default()
         },
@@ -787,7 +828,7 @@ pub fn build_txn_record(
         dry_run: inv.dry_run,
         prefetch_warnings: None,
         stamp: gsa_model::RecordStamp {
-            started: Some(gsa_model::epoch_now()),
+            started: Some(run_started()),
             ended: Some(gsa_model::epoch_now()),
             ..gsa_model::RecordStamp::default()
         },
@@ -1482,6 +1523,23 @@ mod tests {
             assert!(block.contains(line), "{line} missing:\n{block}");
         }
         assert!(!block.contains("lanes: -"), "{block}");
+    }
+
+    #[test]
+    fn a_transaction_record_starts_when_the_run_started() {
+        // The record answers "when did this run begin", not "when did it
+        // finish": a transaction stamps the dispatch instant captured once,
+        // so a long `-U` does not claim it took zero seconds.
+        set_run_started_for_test(1_700_000_000);
+        let inv = inv_for(Family::U);
+        let outcome = gsa_model::RunOutcome::compute(&[], false, false, false);
+        let record = build_txn_record(&inv, &[], Vec::new(), Vec::new(), &outcome);
+        assert_eq!(record.stamp.started, Some(1_700_000_000));
+        assert!(
+            record.stamp.ended.unwrap_or(0) > 1_700_000_000,
+            "ended is the record's own clock: {:?}",
+            record.stamp.ended
+        );
     }
 
     #[test]

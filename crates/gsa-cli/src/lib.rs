@@ -841,6 +841,10 @@ pub fn usage_exit(message: &str, err: &mut dyn Write) -> i32 {
 /// Run one invocation against the current directory's repository. Returns
 /// the process exit code and writes all output through `out`/`err`.
 pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    // The run's wall clock starts here (§H.2 amendment): every record a
+    // non-build flow emits (a fetch, a transaction) stamps this instant as
+    // `started:` instead of its own finish time.
+    record::mark_run_started();
     // A closed reader is normal Unix, not an error: `gsa -Q | head` must not
     // print "Broken pipe" and must not exit 2 through the usage path. Every
     // rendering writes through this guard, so no call site has to know.

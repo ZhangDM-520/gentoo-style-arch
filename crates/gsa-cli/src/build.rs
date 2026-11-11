@@ -99,14 +99,7 @@ fn run_build_with(
     install: Option<DecideMode>,
 ) -> Result<i32, Exit> {
     // ── the run's compiler family (§B.11) ────────────────────────────────
-    // Pinned before any lane spawns: the supervisor exports it to every lane
-    // child, and a typo names the two alternatives here rather than
-    // defaulting to gcc silently.
-    if let Some(value) = &inv.toolchain {
-        let toolchain = gsa_model::toolchain::Toolchain::parse(value)
-            .map_err(|message| Exit::Usage(format!("--toolchain: {message}")))?;
-        gsa_model::toolchain::set_override(toolchain);
-    }
+    pin_toolchain(inv)?;
     // The record's wall clock (§H.2 amendment): captured before the first
     // resolution, so a long preflight is inside the run's span.
     let run_started = gsa_model::epoch_now();
@@ -237,9 +230,9 @@ fn run_build_with(
     extend_selection(&mut selection, &wave.additions);
 
     // ── resource budget (host-derived; the parallelism line is the truth) ─
-    let (budget, jobs_warning) =
+    let (budget, warnings) =
         resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
-    if let Some(warning) = &jobs_warning {
+    for warning in &warnings {
         let _ = writeln!(err, "{warning}");
     }
     // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
@@ -936,6 +929,20 @@ fn record_toolchain(
     }
 }
 
+/// The run's compiler family pinned once per process (§B.11): parse the
+/// global `--toolchain`, name both alternatives on a typo, and make the value
+/// visible to every consumer (`record_toolchain`, the lane channel). The build
+/// path and its dry-run plan share this ONE seam, so a plan can never name a
+/// compiler the run would refuse — or accept a spelling the run rejects.
+fn pin_toolchain(inv: &Invocation) -> Result<(), Exit> {
+    if let Some(value) = &inv.toolchain {
+        let toolchain = gsa_model::toolchain::Toolchain::parse(value)
+            .map_err(|message| Exit::Usage(format!("--toolchain: {message}")))?;
+        gsa_model::toolchain::set_override(toolchain);
+    }
+    Ok(())
+}
+
 /// The `-n` plan rendering (contract §B `--dry-run`) shared by `gsa -S
 /// --dry-run` and `gsa -Su --dry-run`: the pre-dispatch ABI wave check, the
 /// plan prose and the `format: 2` plan record — no mutation, no dispatch.
@@ -947,6 +954,11 @@ pub(crate) fn plan_only(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
+    // The plan names the compiler the RUN would use: pin the same override
+    // (and refuse the same typo, rc 2) before `record_toolchain` reads it —
+    // otherwise `--dry-run --toolchain clang` records `toolchain: gcc` while
+    // its own `command:` line says `--toolchain clang`.
+    pin_toolchain(inv)?;
     if inv.targets.is_empty() {
         return Err(Exit::Usage(
             "selection is mandatory: a build never starts without a selection".to_string(),
@@ -1019,9 +1031,9 @@ pub(crate) fn plan_only(
     // `--jobs`, `--intensity` or env twin is a usage error here too (the
     // plan used to accept it and then the real run refused it), and the
     // record's `intensity` scalar is the value the run would actually use.
-    let (budget, jobs_warning) =
+    let (budget, warnings) =
         resolve_budget(inv, project, selection.listed.len()).map_err(Exit::Usage)?;
-    if let Some(warning) = &jobs_warning {
+    for warning in &warnings {
         let _ = writeln!(err, "{warning}");
     }
     let _intensity = budget.intensity;
@@ -1208,11 +1220,11 @@ fn run_update_inner(
             &run_outcome,
             None,
         );
-        // A dry run renders but never persists (§H.1).
+        // A dry run renders but never persists (§H.1). The stamp answers
+        // WHEN the run started, not when this record was built.
         record.dry_run = inv.dry_run;
-        let now = gsa_model::epoch_now();
-        record.stamp.started = Some(now);
-        record.stamp.ended = Some(now);
+        record.stamp.started = Some(record::run_started());
+        record.stamp.ended = Some(gsa_model::epoch_now());
         let _ = write!(
             out,
             "{}",
@@ -1280,7 +1292,7 @@ fn resolve_budget(
     inv: &Invocation,
     project: &ProjectConfig,
     package_count: usize,
-) -> Result<(Budget, Option<String>), String> {
+) -> Result<(Budget, Vec<String>), String> {
     let intensity = match &inv.intensity {
         // The profile error is `Budget::resolve`'s; a flag-supplied value
         // names its source the way the `--lanes`/`--jobs` ladder does
@@ -1315,16 +1327,48 @@ fn resolve_budget(
                 e
             }
         })?;
-    let warning = match jobs {
-        Override::Value(requested) if budget.normal_jobs < requested => Some(format!(
-            "gsa: warning: {} {} exceeds the host budget; using {} (jobs are capped by CPU threads and memory, docs/portability.md)",
-            jobs_source(inv),
-            requested,
-            budget.normal_jobs
-        )),
-        _ => None,
-    };
-    Ok((budget, warning))
+    let mut warnings = Vec::new();
+    // `--lanes` is bounded by the selection (one lane per package, and the
+    // auto budget also bounds it by CPU/memory/profile). An EXPLICIT request
+    // above the package count is still clamped, but the caller announces it —
+    // a silent rewrite made `gsa -S one-pkg --lanes 8` look like it ran eight.
+    if let Override::Value(requested) = lanes {
+        if budget.lanes < requested {
+            warnings.push(format!(
+                "gsa: warning: {} {} exceeds the selection ({} package(s)); using {} (one lane per package, docs/portability.md)",
+                lanes_source(inv),
+                requested,
+                package_count.max(1),
+                budget.lanes
+            ));
+        }
+    }
+    if let Override::Value(requested) = jobs {
+        if budget.normal_jobs < requested {
+            warnings.push(format!(
+                "gsa: warning: {} {} exceeds the host budget; using {} (jobs are capped by CPU threads and memory, docs/portability.md)",
+                jobs_source(inv),
+                requested,
+                budget.normal_jobs
+            ));
+        }
+    }
+    Ok((budget, warnings))
+}
+
+/// The spelling an over-count `--lanes` came from (§B.8 ladder: flag, env
+/// twin, config), so the clamp warning names the rung that was clamped.
+fn lanes_source(inv: &Invocation) -> &'static str {
+    if inv.lanes.is_some() {
+        "--lanes"
+    } else if std::env::var("GSA_LANES")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        "GSA_LANES"
+    } else {
+        "config lanes"
+    }
 }
 
 /// The spelling an over-budget `--jobs` came from, so the clamp warning
@@ -1968,10 +2012,9 @@ fn emit_refusal_record(
         None,
     );
     // A refused run built nothing: no compiler is named, but the record still
-    // answers WHEN the refusal happened (§H.2 amendment).
-    let now = gsa_model::epoch_now();
-    record.stamp.started = Some(now);
-    record.stamp.ended = Some(now);
+    // answers WHEN the run started and when the refusal happened (§H.2).
+    record.stamp.started = Some(record::run_started());
+    record.stamp.ended = Some(gsa_model::epoch_now());
     let _ = write!(
         out,
         "{}",

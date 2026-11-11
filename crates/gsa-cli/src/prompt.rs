@@ -111,7 +111,12 @@ pub fn prompt_app_selection(
         // buried the question it was asking. The dashboard's idiom
         // (`ESC[nA` up, `ESC[2K` clear) replaces the previous frame when the
         // terminal can take it; `TERM=dumb` keeps the old append behaviour.
-        write_frame(out, &frame, &mut drawn)?;
+        write_frame(
+            out,
+            &frame,
+            &mut drawn,
+            !crate::style::term_is_dumb(),
+        )?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
             return Ok(PromptOutcome::Abort("app selection aborted (input closed)"));
@@ -168,10 +173,20 @@ fn emit(out: &mut dyn Write, line: &str) -> std::io::Result<()> {
 /// Write one menu frame, erasing the previous one in place when the terminal
 /// can take ANSI control. Lines are fitted to the terminal width so a long
 /// cluster label never pushes the instruction line off-screen.
-fn write_frame(out: &mut dyn Write, frame: &[String], drawn: &mut usize) -> std::io::Result<()> {
+///
+/// `ansi_ok` is the caller's terminal verdict (§L.9: `TERM` empty, `dumb` or
+/// `unknown` cannot take cursor control). It is a parameter, not a second
+/// read of `TERM`, so the append-only path is testable without mutating the
+/// process environment.
+fn write_frame(
+    out: &mut dyn Write,
+    frame: &[String],
+    drawn: &mut usize,
+    ansi_ok: bool,
+) -> std::io::Result<()> {
     // The FIRST frame stays plain bytes: fixtures and captures read it as
     // data, and only a REDRAW needs control sequences.
-    let control = *drawn > 0 && !crate::style::term_is_dumb();
+    let control = *drawn > 0 && ansi_ok;
     if control {
         write!(out, "\x1b[{}A", *drawn)?;
     }
@@ -187,13 +202,14 @@ fn write_frame(out: &mut dyn Write, frame: &[String], drawn: &mut usize) -> std:
             writeln!(out, "{line}")?;
         }
     }
-    if *drawn > frame.len() {
+    if *drawn > frame.len() && control {
+        // Only a redrawing terminal needs the stale rows erased; an
+        // append-only stream writes nothing extra (an unconditional
+        // `ESC[2K` here put an escape byte on a `TERM=dumb` capture).
         for _ in 0..(*drawn - frame.len()) {
             writeln!(out, "\x1b[2K")?;
         }
-        if control {
-            write!(out, "\x1b[{}A", *drawn - frame.len())?;
-        }
+        write!(out, "\x1b[{}A", *drawn - frame.len())?;
     }
     out.flush()?;
     *drawn = frame.len();
@@ -344,6 +360,37 @@ mod tests {
         // bogus re-renders without aborting, final 1 leaves row 1 checked.
         assert_eq!(ids(outcome), Some(vec!["app1".into()]));
         assert!(menu.contains(" unrecognized token — use numbers, 'a', 'c' or 'q'"));
+    }
+
+    #[test]
+    fn a_redraw_never_writes_an_erase_to_an_append_only_terminal() {
+        // A frame that SHRANK (a checked row cleared by `c`) used to emit a
+        // bare `ESC[2K` per stale row even when the terminal cannot take
+        // control — an escape byte in a `TERM=dumb` capture.
+        let mut out: Vec<u8> = Vec::new();
+        let mut drawn = 3usize;
+        write_frame(&mut out, &["one".to_string()], &mut drawn, false).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            !text.contains('\x1b'),
+            "append-only terminal received an escape: {text:?}"
+        );
+        assert!(text.contains("one"));
+        assert_eq!(drawn, 1);
+    }
+
+    #[test]
+    fn a_redraw_erases_the_stale_rows_on_a_controlling_terminal() {
+        let mut out: Vec<u8> = Vec::new();
+        let mut drawn = 3usize;
+        write_frame(&mut out, &["one".to_string()], &mut drawn, true).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text.matches("\x1b[2K").count(),
+            3,
+            "one erase per new line plus one per stale row: {text:?}"
+        );
+        assert!(text.contains("\x1b[2A"), "the cursor returns to the frame: {text:?}");
     }
 
     #[test]

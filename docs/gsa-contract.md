@@ -157,7 +157,9 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
 
 *Amendment (2026-11-11, a zero-row answer).* On the HUMAN rendering a
 row-listing query states its verdict instead of printing zero bytes: `-Qb`
-renders `binpkg empty …`, `-Qu` `stale clean …`, `-Qr` `revdep clean …`
+renders `binpkg empty …` (a target filter that matched nothing says `… match
+the selection`, never that the index itself is empty), `-Qu` `stale clean …`,
+`-Qr` `revdep clean …`
 (selected by the §L.9 ladder, so `--color=always` reaches it through a pipe).
 A clean query must never be mistaken for a broken one. The machine channel
 and the data channels (`-Qt`, `-Qs`, `-Ql`/`-Qo`'s pacman passthrough) stay
@@ -304,7 +306,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--allow-broken-rustc` | skip the rustc sanity probe; escape hatch for runs that compile no Rust (kept) |
 | `--no-register-ignorepkg` | skip the dynamic IgnorePkg registration an install run performs at archive acceptance; the skip is loud (kept) |
 | `--fail-fast` | restore the stop-dispatch-and-drain failure policy (§I) |
-| `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin; an explicit `--jobs` above the automatic per-lane ceiling is clamped to it, and the clamp is announced — `docs/portability.md`) |
+| `--lanes N\|auto`, `--jobs N\|auto`, `--intensity LEVEL` | parallelism overrides (kept; a flag beats its env twin; an explicit `--jobs` above the automatic per-lane ceiling is clamped to it, and an explicit `--lanes` above the package count is clamped to one lane per package — both clamps are announced with the value used — `docs/portability.md`) |
 | `--state-dir PATH` | state-root override (§J.3); flag beats `GSA_STATE_DIR`. Accepted by every dispatched spelling, inert where the verb never opens the state root — the env twin is honoured process-wide, so refusing the flag made one input spellable two ways (rule 73) and broke a uniform per-job flag set on `-Qg`/`-Qs`/`-Ql`/`-Qu`/`-Qt`/`-Sl`/`-Bl` |
 | `--toolchain gcc\|clang` | the run's compiler family, selecting which engine-owned makepkg body every lane is given (§B.11); beats a recipe's `toolchain=` tag, which beats the PKGBUILD inference |
 | `--build-dir PATH` | build-cache override (§J.2): `BUILDDIR`/`PKGDIR`/`PKGDEST` land below it; flag beats `GSA_BUILD_DIR` beats config `build_dir` beats the build user's `~/.cache/gsa`. Mirrored into the continuation. Real on build-shaped runs only |

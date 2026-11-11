@@ -57,6 +57,20 @@ run_engine "$ws" -B --leaf p1
 [ "$FIXTURE_RC" -eq 0 ] || fail 'A: the plain build did not succeed'
 want_selection p1 gcc 'the built-in default'
 
+# ── A2. a dry-run plan names the family and validates the same argv ────────
+# The plan is a record of the run it would perform: it must name the
+# `--toolchain` family, and a bad spelling is the run's usage class (rc 2) —
+# the plan used to record `toolchain: gcc` while its own `command:` line said
+# `--toolchain clang`, and to accept `--toolchain icx` at rc 0.
+run_engine "$ws" -B --dry-run --leaf --toolchain clang p1
+[ "$FIXTURE_RC" -eq 0 ] || fail 'A2: the clang plan did not succeed'
+grep -Eq '^toolchain: clang$' <<<"$FIXTURE_OUTPUT" ||
+    fail 'A2: the plan does not name the requested family:'$'\n'"$FIXTURE_OUTPUT"
+run_engine "$ws" -B --dry-run --leaf --toolchain icx p1
+[ "$FIXTURE_RC" -eq 2 ] || fail "A2: a bad --toolchain in a plan must be rc 2, got $FIXTURE_RC"
+grep -Fq "unknown toolchain 'icx'" <<<"$FIXTURE_OUTPUT" ||
+    fail 'A2: the plan accepted a spelling the run refuses:'$'\n'"$FIXTURE_OUTPUT"
+
 # ── B. the scan ─────────────────────────────────────────────────────────────
 add_package "$ws" p2 'build() {
   CC=clang make

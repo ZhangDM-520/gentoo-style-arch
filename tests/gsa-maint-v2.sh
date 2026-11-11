@@ -1065,8 +1065,10 @@ arch=(any)'
         [ "$FIXTURE_RC" = 3 ] || fail "-Mcc without --noconfirm stops rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
             fail "the -Mcc stop must name confirmation-required: $FIXTURE_OUTPUT"
-        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mcc --noconfirm" >/dev/null ||
-            fail "the -Mcc stop must carry the paste-safe command: $FIXTURE_OUTPUT"
+        # Paste-safe means the SAME state root: a replay that dropped
+        # --state-dir would prune the default root instead (blind review).
+        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mcc --state-dir $state --noconfirm" >/dev/null ||
+            fail "the -Mcc stop must carry the paste-safe command with its state root: $FIXTURE_OUTPUT"
         [ -f "$ws/packages/prgamma/prgamma-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "the unconfirmed strength-2 run deleted an archive"
         run_engine "$ws" -Mcc --noconfirm --state-dir "$state"
@@ -1088,8 +1090,8 @@ arch=(any)'
         [ "$FIXTURE_RC" = 3 ] || fail "-Mccc without --noconfirm stops rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -F "confirmation-required" >/dev/null ||
             fail "the stop must name confirmation-required: $FIXTURE_OUTPUT"
-        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mccc --noconfirm" >/dev/null ||
-            fail "the -Mccc stop must carry the paste-safe command: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "gsa -Mccc --state-dir $state --noconfirm" >/dev/null ||
+            fail "the -Mccc stop must carry the paste-safe command with its state root: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prbeta/bsrc.tar.gz prune source-download" "the plan lists the pulled download"
         has_row "$FIXTURE_OUTPUT" "$ws/packages/prgamma/gsrc prune source-clone" "the plan lists the source clone"
         # Nothing is deleted by the unconfirmed run.

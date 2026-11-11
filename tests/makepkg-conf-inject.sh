@@ -256,8 +256,8 @@ printf 'extra_ldflags = -Wl,--build-id=sha1\n' >>"$conf_dir/gsa.conf"
 add_package "$ws" p3
 run_engine "$ws" -B --leaf p3
 [ "$FIXTURE_RC" -eq 0 ] || fail 'I: the build failed after adding extra_cflags:'$'\n'"$FIXTURE_OUTPUT"
-appended=$(grep -n '^# caller flags from gsa.conf' "$composite" | head -n 1 | cut -d: -f1)
-site=$(grep -n "source '$conf_dir/gcc-makepkg.conf'" "$composite" | head -n 1 | cut -d: -f1)
+appended=$(grep -n '^# caller flags from gsa.conf' "$composite" | sed -n '1p' | cut -d: -f1)
+site=$(grep -n "source '$conf_dir/gcc-makepkg.conf'" "$composite" | sed -n '1p' | cut -d: -f1)
 [ -n "$appended" ] || fail 'I: the composite carries no caller-flag block' "$composite"
 [ "$site" -lt "$appended" ] || fail 'I: the caller flags must follow the site body' "$composite"
 for line in "CFLAGS+='-fstack-clash-protection'" \
@@ -295,7 +295,7 @@ for family in gcc clang; do
     # than a copy that can drift.
     header=$(head -n 1 "$printed")
     n=$(wc -l <"$printed")
-    start=$(grep -nFx -- "$header" "$composite_file" | head -n 1 | cut -d: -f1)
+    start=$(grep -nFx -- "$header" "$composite_file" | sed -n '1p' | cut -d: -f1)
     [ -n "$start" ] || fail "H: the $family body header is not in the composite" "$composite_file"
     sed -n "${start},$((start + n - 1))p" "$composite_file" >"$fixture/embed-$family.conf"
     diff -u "$printed" "$fixture/embed-$family.conf" ||
