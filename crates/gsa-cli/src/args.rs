@@ -883,6 +883,16 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         .to_string(),
                 );
             }
+            // The transaction writes into the database its configuration
+            // names (`--config`), and every gate reads exactly that one.
+            // A forwarded argument that rebinds the database would install
+            // into a DB nothing judged (blind-review 2026-11-11,
+            // security-auditor F4b), so it is a usage error, not a passthrough.
+            if let Some(name) = rest.iter().find_map(|arg| db_rebinding_pacman_arg(arg)) {
+                return Err(format!(
+                    "a pacman argument after '--' must not rebind the database ('{name}'): the install gates read the database of the engine's --config, so choose it with --config PATH instead"
+                ));
+            }
             inv.pacman_args = Some(rest.to_vec());
             break;
         }
@@ -1084,6 +1094,40 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         return Err("cannot combine --skip with --skip-built (pick one skip claim: --skip is freshness-gated, --skip-built is the built-set claim)".to_string());
     }
     Ok(Parsed::Invoke(inv))
+}
+
+/// A forwarded `pacman -U` argument that would move the database the
+/// transaction writes (`--dbpath`, `--root`, `--sysroot`, short `-b`/`-r`)
+/// or name another configuration (`--config`). Every engine gate reads the
+/// DB the engine's own `--config` names, so a forwarded override installs
+/// into a database nothing judged (security-auditor F4b) — the caller
+/// refuses it as a usage error. Returns the spelling the refusal names.
+fn db_rebinding_pacman_arg(arg: &str) -> Option<&'static str> {
+    const LONG: [(&str, &str); 4] = [
+        ("--dbpath", "--dbpath"),
+        ("--root", "--root"),
+        ("--sysroot", "--sysroot"),
+        ("--config", "--config"),
+    ];
+    for (flag, name) in LONG {
+        let long_form = arg == flag
+            || arg
+                .strip_prefix(flag)
+                .is_some_and(|rest| rest.starts_with('='));
+        if long_form {
+            return Some(name);
+        }
+    }
+    // Short forms travel as `-b PATH` / `-r PATH` (in a cluster such as
+    // `-fr` the value is still the next argument), never as a long option.
+    if !arg.starts_with("--") && arg.starts_with('-') {
+        return arg[1..].chars().find_map(|c| match c {
+            'b' => Some("-b (--dbpath)"),
+            'r' => Some("-r (--root)"),
+            _ => None,
+        });
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1418,6 +1462,34 @@ mod tests {
         assert_eq!(inv.config.as_deref(), Some("/etc/pacman.conf"));
         let inv = parse_ok(&["-S", "--config=/scratch/p.conf", "mesa-git"]);
         assert_eq!(inv.config.as_deref(), Some("/scratch/p.conf"));
+    }
+
+    #[test]
+    fn a_forwarded_pacman_argument_may_not_rebind_the_database() {
+        // The engine's gates judge the DB its own `--config` names; a
+        // forwarded override would transact into a database nothing read.
+        let inv = parse_ok(&["-U", "mesa-git", "--", "--overwrite", "*"]);
+        assert_eq!(
+            inv.pacman_args.as_deref(),
+            Some(&["--overwrite".to_string(), "*".to_string()][..])
+        );
+        for args in [
+            vec!["-U", "--", "--dbpath", "/scratch/db"],
+            vec!["-U", "--", "--dbpath=/scratch/db"],
+            vec!["-Uf", "--", "-b", "/scratch/db"],
+            vec!["-U", "--", "--root", "/scratch/root"],
+            vec!["-U", "--", "-r", "/scratch/root"],
+            vec!["-U", "--", "--sysroot=/scratch/root"],
+            vec!["-U", "--", "-fr", "/scratch/root"],
+            vec!["-U", "--", "--config", "/scratch/pacman.conf"],
+            vec!["-U", "--", "--config=/scratch/pacman.conf"],
+        ] {
+            let message = parse_err(&args);
+            assert!(
+                message.contains("must not rebind the database"),
+                "{args:?} must refuse: {message}"
+            );
+        }
     }
 
     #[test]

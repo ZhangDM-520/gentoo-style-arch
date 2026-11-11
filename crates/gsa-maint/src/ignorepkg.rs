@@ -63,8 +63,11 @@ pub fn shipped_names(ctx: &MaintCtx<'_>) -> Result<BTreeSet<String>, String> {
 /// provide names). `None` + a note when the local DB cannot be read — the
 /// prune then stays conservative and says so, never pretending nothing is
 /// installed.
-pub fn installed_names() -> (Option<BTreeSet<String>>, String) {
-    let db_root = gsa_install::localdb::pacman_db_root();
+pub fn installed_names(conf: Option<&Path>) -> (Option<BTreeSet<String>>, String) {
+    let db_root = match gsa_install::localdb::pacman_db_root_for(conf) {
+        Ok(root) => root,
+        Err(message) => return (None, format!("installed-db unavailable ({message})")),
+    };
     match gsa_install::LocalDb::load(&db_root) {
         Ok(db) => {
             let mut names = BTreeSet::new();
@@ -126,7 +129,7 @@ pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
     let wanted = wanted_names(ctx);
     let shipped = shipped_names(ctx)?;
-    let (installed, note) = installed_names();
+    let (installed, note) = installed_names(Some(conf));
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     for name in &closure.names {
         let (class, reason) = classify(ctx, name, installed.as_ref(), &shipped);
@@ -172,7 +175,7 @@ pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>
         }
         return Ok(rows);
     }
-    let db_root = gsa_install::localdb::pacman_db_root();
+    let db_root = gsa_install::localdb::pacman_db_root_for(Some(conf))?;
     let report = register_ignorepkg(conf, "workspace", &missing, &db_root)?;
     for name in &missing {
         if report.added.contains(name) {
@@ -191,7 +194,7 @@ pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>
 pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
     let shipped = shipped_names(ctx)?;
-    let (installed, note) = installed_names();
+    let (installed, note) = installed_names(Some(conf));
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     let mut remove: Vec<String> = Vec::new();
     for name in &closure.names {
@@ -214,7 +217,7 @@ pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, S
         ));
         return Ok(rows);
     }
-    let db_root = gsa_install::localdb::pacman_db_root();
+    let db_root = gsa_install::localdb::pacman_db_root_for(Some(conf))?;
     let report = prune_ignorepkg(conf, "maintain", &remove, &db_root)?;
     rows.push(Row::new(
         "ignorepkg",

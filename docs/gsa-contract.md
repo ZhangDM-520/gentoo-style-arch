@@ -118,7 +118,12 @@ gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args
   usage error (rc 2).
 - `-- <pacman args…>` trailing arguments are forwarded verbatim to the
   `pacman -U` invocation of an install transaction (today's `-ia --overwrite
-  '*'` idiom). They never reach any other family.
+  '*'` idiom). They never reach any other family. An argument that would
+  REBIND the database the transaction writes — `--dbpath`/`-b`,
+  `--root`/`-r`, `--sysroot`, or a forwarded `--config` — is a usage error
+  (rc 2) naming the flag: the engine's gates read the database of its own
+  `--config` (§B.8 item 2), so a forwarded override would install into a
+  database nothing judged (2026-11-11, blind-review security-auditor F4b).
 - Word alias: `gsa fetch` is accepted and is exactly `gsa -Sw` (owner decision
   names it). No other word verbs exist; the verb list in `docs/plans/plan-native-pm.md`
   §5.1 is superseded by this grammar.
@@ -343,6 +348,14 @@ points this section was silent on, resolved as the code behaves:
    closure; default `/etc/pacman.conf`); `--no-register-ignorepkg` skips the
    write, and hidden `--install-register <conf> <subject> <names…>` (§D.1)
    names its conf explicitly because it is the isolated write seam.
+   The same configuration names the DATABASE every gate reads: its `DBPath`
+   (resolved through `pacman-conf DBPath --config PATH`) is the root the
+   ABI/NEEDED/checked-skip/registration gates load and the root whose
+   `db.lck` the executor probes — never the host's. A named configuration
+   whose `DBPath` cannot be resolved refuses (rc 3, pacman-free) instead of
+   planning against the host database (2026-11-11, blind-review
+   security-auditor F4). `-Mi --config` follows the same rule for its
+   installed-DB census.
 3. **`--leaf` (G4):** the bare boolean of this table is the only spelling.
    Continuations mirror it only in its true form (§H.2); `--leaf=no` and
    `--leaf=yes` are not accepted spellings and no engine output may contain

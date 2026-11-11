@@ -192,9 +192,15 @@ Long modifiers (contract §B.8). A build run accepts:",
 
 An install run (-S/-U) additionally accepts:",
         blocks: &[
-            ("--config PATH", "the target pacman.conf"),
+            (
+                "--config PATH",
+                "the target pacman.conf — its DBPath is the database every gate reads and the transaction writes",
+            ),
             ("--no-register-ignorepkg", "skip the dynamic IgnorePkg registration, loudly"),
-            ("-- <pacman args…>", "forwarded to every pacman -U"),
+            (
+                "-- <pacman args…>",
+                "forwarded to every pacman -U; a database rebind (--dbpath/--root/--sysroot/--config) is refused",
+            ),
         ],
     },
     Section {

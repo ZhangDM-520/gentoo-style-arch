@@ -122,7 +122,7 @@ fn sudo_true_command() -> Command {
 /// `sudo cannot install non-interactively`). Proven with `sudo -n true` —
 /// never `sudo -v` (a NOPASSWD entry makes `-v` fail while every install
 /// succeeds, `AGENTS.md` rule 11).
-pub fn preflight_installs() -> Result<(), String> {
+pub fn preflight_installs(conf: Option<&Path>) -> Result<(), String> {
     let output = sudo_true_command()
         .output()
         .map_err(|e| format!("sudo cannot install non-interactively ({e})"))?;
@@ -135,7 +135,8 @@ pub fn preflight_installs() -> Result<(), String> {
     // (blind-review 2026-11-11, ci-fleet-operator). A LIVE lock is not a
     // refusal: it can clear while the run builds, and the executor waits
     // for it bounded.
-    if let Some(stale) = crate::register::stale_db_lock(&crate::pacman_db_root()) {
+    let db_root = crate::pacman_db_root_for(conf)?;
+    if let Some(stale) = crate::register::stale_db_lock(&db_root) {
         return Err(crate::register::stale_db_lock_message(&stale));
     }
     Ok(())
@@ -187,8 +188,8 @@ pub fn sudo_credential_lost(stderr: &str) -> bool {
 /// Wait for a live pacman database lock the way registration does (rule 9/23:
 /// bounded, never deleted) before the transaction spawns. A stale lock (no
 /// live holder) proceeds untouched.
-fn await_db_lock() -> Result<(), String> {
-    crate::register::wait_for_db_lock(&crate::pacman_db_root())
+fn await_db_lock(db_root: &Path) -> Result<(), String> {
+    crate::register::wait_for_db_lock(db_root)
 }
 
 /// Run the ONE `pacman -U` transaction for this call, serialized through the
@@ -205,7 +206,13 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
     // while the file exists) and must never be deleted here: fail with the
     // staleness named rather than letting pacman indict the file and the
     // engine repeat "wait for the other package manager" (which never ends).
-    if let Some(stale) = crate::register::stale_db_lock(&crate::pacman_db_root()) {
+    // The target configuration names the DB (and its `db.lck`) this
+    // transaction will open — never the host's (security-auditor F4).
+    let db_root = match crate::pacman_db_root_for(req.conf.as_deref()) {
+        Ok(root) => root,
+        Err(message) => return TxnOutcome::Failed { rc: -1, message },
+    };
+    if let Some(stale) = crate::register::stale_db_lock(&db_root) {
         return TxnOutcome::Failed {
             rc: -1,
             message: crate::register::stale_db_lock_message(&stale),
@@ -214,7 +221,7 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
     // A live `db.lck` is waited for, not raced: firing `pacman -U` into it
     // reported pacman's "unable to lock database … you can remove" line as
     // the failure reason, which invites deleting a LIVE lock.
-    if let Err(message) = await_db_lock() {
+    if let Err(message) = await_db_lock(&db_root) {
         return TxnOutcome::Failed { rc: -1, message };
     }
     let mutex_path = gsa_build::shim::mutex_path(&req.state_dir);
@@ -260,7 +267,7 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
                     rc,
                     message: format!(
                         "another package manager holds the database lock — wait for it to finish and retry; never delete {}",
-                        crate::pacman_db_root().join("db.lck").display()
+                        db_root.join("db.lck").display()
                     ),
                 };
             }

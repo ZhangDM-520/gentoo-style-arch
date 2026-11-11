@@ -1055,4 +1055,100 @@ if grep -Eq 'noop empty-list' <<<"$FIXTURE_OUTPUT"; then
     exit 1
 fi
 
+# ─── Section 12: `--config` names the DB every gate reads ─────────────────
+# 2026-11-11 (blind-review security-auditor F4/F4b): a `-U --config alt.conf`
+# planned against the HOST database and transacted into alt's, so a move the
+# alt DB recorded was invisible to the ABI/NEEDED/checked-skip gates and the
+# engine installed a broken soname into a machine nothing judged. The gates
+# now resolve DBPath from the configuration the transaction is given, and a
+# forwarded `--dbpath`/`--root`/`--sysroot`/`--config` after `--` is refused
+# (it would rebind the DB behind the gates' back).
+ws="$fixture/config-db"
+make_workspace "$ws" 1 2 low
+write_engine_stubs "$ws" "$ws/db"
+mkdir -p "$ws/alt-db/local"
+# A CONF-AWARE pacman-conf: the fixed fabricated root when the conf names no
+# DBPath (every other section's synthetic conf), the conf's own DBPath when
+# it does (this section), and pacman-conf's own refusal for a conf it cannot
+# read — exactly the three answers the real tool gives.
+cat >"$ws/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+conf=""
+prev=""
+for arg in "$@"; do
+    [ "$prev" = --config ] && conf=$arg
+    prev=$arg
+done
+[ "${1:-}" = DBPath ] || exit 1
+if [ -n "$conf" ] && [ ! -f "$conf" ]; then
+    printf "error: config file %s could not be read: No such file or directory\n" "$conf" >&2
+    exit 1
+fi
+if [ -n "$conf" ]; then
+    dbpath=$(sed -n 's/^[[:space:]]*DBPath[[:space:]]*=[[:space:]]*//p' "$conf" | head -n 1)
+    if [ -n "$dbpath" ]; then
+        printf '%s\n' "$dbpath"
+        exit 0
+    fi
+fi
+printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+EOF
+chmod +x "$ws/bin/pacman-conf"
+export GSA_FAKE_DB_PATH="$ws/db"
+printf '[options]\nDBPath = %s\n' "$ws/alt-db" >"$ws/alt.conf"
+add_package "$ws" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
+cfg_arch="$ws/packages/p1/p1-1.0.0-1-any.pkg.tar.zst"
+make_pkg_archive "$cfg_arch" p1 p1 1.0.0 1
+# The alt DB holds the SAME version with a fresher install date: a plan that
+# reads the alt DB skips, a plan that reads the default (empty) DB installs.
+touch -d '+1 day' "$(db_install "$ws/alt-db" p1 "$(fullver '' 1.0.0 1)")"
+: >"$ws/pacman.log"
+run_inst "$ws" -U --config "$ws/alt.conf" p1
+[ "$FIXTURE_RC" = 0 ] || fail "F4: the alt-conf plan must be rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+record_section plan | grep -Fx "p1 skip already-current $(fullver '' 1.0.0 1)" >/dev/null ||
+    fail "F4: the checked-skip gate must read the DB the --config transaction writes (alt holds the fresh entry): $FIXTURE_OUTPUT"
+[ "$(txn_count "$ws/pacman.log")" = 0 ] ||
+    fail "F4: a skip planned against the target DB must transact nothing:" "$ws/pacman.log"
+# The same archive with NO --config resolves the host/none-conf DB (empty):
+# install. This is the half that proves the conf, not a constant, chose.
+: >"$ws/pacman.log"
+run_inst "$ws" -U p1
+[ "$FIXTURE_RC" = 0 ] || fail "F4 control: the default-conf plan must be rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+record_section plan | grep -Fx 'p1 install ok' >/dev/null ||
+    fail "F4 control: the default DB has no p1, so the plan must install: $FIXTURE_OUTPUT"
+[ "$(txn_count "$ws/pacman.log")" = 1 ] ||
+    fail "F4 control: want exactly one transaction, got $(txn_count "$ws/pacman.log"):" "$ws/pacman.log"
+# A configuration whose DBPath cannot be resolved is a REFUSAL (rc 3), never
+# a silent plan against the host DB — pacman-free, and the message names the
+# conf.
+: >"$ws/pacman.log"
+run_inst "$ws" -U --config "$ws/missing.conf" p1
+[ "$FIXTURE_RC" = 3 ] ||
+    fail "F4 (unreadable conf): want the refusal class rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+grep < <(printf '%s\n' "$FIXTURE_OUTPUT") -F "cannot resolve the DBPath of the target pacman configuration $ws/missing.conf" >/dev/null ||
+    fail "F4 (unreadable conf): the refusal must name the configuration: $FIXTURE_OUTPUT"
+[ "$(pacman_mut_count "$ws/pacman.log")" = 0 ] ||
+    fail "F4 (unreadable conf): a refusing plan is pacman-free:" "$ws/pacman.log"
+# F4b: a forwarded DB rebind is a usage error (rc 2) — the gates would judge
+# a DB the transaction never opens.
+: >"$ws/pacman.log"
+run_inst "$ws" -U --config "$ws/alt.conf" p1 -- --dbpath "$ws/alt-db"
+[ "$FIXTURE_RC" = 2 ] ||
+    fail "F4b: a forwarded --dbpath must be a usage error rc 2, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+grep < <(printf '%s\n' "$FIXTURE_OUTPUT") -F "must not rebind the database ('--dbpath')" >/dev/null ||
+    fail "F4b: the refusal must name the forwarded flag: $FIXTURE_OUTPUT"
+[ "$(pacman_mut_count "$ws/pacman.log")" = 0 ] ||
+    fail "F4b: the usage fence runs before any pacman contact:" "$ws/pacman.log"
+# The -S install hook reads the same target DB: the alt DB holds a NEWER
+# version, so the checked install of the just-built 1.0.0-1 is `not-newer`
+# (skip) — a hook reading the empty default DB would transact.
+write_eval_makepkg "$ws"
+touch -d '+1 day' "$(db_install "$ws/alt-db" p1 "$(fullver '' 2.0.0 1)")"
+: >"$ws/pacman.log"
+run_inst "$ws" -S --leaf --config "$ws/alt.conf" p1
+[ "$FIXTURE_RC" = 0 ] || fail "F4 (-S): the build+skip run must be rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+[ "$(txn_count "$ws/pacman.log")" = 0 ] ||
+    fail "F4 (-S): the install hook must read the target DB (alt is newer, so no transaction):" "$ws/pacman.log"
+
 printf 'install archive guard fixture: PASS\n'

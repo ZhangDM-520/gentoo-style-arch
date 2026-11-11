@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use gsa_abi::{plan_waves, stage_swap, Subscriptions, TokenMove, WaveInputs, WavePlan};
 use gsa_graph::Graph;
-use gsa_install::localdb::pacman_db_root;
+use gsa_install::localdb::pacman_db_root_for;
 use gsa_install::{
     decide, decide_mode, decide_with_repairs, discover_recipe, execute_txn, names_for_archive,
     preflight_installs, register_ignorepkg, render_rows, rows_rc, workspace_exclusions, Candidate,
@@ -787,7 +787,25 @@ fn run_upgrade_inner(
     // consumer (contract §B.6).
     let state_dir = state_dir_of(inv).map_err(Exit::Usage)?;
     let log_dir = state_dir.join("logs");
-    let db_root = pacman_db_root();
+    // The DB the transaction will write, not the host's: `--config` names
+    // the configuration whose `DBPath` the gates must judge (security-auditor
+    // F4). An unresolvable root refuses pacman-free rather than planning
+    // against the wrong database.
+    let conf_override = inv.config.as_deref().map(Path::new);
+    let db_root = match pacman_db_root_for(conf_override) {
+        Ok(root) => root,
+        Err(message) => {
+            return Ok(finish_refused(
+                inv,
+                out,
+                err,
+                vec![plan_failed_row(&message)],
+                &[],
+                "refused-plan-pacman-free",
+                &log_dir,
+            ));
+        }
+    };
     let localdb = match LocalDb::load(&db_root) {
         Ok(localdb) => localdb,
         Err(message) => {
@@ -1018,7 +1036,7 @@ fn run_upgrade_inner(
     }
 
     // ── preflight, run lock (§K.3) ──────────────────────────────────────
-    if let Err(message) = preflight_installs() {
+    if let Err(message) = preflight_installs(conf_override) {
         let _ = writeln!(err, "gsa: {message}");
         let outcomes = rows
             .iter()
@@ -1064,10 +1082,8 @@ fn run_upgrade_inner(
     };
 
     // ── dynamic IgnorePkg registration (rule 9) ─────────────────────────
-    let conf = inv
-        .config
-        .as_ref()
-        .map(PathBuf::from)
+    let conf = conf_override
+        .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONF));
     let register = !inv
         .deferred_flags
@@ -1919,12 +1935,12 @@ fn run_install_decide_inner(
         // writes — the one state read is §E.5's park report above.
         state_dir: None,
     };
-    let rows = match LocalDb::load(&pacman_db_root()) {
-        Ok(localdb) => match decide(&candidates, &ctx, &localdb) {
+    let rows = match pacman_db_root_for(None).map(|root| LocalDb::load(&root)) {
+        Ok(Ok(localdb)) => match decide(&candidates, &ctx, &localdb) {
             Ok(rows) => rows,
             Err(message) => vec![plan_failed_row(&message)],
         },
-        Err(message) => vec![plan_failed_row(&message)],
+        Ok(Err(message)) | Err(message) => vec![plan_failed_row(&message)],
     };
     let _ = write!(out, "{}", render_rows(&rows));
     Ok(rows_rc(&rows))
@@ -1963,7 +1979,14 @@ fn run_install_register_inner(
     ) {
         return Err(exit);
     }
-    match register_ignorepkg(conf, subject, names, &pacman_db_root()) {
+    let db_root = match pacman_db_root_for(Some(conf)) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: --install-register: {message}");
+            return Ok(1);
+        }
+    };
+    match register_ignorepkg(conf, subject, names, &db_root) {
         Ok(report) => {
             let _ = writeln!(out, "{}", register_report_line(subject, conf, &report));
             Ok(0)
@@ -2034,7 +2057,14 @@ fn run_register_ignorepkg_inner(
         }
     }
     let names: Vec<String> = names.into_iter().collect();
-    match register_ignorepkg(&conf, "workspace", &names, &pacman_db_root()) {
+    let db_root = match pacman_db_root_for(Some(&conf)) {
+        Ok(root) => root,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: --register-ignorepkg: {message}");
+            return Ok(1);
+        }
+    };
+    match register_ignorepkg(&conf, "workspace", &names, &db_root) {
         Ok(report) => {
             let _ = writeln!(out, "{}", register_report_line("workspace", &conf, &report));
             Ok(0)

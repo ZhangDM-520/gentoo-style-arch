@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use gsa_abi::{plan_waves, Subscriptions, TokenMove, WaveInputs};
 use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
-use gsa_install::localdb::{pacman_db_root, LocalDb};
+use gsa_install::localdb::{pacman_db_root, pacman_db_root_for, LocalDb};
 use gsa_install::{preflight_installs, DecideMode, InstallRun};
 use gsa_model::{Group, OutcomeRow, PlanAction, PlanRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::toolchain;
@@ -178,6 +178,7 @@ fn run_build_with(
         &graph,
         &selection,
         &state_dir,
+        inv.config.as_deref().map(std::path::Path::new),
         &crate::install::workspace_recipe_of_name(&db),
     ) {
         Ok(wave) => wave,
@@ -223,7 +224,7 @@ fn run_build_with(
     // Install preflight (contract §K.3): an install run whose installs
     // cannot succeed non-interactively refuses BEFORE any build (§G.1 rc 3).
     if install.is_some() {
-        if let Err(message) = preflight_installs() {
+        if let Err(message) = preflight_installs(inv.config.as_deref().map(std::path::Path::new)) {
             let _ = writeln!(err, "gsa: {message}");
             return Err(refuse_before_dispatch(
                 inv,
@@ -900,6 +901,7 @@ pub(crate) fn plan_only(
         ctx.graph,
         &selection,
         &state_dir,
+        inv.config.as_deref().map(std::path::Path::new),
         &crate::install::workspace_recipe_of_name(ctx.db),
     ) {
         Ok(wave) => wave,
@@ -1399,6 +1401,7 @@ pub(crate) fn wave_check(
     graph: &Graph<'_>,
     selection: &Selection,
     state_dir: &std::path::Path,
+    conf: Option<&std::path::Path>,
     recipe_of_name: &std::collections::BTreeMap<String, String>,
 ) -> Result<WaveCheck, WaveStateError> {
     // A state root that does not exist is a clean checkout, not unreadable
@@ -1511,8 +1514,13 @@ pub(crate) fn wave_check(
     // not "nothing installed": the record and topology terms still run, the
     // content-truth term goes quiet (and loudly so), and `installed: None`
     // tells the planner to fail closed — dead-record skips need a readable
-    // world (rule 25(c): never under-expand).
-    let (db, db_readable) = match LocalDb::load(&pacman_db_root()) {
+    // world (rule 25(c): never under-expand). The ROOT is the one the
+    // transaction will write (`--config`'s DBPath), and a named
+    // configuration whose root cannot be resolved is a refusal: it is a
+    // different machine, not unreadable world state (security-auditor F4).
+    let db_root = pacman_db_root_for(conf)
+        .map_err(|message| WaveStateError(format!("ABI wave check refused: {message}")))?;
+    let (db, db_readable) = match LocalDb::load(&db_root) {
         Ok(db) => (db, true),
         Err(error) => {
             let _ = writeln!(
@@ -1978,6 +1986,7 @@ mod tests {
             &graph,
             &selection,
             &dir,
+            None,
             &std::collections::BTreeMap::new(),
         );
         let error = match result {
@@ -2003,6 +2012,7 @@ mod tests {
             &graph,
             &selection,
             &absent,
+            None,
             &std::collections::BTreeMap::new()
         )
         .is_ok());

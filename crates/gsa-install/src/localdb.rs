@@ -298,7 +298,7 @@ impl LocalDb {
 pub use gsa_abi::view::{path_class, ElfClass};
 pub use gsa_abi::{provide_covers, provide_name, soname_stem};
 
-/// The pacman DB root (`pacman-conf DBPath`, falling back to
+/// The host's pacman DB root (`pacman-conf DBPath`, falling back to
 /// `/var/lib/pacman`). `pacman-conf` is a read-only configuration reader,
 /// never pacman and never a transaction — the seam stays pacman-free (§D.1).
 pub fn pacman_db_root() -> PathBuf {
@@ -314,6 +314,55 @@ pub fn pacman_db_root() -> PathBuf {
         }
     }
     PathBuf::from("/var/lib/pacman")
+}
+
+/// The DB root of the pacman configuration a transaction will be given
+/// (`--config <conf>`), or the host's root when no configuration is named.
+///
+/// A transaction writes into the DB its configuration's `DBPath` names, so
+/// every gate that reads installed state must read THAT root or it judges a
+/// different machine: `gsa -U --config alt/pacman.conf` used to plan against
+/// the host DB and land the archive in `alt`'s, blind to a moving soname
+/// (blind-review 2026-11-11, security-auditor F4). A named configuration
+/// whose DB root cannot be resolved therefore REFUSES — falling back to the
+/// host root would restore exactly that fail-open (rule 71).
+pub fn pacman_db_root_for(conf: Option<&Path>) -> Result<PathBuf, String> {
+    let Some(conf) = conf else {
+        return Ok(pacman_db_root());
+    };
+    // `DBPath` first, the configuration after: this ordering is the shape
+    // pacman-conf documents and the one every fixture stub already answers.
+    let output = std::process::Command::new("pacman-conf")
+        .arg("DBPath")
+        .arg("--config")
+        .arg(conf)
+        .output()
+        .map_err(|error| {
+            format!(
+                "cannot resolve the DBPath of the target pacman configuration {} ({error}) — the install gates must read the database the transaction writes",
+                conf.display()
+            )
+        })?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        };
+        return Err(format!(
+            "cannot resolve the DBPath of the target pacman configuration {}{detail} — the install gates must read the database the transaction writes, so the run refuses rather than judging the host's database",
+            conf.display()
+        ));
+    }
+    if text.is_empty() {
+        return Err(format!(
+            "the target pacman configuration {} names no DBPath — the install gates must read the database the transaction writes",
+            conf.display()
+        ));
+    }
+    Ok(PathBuf::from(text))
 }
 
 #[cfg(test)]

@@ -20,7 +20,7 @@ pub mod register;
 use std::path::{Path, PathBuf};
 
 pub use exec::{execute_txn, preflight_installs, TxnOutcome, TxnRequest};
-pub use localdb::{pacman_db_root, InstalledPackage, LocalDb};
+pub use localdb::{pacman_db_root, pacman_db_root_for, InstalledPackage, LocalDb};
 pub use register::{names_for_archive, register_ignorepkg, RegisterReport};
 
 use gsa_model::{Decision, DecisionRow};
@@ -1263,7 +1263,7 @@ pub fn install_built_package(
         wave_heal: Vec::new(),
         state_dir: Some(run.state_dir.clone()),
     };
-    let db_root = localdb::pacman_db_root();
+    let db_root = localdb::pacman_db_root_for(run.conf.as_deref())?;
     let db = LocalDb::load(&db_root)?;
     let plan = plan(&discovered.candidates, &ctx, &db)?;
     let rows = plan.rows();
