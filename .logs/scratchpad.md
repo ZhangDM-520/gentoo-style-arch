@@ -1,21 +1,20 @@
 # Scratchpad
 
-**Active:** blind review exercise — round 2 running (5 personae), round 1 fixed
-and shipped as 14 commits.
+**Active:** blind review exercise — round 3 closed (13 fixes), round 4 pending
+the owner's reboot.
 
 ## State
-- Round 1: DONE (3 personae). 14 fixes committed, battery 56/56 green,
-  summary at `~/Workspace/gsa-lab/runs/r1/SUMMARY.md`.
-- Round 2: IN FLIGHT — containers `gsa-lab-r2-{newcomer,path-space,
-  recovery-user,perf-tuner,kernel-tinkerer}` on image `gsa-lab:2`
-  (binary from `target/release/gsa` @ 4706d2a + refreshed `/src`).
-  Reports land in `~/Workspace/gsa-lab/runs/r2/<persona>/report.md`.
-- Rounds 3 and 4 pending (5 personae each, roster in plan.md).
-- Enhancement backlog (final discussion): `-Mh` addressable run id,
-  `--skip` waiver reason, `-U <path>` unindexed hash gate (contract open
-  decision I2), non-ELF token `sha256("")`, `-B` missing-house-dep preflight.
+- Round 1: DONE (3 personae), 14 fixes.
+- Round 2: DONE (5 personae), 17 fixes + 1 revert; battery 56/56.
+- Round 3: DONE (5 personae), 13 fixes; `cargo test --workspace
+  -- --test-threads=1` green; battery 56/56 (pre-install deviation).
+  Export: `.logs/action-2026-11-11-blind-review-round3.md`.
+- Round 4: NOT STARTED — image `gsa-lab:4` is built from this tree at the
+  first round-4 step; 5 fresh personae, roster in plan.md.
+- Round-4 backlog: 19 reproducible findings + 6 enhancements listed in the
+  round-3 export (order preserved).
 
 ## Next action
-When the five round-2 agents report: triage each finding (bug/enhancement/
-unproven), fix every reproducible bug one commit each with a red-first
-fixture, run the battery, write the round-2 summary, then build `gsa-lab:3`.
+After the reboot: build `gsa-lab:4`, dispatch 5 blind agents, triage as each
+reports (one commit + red-first fixture per bug), then the single
+convergence report + enhancement summary for the owner.
