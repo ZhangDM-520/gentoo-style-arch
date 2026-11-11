@@ -24,19 +24,21 @@ use gsa_state::{RunHistory, StateRoot};
 use crate::Row;
 
 /// The recipes whose files a prune must not delete: the newest stored run
-/// record's `remaining:` set. Corrupt lines and an empty history protect
-/// nothing (nothing is referenced).
-pub fn referenced_by_run(state: &StateRoot) -> BTreeSet<String> {
+/// record's `remaining:` set. Corrupt LINES protect nothing (the record they
+/// belonged to is gone); an UNREADABLE history is an error, never an empty
+/// set — collapsing the two deleted an archive a continuation still
+/// references, and the prune reported it as an ordinary `prune` (rule 71;
+/// blind review, 2026-11-11).
+pub fn referenced_by_run(state: &StateRoot) -> Result<BTreeSet<String>, String> {
+    let (records, _corrupt) = RunHistory::read(state)
+        .map_err(|e| format!("cannot read the run history — refusing to prune unreferenced archives: {e}"))?;
     let mut protected = BTreeSet::new();
-    let Ok((records, _corrupt)) = RunHistory::read(state) else {
-        return protected;
-    };
     if let Some(newest) = records.last() {
         for id in &newest.continuation.remaining {
             protected.insert(id.as_str().to_string());
         }
     }
-    protected
+    Ok(protected)
 }
 
 /// The `keep` row for a protected prune target.

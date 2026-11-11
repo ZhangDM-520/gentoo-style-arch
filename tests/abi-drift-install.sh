@@ -640,6 +640,26 @@ libs-git refuse abi-consumer
 EOF
 checks=$((checks + 1))
 
+# ─── A3. an unreadable local-DB entry cannot stand the gate down ───────────
+# Rule 71 for the installed VIEW: a `files` list that cannot be read is an
+# UNKNOWN owned set, not an empty one. It used to disappear from the view, so
+# the consumer above was invisible, the soname gate found nothing to break,
+# and the same moving-soname archive planned `install` — rc 0 (blind review,
+# 2026-11-11). A damaged entry whose package ships no soname is unaffected:
+# the fence only fires for an archive that moves or ships one.
+gsa_db_reset
+gsa_provider
+gsa_consumer
+rm -f "$tmp/gsa-db/local/app-git-1.0.0-1/files"
+mkdir "$tmp/gsa-db/local/app-git-1.0.0-1/files"
+g_arch=$(gsa_archive libs-git 'libgreet.so=2-64')
+gsa_decide force "$g_arch"
+assert_decisions 'A3: the ABI gate refuses an unreadable installed view' 1 <<'EOF'
+libs-git refuse abi-installed-view-unreadable
+EOF
+seam_row_has A3 "app-git-1.0.0-1/files" # the damage is named, not just counted
+checks=$((checks + 2))
+
 # ─── B. closure complete: the consumer rides in the transaction ────────────
 # The covered consumer's archive rides the same transaction → nothing is
 # stranded and the move plans CLEAN on both sides (fish

@@ -624,7 +624,23 @@ fn run_upgrade_inner(
     // normally. Best-effort read (no state, no history → no parks); a
     // `--state-dir` resolution error stays the named later error it is.
     let parks = match state_dir_of(inv) {
-        Ok(dir) => parked_subjects(&dir),
+        Ok(dir) => match parked_subjects(&dir) {
+            Ok(parks) => parks,
+            // The park state is unknown, so no subject's archive is
+            // trustworthy: the run refuses before any plan row, pacman-free
+            // (the same class the local-DB read failure uses).
+            Err(message) => {
+                return Ok(finish_refused(
+                    inv,
+                    out,
+                    err,
+                    vec![plan_failed_row(&message)],
+                    &[],
+                    "refused-plan-pacman-free",
+                    &dir.join("logs"),
+                ));
+            }
+        },
         Err(_) => BTreeMap::new(),
     };
 
@@ -1324,14 +1340,14 @@ fn plan_failed_row(message: &str) -> DecisionRow {
 /// a park (`deferred`/`parked`, §H.3) mapped to that row's reason.
 /// `never-started`/`interrupted` rows settle nothing (a run that never
 /// reached the subject says nothing about its park); a later `succeeded` or
-/// `failed` attempt supersedes it. Read-only and best-effort: no state root
-/// or no history means no parks, never an error — these rows are a REPORT
-/// surface, and a state-less call stays exactly what it was.
-fn parked_subjects(state_dir: &Path) -> BTreeMap<String, String> {
+/// `failed` attempt supersedes it. Read-only: no state root or no history
+/// means no parks, but an UNREADABLE history is an error — collapsing it to
+/// "no parks" let a parked package's stale archive install (rule 71; blind
+/// review, 2026-11-11).
+fn parked_subjects(state_dir: &Path) -> Result<BTreeMap<String, String>, String> {
     let root = gsa_state::StateRoot::open_readonly(state_dir);
-    let Ok((records, _corrupt)) = gsa_state::RunHistory::read(&root) else {
-        return BTreeMap::new();
-    };
+    let (records, _corrupt) = gsa_state::RunHistory::read(&root)
+        .map_err(|e| format!("cannot read the run history — the park state is unknown: {e}"))?;
     let mut parks: BTreeMap<String, String> = BTreeMap::new();
     for record in &records {
         for row in &record.outcomes {
@@ -1346,7 +1362,7 @@ fn parked_subjects(state_dir: &Path) -> BTreeMap<String, String> {
             }
         }
     }
-    parks
+    Ok(parks)
 }
 
 /// §E.5's park report row: a subject the build path parked stands down
@@ -1871,8 +1887,21 @@ fn run_install_decide_inner(
         // never defers by itself; deferral originates in the build path).
         // The read is read-only (open_readonly) and never the §J.4 index:
         // the seam stays order-blind and index-blind (§D.1).
+        // An unreadable history is not "nothing is parked" (§E.5 + rule 71):
+        // the seam answers the same named plan failure instead of planning an
+        // install for a subject whose park state it could not read.
         parks: match gsa_state::resolve_state_root(None) {
-            Ok(dir) => parked_subjects(&dir).into_iter().collect(),
+            Ok(dir) => match parked_subjects(&dir) {
+                Ok(parks) => parks.into_iter().collect(),
+                Err(message) => {
+                    let _ = write!(
+                        out,
+                        "{}",
+                        gsa_install::render_rows(&[plan_failed_row(&message)])
+                    );
+                    return Ok(1);
+                }
+            },
             Err(_) => Vec::new(),
         },
         workspace_names: crate::resolve_root(false, None)

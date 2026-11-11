@@ -1023,6 +1023,32 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                 drift.push(extra);
             }
         }
+        // Rule 71 for the installed VIEW: an entry this read could not
+        // establish is not an absent one, and the gate above decided on that
+        // view — an unreadable entry hid an installed consumer, the gate
+        // found nothing to break, and the install went through rc 0 with the
+        // link dangling (blind review, 2026-11-11). The fence fires only when
+        // this archive actually moves or ships a soname: a plain install on a
+        // host with one damaged DB entry is unaffected.
+        let moves_sonames = !shipped_sonames.is_empty()
+            || info.provides.iter().any(|p| p.starts_with('=') || p.contains(".so"));
+        if moves_sonames && !db.unreadable.is_empty() {
+            rows.push(row(
+                &info.pkgbase,
+                Decision::Refuse,
+                format!(
+                    "abi-installed-view-unreadable {} entries ({})",
+                    db.unreadable.len(),
+                    db.unreadable.first().map(String::as_str).unwrap_or("-")
+                ),
+            ));
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo: Some(info),
+                rows,
+            });
+            continue;
+        }
         // Rule 25(d) in-run repair targets for THIS provider (consumers the
         // run rebuilds later) — folded into the install row's open REASON
         // (§E.3 gap-G1) only when the move lands (the row is `install`).

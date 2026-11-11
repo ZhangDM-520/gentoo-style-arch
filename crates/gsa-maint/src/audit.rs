@@ -416,15 +416,30 @@ fn state_integrity(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
         }
         Err(error) => out.push(("(index)".to_string(), error.to_string())),
     }
-    if let Ok((_records, corrupt)) = gsa_state::RunHistory::read(ctx.state) {
-        for line in &corrupt {
-            out.push((format!("{}:{}", line.store, line.line), line.render()));
+    // Rule 71: an UNREADABLE store is a finding, never a clean bill. `-Ma`
+    // reported `state-integrity clean` while the run history and the kv
+    // store could not be read at all (blind review, 2026-11-11).
+    match gsa_state::RunHistory::read(ctx.state) {
+        Ok((_records, corrupt)) => {
+            for line in &corrupt {
+                out.push((format!("{}:{}", line.store, line.line), line.render()));
+            }
         }
+        Err(error) => out.push((
+            "(runs)".to_string(),
+            format!("run history is unreadable: {error}"),
+        )),
     }
-    if let Ok((_pairs, corrupt)) = gsa_state::Kv::list(ctx.state) {
-        for line in &corrupt {
-            out.push((format!("{}:{}", line.store, line.line), line.render()));
+    match gsa_state::Kv::list(ctx.state) {
+        Ok((_pairs, corrupt)) => {
+            for line in &corrupt {
+                out.push((format!("{}:{}", line.store, line.line), line.render()));
+            }
         }
+        Err(error) => out.push((
+            "(kv)".to_string(),
+            format!("kv store is unreadable: {error}"),
+        )),
     }
     out
 }

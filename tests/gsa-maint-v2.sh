@@ -1277,6 +1277,56 @@ if want k; then
     )
 fi
 
+# ─── k2. an UNREADABLE history cannot stand the guards down (rule 71) ─────
+# Two guards read the run history: the prune's `referenced-by-run` keep and
+# `-U`'s park report. Collapsing an unreadable history to "nothing is
+# referenced / nothing is parked" deleted the archive a continuation still
+# owed and let a parked package's stale twin install (blind review,
+# 2026-11-11).
+if want k2; then
+    (
+        set -euo pipefail
+        ws="$fixture/k2/ws"
+        state="$fixture/k2/state"
+        make_workspace "$ws" 1 auto low
+        maint_ws "$ws"
+        add_package "$ws" parked "$gsa_meta_any"
+        # A real run seeds the index (an archive to prune) and the history
+        # (the reference record).
+        run_engine "$ws" -B --no-prefetch --leaf --state-dir "$state" parked
+        [ "$FIXTURE_RC" = 0 ] || fail "k2: seed run rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+
+        # The history becomes unreadable (a directory where the file belongs).
+        /usr/bin/sudo -n rm -f "$state/runs/history.jsonl"
+        /usr/bin/sudo -n mkdir "$state/runs/history.jsonl"
+
+        run_engine "$ws" -Mcc --dry-run --state-dir "$state"
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "k2: a prune over an unreadable history must refuse (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F 'cannot read the run history' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k2: the prune must name the unreadable history: $FIXTURE_OUTPUT"
+        if grep -Eq ' prune +(archive|staging)' <<<"$FIXTURE_OUTPUT"; then
+            fail "k2: an unreadable history must delete nothing: $FIXTURE_OUTPUT"
+        fi
+
+        run_engine "$ws" -U --dry-run --state-dir "$state" parked
+        [ "$FIXTURE_RC" != 0 ] \
+            || fail "k2: -U must refuse when the park state is unknown: $FIXTURE_OUTPUT"
+        grep -F 'cannot read the run history' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k2: -U must name the unreadable history: $FIXTURE_OUTPUT"
+
+        # `-Ma` is report-only rc 0, and an unreadable store is a FINDING:
+        # "state-integrity clean" over a store nobody could read is the
+        # fail-open the audit exists to catch.
+        run_engine "$ws" -Ma --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "k2: -Ma is report-only rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -E '^audit +state-integrity +[1-9]' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k2: -Ma must not call an unreadable store clean: $FIXTURE_OUTPUT"
+        grep -F 'run history is unreadable' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k2: -Ma must name the unreadable history: $FIXTURE_OUTPUT"
+    )
+fi
+
 # ─── l. -Mc prunes a recipe's live trees without committed metadata ───────
 if want l; then
     (

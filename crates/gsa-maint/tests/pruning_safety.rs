@@ -305,24 +305,40 @@ fn protect_referenced_by_run_tracks_the_newest_remaining_set() {
     let state = fx.state();
 
     // An empty history protects nothing.
-    assert!(protect::referenced_by_run(&state).is_empty());
+    assert!(protect::referenced_by_run(&state).unwrap().is_empty());
 
     // The newest record's `remaining:` set is the protected set.
     append_run(&state, &common::run_record("alpha", &["alpha", "beta"]));
-    let protected = protect::referenced_by_run(&state);
+    let protected = protect::referenced_by_run(&state).unwrap();
     assert!(protected.contains("alpha"));
     assert!(protected.contains("beta"));
     assert_eq!(protected.len(), 2);
 
     // A later record whose remaining no longer names them releases them.
     append_run(&state, &common::run_record("gamma", &["gamma"]));
-    let protected = protect::referenced_by_run(&state);
+    let protected = protect::referenced_by_run(&state).unwrap();
     assert!(protected.contains("gamma"));
     assert!(!protected.contains("alpha"), "released by the later record");
 
     // An empty continuation releases everything.
     append_run(&state, &common::run_record("delta", &[]));
-    assert!(protect::referenced_by_run(&state).is_empty());
+    assert!(protect::referenced_by_run(&state).unwrap().is_empty());
+}
+
+/// An UNREADABLE history is an error, never an empty set: the prune must not
+/// delete an archive a continuation still references because it could not read
+/// the reference (rule 71; blind review, 2026-11-11).
+#[test]
+fn protect_refuses_when_the_history_cannot_be_read() {
+    let fx = Fixture::new("protect-unreadable");
+    let state = fx.state();
+    append_run(&state, &common::run_record("alpha", &["alpha"]));
+    // A directory where the history file belongs: the read fails, nothing is
+    // silently "unreferenced".
+    let path = gsa_state::RunHistory::path(&state);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(protect::referenced_by_run(&state).is_err());
 }
 
 #[test]

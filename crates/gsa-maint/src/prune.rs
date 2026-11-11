@@ -336,7 +336,18 @@ fn run_targets(
     targets: &[(String, Target)],
     apply: bool,
 ) -> (Vec<Row>, Vec<(String, PathBuf)>) {
-    let protected = protect::referenced_by_run(ctx.state);
+    // An unreadable history cannot say which archives a continuation still
+    // references, so nothing is deleted and the refusal is named (rule 71;
+    // blind review, 2026-11-11).
+    let protected = match protect::referenced_by_run(ctx.state) {
+        Ok(set) => set,
+        Err(message) => {
+            return (
+                vec![Row::new("-".to_string(), "failed", message)],
+                Vec::new(),
+            )
+        }
+    };
     let mut rows = Vec::new();
     let mut deleted: Vec<(String, PathBuf)> = Vec::new();
     for (recipe, target) in targets {

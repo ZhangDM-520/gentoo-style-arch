@@ -373,5 +373,9 @@ fn computed_rows(ctx: &MaintCtx<'_>, state: &StateRoot, name: &str) -> Result<Ve
 /// answers "is this ref still referenced by a run?" for edit callers that
 /// want to warn before deselecting a package a continuation still owes.
 pub fn referenced(state: &StateRoot, id: &str) -> bool {
-    protect::referenced_by_run(state).contains(id)
+    // An unreadable history is "unknown", and unknown is referenced: a
+    // warning seam never promises a delete on a store it could not read.
+    protect::referenced_by_run(state)
+        .map(|set| set.contains(id))
+        .unwrap_or(true)
 }

@@ -42,6 +42,14 @@ pub struct LocalDb {
     basenames: BTreeMap<String, Vec<String>>,
     /// Where owned files are probed for existence (production: `/`).
     root: PathBuf,
+    /// Entries this read could not establish: an unreadable `desc`, a missing
+    /// `%NAME%`/`%VERSION%`, a `files` list that is not a readable file. Rule
+    /// 71: an unreadable file is NOT an absent one — an installed consumer
+    /// this read cannot see silently narrowed the ABI gate's world (a moving
+    /// soname with its linked consumer hidden installed clean and broke the
+    /// link; blind review, 2026-11-11). Listings note them and continue; a
+    /// gate that decides on the installed view must refuse.
+    pub unreadable: Vec<String>,
 }
 
 /// Parse one pacman local-DB entry file (`desc`/`files`): `%KEY%` headers,
@@ -142,10 +150,9 @@ impl LocalDb {
             let desc = match std::fs::read_to_string(dir.join("desc")) {
                 Ok(text) => text,
                 Err(e) => {
-                    eprintln!(
-                        "gsa: note: skipping unreadable local-DB entry {}: {e}",
-                        dir.display()
-                    );
+                    let note = format!("{}: {e}", dir.display());
+                    eprintln!("gsa: note: skipping unreadable local-DB entry {note}");
+                    db.unreadable.push(note);
                     continue;
                 }
             };
@@ -153,10 +160,9 @@ impl LocalDb {
             let (Some(name), Some(version)) =
                 (first(&sections, "NAME"), first(&sections, "VERSION"))
             else {
-                eprintln!(
-                    "gsa: note: skipping malformed local-DB entry {} (missing %NAME%/%VERSION%)",
-                    dir.display()
-                );
+                let note = format!("{}: missing %NAME%/%VERSION%", dir.display());
+                eprintln!("gsa: note: skipping malformed local-DB entry ({note})");
+                db.unreadable.push(note);
                 continue;
             };
             let provides = sections.get("PROVIDES").cloned().unwrap_or_default();
@@ -164,9 +170,20 @@ impl LocalDb {
             let base = first(&sections, "BASE");
             let package_desc = first(&sections, "DESC");
             let mut files: Vec<String> = Vec::new();
-            if let Ok(files_text) = std::fs::read_to_string(dir.join("files")) {
-                for path in section_lines(&files_text, "FILES") {
-                    files.push(normalize_path(path).to_string());
+            match std::fs::read_to_string(dir.join("files")) {
+                Ok(files_text) => {
+                    for path in section_lines(&files_text, "FILES") {
+                        files.push(normalize_path(path).to_string());
+                    }
+                }
+                // No `files` file is legal (a package owning nothing); a
+                // `files` that exists and cannot be read is an unknown owned
+                // set, which is exactly what the link and soname gates read.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    let note = format!("{}/files: {e}", dir.display());
+                    eprintln!("gsa: note: unreadable local-DB file list {note}");
+                    db.unreadable.push(note);
                 }
             }
             for path in &files {
