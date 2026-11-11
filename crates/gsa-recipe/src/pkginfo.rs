@@ -232,6 +232,60 @@ pub fn member_names(archive: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Every SYMLINK member of one archive, in archive order: `(link, target)`.
+/// A dangling link names a path that resolves nothing — the resolution
+/// sources a NEEDED probe may use are bytes, and a broken link is not bytes
+/// (blind review, 2026-11-11: a dangling `libfoo.so.9` "resolved" a need).
+pub fn member_symlinks(archive: &Path) -> Result<Vec<(String, String)>, String> {
+    let mut tar = open_archive(archive)?;
+    let entries = tar.entries().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.header().entry_type().is_symlink() {
+            continue;
+        }
+        let name = entry
+            .path()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        let target = entry
+            .link_name()
+            .map_err(|e| e.to_string())?
+            .map(|t| t.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        out.push((name, target));
+    }
+    Ok(out)
+}
+
+/// Resolve one archive-internal symlink target against the link's own
+/// directory, in the archive's path spelling (`./usr/lib/x` → `usr/lib/x`).
+/// `None` when the target escapes the archive (`..` above the root) — such a
+/// link can never resolve to a member.
+pub fn resolve_member_link(link: &str, target: &str) -> Option<String> {
+    let link = link.strip_prefix("./").unwrap_or(link);
+    let mut stack: Vec<&str> = link.split('/').filter(|c| !c.is_empty()).collect();
+    stack.pop();
+    let joined = if target.starts_with('/') {
+        target.strip_prefix('/').unwrap_or(target).to_string()
+    } else {
+        let mut parts: Vec<&str> = stack;
+        for component in target.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                other => parts.push(other),
+            }
+        }
+        parts.join("/")
+    };
+    Some(joined)
+}
+
 /// One member's `DT_NEEDED` list, per member, in archive order (members that
 /// are not ELF contribute an empty list). Read one member at a time — memory
 /// is bounded by the largest single member. `Err` = the archive could not be

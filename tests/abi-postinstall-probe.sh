@@ -445,6 +445,26 @@ seam_rows H
     fail "H: decision is not install when the batch ships the file: $SEAM_OUTPUT"
 checks=$((checks + 2))
 
+# ─── H2. a DANGLING shipped symlink resolves nothing ──────────────────────
+# Resolution source (b) is the bytes the transaction lands. A symlink whose
+# target is not shipped either names a path that carries no bytes — it used
+# to "resolve" the need and the install went through rc 0 with the link
+# broken (blind review, 2026-11-11).
+reset_case
+stage_archive app-git
+# Replace the batch mate with a package that ships ONLY a dangling link.
+rm -rf "$tmp/payload-libs-git"
+mkdir -p "$tmp/payload-libs-git/usr/lib"
+printf 'pkgname = libs-git\npkgver = 1.0.0-1\narch = any\n' >"$tmp/payload-libs-git/.PKGINFO"
+ln -s libgreet.so.1.2.3 "$tmp/payload-libs-git/usr/lib/libgreet.so.1"
+stage_archive libs-git
+seam_rows H2
+[[ $SEAM_RC != 0 ]] ||
+    fail "H2: a dangling shipped symlink must not resolve a need: $SEAM_OUTPUT"
+[[ $(rr2_decision app-git decision <<<"$SEAM_OUTPUT") == refuse ]] ||
+    fail "H2: the consumer must be refused, never installed: $SEAM_OUTPUT"
+checks=$((checks + 2))
+
 # ─── E. a probe that cannot run is a NAMED warning, never a silent "clean" ──
 # R-F26 non-fatal half (FISH-DRIVEN — DEVIATION 2): mktemp failure (the
 # probe's temp dir) must surface as `post-install NEEDED probe skipped

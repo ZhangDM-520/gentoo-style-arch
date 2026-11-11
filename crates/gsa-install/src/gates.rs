@@ -179,19 +179,39 @@ impl ShippedBytes {
     /// under-report resolution sources).
     pub fn collect(archives: &[&Path]) -> Result<ShippedBytes, String> {
         let mut index = ShippedBytes::default();
+        let mut links: Vec<(String, String)> = Vec::new();
         for archive in archives {
             for name in member_names(archive)
                 .map_err(|e| format!("cannot list {}: {e}", archive.display()))?
             {
                 let normalized = name.strip_prefix("./").unwrap_or(&name);
-                if let Some(base) = normalized.rsplit('/').next() {
-                    index
-                        .basenames
-                        .entry(base.to_string())
-                        .or_default()
-                        .push(normalized.to_string());
-                }
                 index.paths.insert(normalized.to_string());
+            }
+            for (link, target) in gsa_recipe::pkginfo::member_symlinks(archive)
+                .map_err(|e| format!("cannot list {}: {e}", archive.display()))?
+            {
+                let link = link.strip_prefix("./").unwrap_or(&link).to_string();
+                links.push((link, target));
+            }
+        }
+        // A symlink resolves a need only when its target is a member too: a
+        // DANGLING link names a path that carries no bytes, so it covered a
+        // `DT_NEEDED` nothing could satisfy and the install went through
+        // rc 0 with the link broken (blind review, 2026-11-11).
+        for (link, target) in &links {
+            let resolves = gsa_recipe::pkginfo::resolve_member_link(link, target)
+                .is_some_and(|resolved| index.paths.contains(&resolved));
+            if !resolves {
+                index.paths.remove(link);
+            }
+        }
+        for path in &index.paths {
+            if let Some(base) = path.rsplit('/').next() {
+                index
+                    .basenames
+                    .entry(base.to_string())
+                    .or_default()
+                    .push(path.clone());
             }
         }
         Ok(index)
