@@ -850,6 +850,27 @@ if want f; then
             '^unresolved ghostpkg [^ ]*libghost\.so libmissing\.so\.9$' \
             || fail "f: -Qr names the unresolved need (consumer member soname), got:
 $FIXTURE_OUTPUT"
+
+        # An exact pin follows pacman's `=` semantics (`-T`), not string
+        # equality: `lib=1.0.0` is SATISFIED by an installed `0:1.0.0-1`, so
+        # it is no finding at all (2026-11-11 blind-review finding: every
+        # satisfied pin was reported stale). A pin the provider does not
+        # hold is still reported.
+        db_entry "$db" lib "0:1.0.0-1" >/dev/null
+        e_pin=$(db_entry "$db" pinner "0:2.0.0-1")
+        printf '\n%%DEPENDS%%\nlib=1.0.0\n' >>"$e_pin/desc"
+        run_engine "$ws" -Qr --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "f: -Qr rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        if grep -q '^exact-pin pinner ' <<<"$FIXTURE_OUTPUT"; then
+            fail "f: a satisfied exact pin must never be reported (pacman -T semantics), got:
+$FIXTURE_OUTPUT"
+        fi
+        printf '\n%%DEPENDS%%\nlib=9.9.9\n' >>"$e_pin/desc"
+        run_engine "$ws" -Qr --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "f: -Qr rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^exact-pin pinner lib=9\.9\.9 stale 0:1\.0\.0-1$' \
+            || fail "f: an unsatisfied exact pin must be reported stale, got:
+$FIXTURE_OUTPUT"
         echo "section f ok"
     )
 fi

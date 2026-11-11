@@ -122,13 +122,35 @@ fn exact_pin_of(dep: &str) -> Option<(&str, &str)> {
     Some((name.trim(), ver.trim()))
 }
 
-/// Version equality modulo the `0:` default epoch (`0:1.0-1` ≡ `1.0-1`);
-/// every other difference is real drift.
-fn versions_equivalent(a: &str, b: &str) -> bool {
-    fn strip(v: &str) -> &str {
-        v.strip_prefix("0:").unwrap_or(v)
+/// Version equality with pacman's `=` semantics (`alpm_depcmp`): the epoch
+/// defaults to `0`, and a requirement WITHOUT a pkgrel matches any pkgrel —
+/// `foo=0.197` is satisfied by an installed `0:0.197-1`, exactly what
+/// `pacman -T` answers. A requirement carrying a pkgrel must match it.
+/// Every other difference is real drift.
+fn versions_equivalent(pin: &str, surface: &str) -> bool {
+    fn split(v: &str) -> (&str, &str, Option<&str>) {
+        let (epoch, rest) = match v.split_once(':') {
+            Some((epoch, rest))
+                if !epoch.is_empty() && epoch.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (epoch, rest)
+            }
+            _ => ("0", v),
+        };
+        match rest.rsplit_once('-') {
+            Some((ver, rel)) if !ver.is_empty() && !rel.is_empty() => (epoch, ver, Some(rel)),
+            _ => (epoch, rest, None),
+        }
     }
-    strip(a) == strip(b)
+    let (pin_epoch, pin_ver, pin_rel) = split(pin);
+    let (surf_epoch, surf_ver, surf_rel) = split(surface);
+    pin_epoch == surf_epoch
+        && pin_ver == surf_ver
+        && match pin_rel {
+            // No pkgrel in the pin: any release satisfies it (pacman's rule).
+            None => true,
+            Some(rel) => surf_rel == Some(rel),
+        }
 }
 
 /// The pin surfaces one provider offers for `name`, each as
@@ -295,6 +317,23 @@ mod tests {
             depends: depends.iter().map(|s| s.to_string()).collect(),
             files: files.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    /// `-Qr`'s exact-pin verdict follows `pacman -T`, not string equality:
+    /// a requirement without a pkgrel matches any release, the epoch
+    /// defaults to 0, and a requirement that names a release must match it.
+    #[test]
+    fn exact_pins_follow_pacman_equals_semantics() {
+        assert!(versions_equivalent("0.197", "0:0.197-1"));
+        assert!(versions_equivalent("0:0.197-1", "0.197-1"));
+        assert!(versions_equivalent("0.197-1", "0:0.197-1"));
+        assert!(!versions_equivalent("0.197-2", "0:0.197-1"));
+        assert!(!versions_equivalent("0.198", "0:0.197-1"));
+        assert!(!versions_equivalent("1:0.197", "0:0.197-1"));
+        // A provider's soname entry carries `name=version`: the same rule.
+        let provider = pkg("libelf", &["libelf.so=0.197-64"], &[], &[]);
+        assert!(pin_holds(&provider, "libelf.so", "0.197"));
+        assert!(!pin_holds(&provider, "libelf.so", "0.198"));
     }
 
     #[test]
