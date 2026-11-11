@@ -171,6 +171,23 @@ add_archive plain-bad usr/bin gcda yes
 add_archive rust-bad usr/bin profraw
 add_archive rust-clean ""
 
+# ─── an ARCHIVE PATH has no recipe to read: the payload is the authority ────
+# `gsa -U /path/x.pkg.tar.zst` sets no recipe dir, so the recipe-based gate
+# used to stand the whole payload scan down and install an instrumented
+# archive the same engine refuses by name (2026-11-11 blind-review finding).
+# This archive carries a baked `.gcda` destination and sits in a directory
+# with no PKGBUILD at all.
+mkdir -p "$fixture/loose"
+loose_stage=$(mktemp -d "$fixture/loose-stage.XXXXXX")
+mkdir -p "$loose_stage/usr/bin"
+printf 'pkgname = loose-bad\npkgver = 1.0\narch = x86_64\n' >"$loose_stage/.PKGINFO"
+printf 'code\0%s\0code\n' \
+    '/home/someone/build/pgo-fixture/loose-bad/src/A.dir/b.cxx.gcda' \
+    >"$loose_stage/usr/bin/loose-bad"
+tar --zstd -cf "$fixture/loose/loose-bad-1.0-1-x86_64.pkg.tar.zst" \
+    -C "$loose_stage" .
+rm -rf -- "$loose_stage"
+
 cat >"$fixture/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
 printf 'pacman %s\n' "$*" >>"$GSA_FAKE_PACMAN_LOG"
@@ -319,5 +336,15 @@ if [[ ! -s "$(archive_of pgo-clean)" ]]; then
     printf 'the payload check consumed the archive it inspected\n' >&2
     exit 1
 fi
+
+# ─── the recipe-less archive, judged by its payload alone ──────────────────
+run_engine "$fixture" --install-decide checked "$fixture/loose/loose-bad-1.0-1-x86_64.pkg.tar.zst"
+loose_rows=$FIXTURE_OUTPUT
+loose_rc=$FIXTURE_RC
+[[ $loose_rc == 1 ]] \
+    || { printf 'a recipe-less instrumented archive planned rc=%s (want 1, a refuse row):\n%s\n' \
+        "$loose_rc" "$loose_rows" >&2; exit 1; }
+vgrep "$loose_rows" -Eq '^loose-bad refuse pgo-hit ' \
+    || { printf 'the payload scan did not run without a recipe dir:\n%s\n' "$loose_rows" >&2; exit 1; }
 
 printf 'PGO payload guard fixture: PASS\n'

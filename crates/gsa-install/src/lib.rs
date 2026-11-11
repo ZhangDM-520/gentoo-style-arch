@@ -862,10 +862,20 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         let mut rows: Vec<DecisionRow> = Vec::new();
         let archive = candidate.archive.display().to_string();
 
-        // PGO payload gate — only recipes that declare instrumentation can
-        // leak a payload (both flag spellings; strict content scan, never
+        // PGO payload gate (both flag spellings; strict content scan, never
         // shell). Fires BEFORE the ABI gate and the force branch.
-        if gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
+        //
+        // The cheap gate is the RECIPE's declaration — but a direct archive
+        // path (`gsa -U /path/x.pkg.tar.zst`) has no recipe to read, and
+        // skipping the payload scan there installed an instrumented archive
+        // the same engine refused by name (2026-11-11 blind review). When the
+        // recipe is not knowable, the PAYLOAD is the authority: scan it.
+        let recipe_known = candidate
+            .recipe_dir
+            .as_deref()
+            .map(|dir| dir.join("PKGBUILD").is_file())
+            .unwrap_or(false);
+        if !recipe_known || gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
             match gsa_recipe::pkginfo::pgo_hits(&candidate.archive) {
                 Err(_) => {
                     rows.push(row(
