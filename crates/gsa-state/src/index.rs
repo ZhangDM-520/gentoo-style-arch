@@ -632,25 +632,26 @@ pub fn register_instance(
         // id. A failed deletion therefore keeps the instance LIVE (over
         // budget — the next sweep retries) instead of tombstoning over a
         // file that still exists.
+        // ONE note per pruned INSTANCE, never one per row: a split output
+        // has several rows in one instance, and a per-row note printed the
+        // same sentence again for each of them (2026-11-11 blind review).
         let mut deletable = true;
+        let mut kept = false;
+        let mut removed: Vec<String> = Vec::new();
+        let mut already_gone = false;
         for row in &rows_of {
             let file = row.archive.clone();
             if kept_paths.contains(&file) {
-                outcome.notes.push(format!(
-                    "binpkg index: retention pruned {id} instance {dropped} (archive kept — a kept row still references it)"
-                ));
+                kept = true;
                 continue;
             }
             match std::fs::remove_file(&file) {
-                Ok(()) => outcome.notes.push(format!(
-                    "binpkg index: retention pruned {id} instance {dropped} ({})",
+                Ok(()) => removed.push(
                     file.file_name()
                         .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| file.to_string_lossy().into_owned())
-                )),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => outcome.notes.push(format!(
-                    "binpkg index: retention pruned {id} instance {dropped} (archive already gone)"
-                )),
+                        .unwrap_or_else(|| file.to_string_lossy().into_owned()),
+                ),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => already_gone = true,
                 Err(e) => {
                     deletable = false;
                     outcome.notes.push(format!(
@@ -659,6 +660,21 @@ pub fn register_instance(
                     ));
                 }
             }
+        }
+        if kept {
+            outcome.notes.push(format!(
+                "binpkg index: retention pruned {id} instance {dropped} (archive kept — a kept row still references it)"
+            ));
+        }
+        if !removed.is_empty() {
+            outcome.notes.push(format!(
+                "binpkg index: retention pruned {id} instance {dropped} ({})",
+                removed.join(" ")
+            ));
+        } else if already_gone && deletable {
+            outcome.notes.push(format!(
+                "binpkg index: retention pruned {id} instance {dropped} (archive already gone)"
+            ));
         }
         if !deletable {
             continue;
@@ -890,6 +906,55 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with("hub-"))
             .collect();
         assert_eq!(hub_archives.len(), 2);
+    }
+
+    /// ONE note per pruned instance: a split output registers several rows
+    /// under one instance, and a per-row note printed the same sentence once
+    /// per output (blind-review finding, 2026-11-11).
+    #[test]
+    fn retention_note_is_one_per_instance_not_per_row() {
+        let dir = scratch("note-per-instance");
+        let root = StateRoot::open(&dir).unwrap();
+        let retention = Retention::from_records(&synthetic_topology()).unwrap();
+        let mut err = Vec::new();
+        let in_flight = BTreeSet::new();
+
+        let one = make_archive(&dir, "leaf", "1.0.0-1");
+        let two = make_archive(&dir, "leaf-docs", "1.0.0-1");
+        register_instance(
+            &root,
+            "leaf",
+            &[one, two],
+            &retention,
+            &in_flight,
+            None,
+            &mut err,
+        )
+        .unwrap();
+        let fresh = make_archive(&dir, "leaf", "1.0.1-1");
+        let outcome = register_instance(
+            &root,
+            "leaf",
+            &[fresh],
+            &retention,
+            &in_flight,
+            None,
+            &mut err,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.pruned.len(), 2, "both rows of the old instance");
+        let notes: Vec<&String> = outcome
+            .notes
+            .iter()
+            .filter(|n| n.contains("retention pruned leaf instance 1"))
+            .collect();
+        assert_eq!(
+            notes.len(),
+            1,
+            "one sentence per pruned instance, got: {:?}",
+            outcome.notes
+        );
     }
 
     #[test]
