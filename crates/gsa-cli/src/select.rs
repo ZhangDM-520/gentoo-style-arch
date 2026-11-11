@@ -202,6 +202,15 @@ pub fn nearest_candidates(ctx: &Ctx<'_>, query: &str, namespace: bool) -> Vec<St
 }
 
 fn unknown_reference(ctx: &Ctx<'_>, token: &str, namespace: bool) -> SelectError {
+    // A bare integer is an INDEX, not a name: it addresses a position in a
+    // listing (`gsa -Sl`, `-S <range>`), so the useful answer is the range
+    // grammar — never a "nearest candidate" hunt that offers a package
+    // alphabetically close to a number (blind review, 2026-11-11).
+    if token.chars().all(|c| c.is_ascii_digit()) && !token.is_empty() {
+        return SelectError::new(format!(
+            "'{token}' is an index, not a reference — indices address a selection (see 'gsa -Sl' and the range grammar in 'gsa --help')"
+        ));
+    }
     let candidates = nearest_candidates(ctx, token, namespace);
     if candidates.is_empty() {
         SelectError::new(format!("unknown reference '{token}'"))

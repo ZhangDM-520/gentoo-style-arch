@@ -268,6 +268,15 @@ if [ -z "$only" ] || [ "$only" = b ]; then
                 || fail "b: the description text was mangled (-Qi escape $mode): $FIXTURE_OUTPUT"
         done
 
+        # A bare INTEGER is an index, not a name: the answer names the range
+        # grammar instead of hunting "nearest candidates" for a number
+        # (blind review, 2026-11-11).
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi 2
+        [ "$FIXTURE_RC" -eq 2 ] \
+            || fail "b: -Qi over an index must stay rc 2, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F "is an index, not a reference" <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "b: a bare index must name the range grammar: $FIXTURE_OUTPUT"
+
         # A name that is neither a recipe nor installed keeps the hint.
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi nosuchpkg
         [ "$FIXTURE_RC" -eq 2 ] \
