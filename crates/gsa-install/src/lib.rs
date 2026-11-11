@@ -153,6 +153,37 @@ pub enum Rank {
     Mtime,
 }
 
+/// The output names a recipe declares without committed `.SRCINFO`: the
+/// PKGBUILD's own `pkgname` (scalar or split array), else the recipe
+/// directory's final component. Never empty for a directory with a name.
+fn declared_names(recipe_dir: &Path) -> Vec<String> {
+    let pkgbuild = recipe_dir.join("PKGBUILD");
+    if let Ok(text) = std::fs::read_to_string(&pkgbuild) {
+        let scan = gsa_recipe::scan_pkgbuild(&text);
+        let names = match scan.vars.get("pkgname") {
+            Some(gsa_recipe::ScanValue::Scalar(name)) => vec![name.clone()],
+            Some(gsa_recipe::ScanValue::Array(names)) => names.clone(),
+            None => Vec::new(),
+        };
+        let names: Vec<String> = names
+            .into_iter()
+            .map(|name| {
+                name.trim_matches(|c| c == '"' || c == '\'')
+                    .trim()
+                    .to_string()
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+        if !names.is_empty() {
+            return names;
+        }
+    }
+    recipe_dir
+        .file_name()
+        .map(|name| vec![name.to_string_lossy().into_owned()])
+        .unwrap_or_default()
+}
+
 /// Discover one recipe's best-ranked archive set. Archives are matched by
 /// their own `.PKGINFO` (never a glob-all fallback, rule 11) and each
 /// archive is chosen version-first per expected pkgname (highest canonical
@@ -190,6 +221,14 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
         } else if let Some(base) = info.pkgbase.clone() {
             expected.push(base);
         }
+    }
+    if expected.is_empty() {
+        // No committed metadata: expect what the PKGBUILD itself declares,
+        // else the recipe directory's name. "No expectation" used to mean
+        // "every readable archive in the scan set", which was this recipe's
+        // own tree before the shared PKGDEST — with a shared cache it claims
+        // the whole cache and refuses as `mixed-versions` (2026-11-11).
+        expected = declared_names(recipe_dir);
     }
 
     // The chosen archive per expected pkgname, matched by the archive's own
@@ -1356,6 +1395,45 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The name expectation without committed `.SRCINFO` is the PKGBUILD's
+    /// own declaration (split arrays included), else the directory name —
+    /// never "no expectation", which claimed a whole shared PKGDEST.
+    #[test]
+    fn declared_names_reads_the_pkgbuild_then_the_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "gsa-install-declared-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let scalar = root.join("scalar-recipe");
+        std::fs::create_dir_all(&scalar).unwrap();
+        std::fs::write(scalar.join("PKGBUILD"), "pkgname=widget\npkgver=1\n").unwrap();
+        assert_eq!(declared_names(&scalar), names(&["widget"]));
+
+        let split = root.join("split-recipe");
+        std::fs::create_dir_all(&split).unwrap();
+        std::fs::write(
+            split.join("PKGBUILD"),
+            "pkgbase=qt-thing\npkgname=('qt-thing' \"qt-thing-tools\")\n",
+        )
+        .unwrap();
+        assert_eq!(
+            declared_names(&split),
+            names(&["qt-thing", "qt-thing-tools"])
+        );
+
+        // No PKGBUILD at all: the directory's name is the only truth left,
+        // and it is never empty (an empty expectation is the bug).
+        let bare = root.join("bare-recipe");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(declared_names(&bare), names(&["bare-recipe"]));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

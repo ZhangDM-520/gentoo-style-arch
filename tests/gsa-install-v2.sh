@@ -12,8 +12,8 @@ set -euo pipefail
 # expected names come from the staged `.PKGINFO`s, expected order/parks come
 # from the fixture's own build-order edges.
 #
-# Pinned here (eight ( subshell ) sections, one per scenario; run one alone
-# with GSA_INSTALL_V2_ONLY=a…h):
+# Pinned here (nine ( subshell ) sections, one per scenario; run one alone
+# with GSA_INSTALL_V2_ONLY=a…i):
 #   a. decision rows (§E.2/§E.3) through `--install-decide checked|force`
 #      (§D.1: rc 0 plan / 1 refusal / 2 bad usage, touches nothing): install,
 #      skip (`already-current` — the same-version + install-date rule, plus
@@ -51,6 +51,9 @@ set -euo pipefail
 #      (rule 9's complement, multi-wave partial success): the landed wave
 #      keeps its names, the failed wave and the held leftover drop theirs,
 #      and an already-current skip keeps its names (it IS installed).
+#   i. archive discovery is scoped to the recipe's OWN names inside the
+#      shared PKGDEST: a cached sibling archive (no `.SRCINFO` in the
+#      running recipe) is never claimed, transacted or registered.
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -1182,6 +1185,89 @@ if want h; then
         leaked=$(comm -12 "$fixture/h/gone" "$closure" | tr '\n' ' ' | sed 's/ $//')
         [ -z "$leaked" ] \
             || fail "h: the failed wave and the held leftover must roll their IgnorePkg registrations back (leaked: $leaked):" "$ws/pacman.conf"
+    )
+fi
+
+if want i; then
+    # ─── 9. discovery is scoped to the recipe's OWN names (shared PKGDEST) ──
+    # W4 moved every archive into ONE build-user PKGDEST shared by all
+    # recipes. With no committed `.SRCINFO`, discovery once had no name
+    # expectation and therefore claimed EVERY readable archive in that
+    # shared cache: a sibling recipe's archive became this run's set, so a
+    # healthy recipe refused `mixed-versions`/`partial-set` and the binpkg
+    # index grew a duplicate row for an archive it never built (2026-11-11
+    # blind-review findings). The expectation is the PKGBUILD's own
+    # `pkgname` (scalar or split array), else the recipe directory's name.
+    (
+        set -euo pipefail
+        ws="$fixture/i/ws"
+        db="$fixture/i/db"
+        make_workspace "$ws" 1 1 low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        add_package "$ws" mine "$gsa_meta_any" git
+        add_package "$ws" other "$gsa_meta_any" git
+        export GSA_FAKE_SPAWN_LOG="$fixture/i/spawn.log"
+        export GSA_FAKE_PACMAN_LOG="$fixture/i/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/i/sudo.log"
+        : >"$GSA_FAKE_SPAWN_LOG"
+        : >"$GSA_FAKE_PACMAN_LOG"
+
+        # The lane's archive lands in the SHARED PKGDEST the composite
+        # config sets (`GSA_LANE_PKGDEST`), never in the recipe dir.
+        cat >"$ws/bin/makepkg" <<'PKG'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf 'SPAWN %s\n' "$id" >>"${GSA_FAKE_SPAWN_LOG:?}"
+stage="$PWD/.stage-$id"
+mkdir -p "$stage" "${GSA_LANE_PKGDEST:?}"
+printf 'pkgbase = %s\npkgname = %s\npkgver = 1.0-1\narch = any\n' "$id" "$id" >"$stage/.PKGINFO"
+tar --zstd -cf "$GSA_LANE_PKGDEST/$id-1.0-1-any.pkg.tar.zst" -C "$stage" .PKGINFO
+rm -rf "$stage"
+exit 0
+PKG
+        chmod +x "$ws/bin/makepkg"
+
+        # A sibling recipe's archive is already cached, at a HIGHER version
+        # than anything this run builds (never this recipe's output).
+        pkgs="$ws/../.rr2-build/pkgs"
+        mkdir -p "$pkgs"
+        mkdir -p "$fixture/i/foreign"
+        printf 'pkgbase = other\npkgname = other\npkgver = 9.0-1\narch = any\n' \
+            >"$fixture/i/foreign/.PKGINFO"
+        tar --zstd -cf "$pkgs/other-9.0-1-any.pkg.tar.zst" -C "$fixture/i/foreign" .PKGINFO
+
+        run_engine "$ws" -S --state-dir "$fixture/i/state" --config "$ws/pacman.conf" mine
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/i/output.txt"
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "i: a healthy recipe must not inherit a cached sibling's archive (rc 0 wanted):" "$fixture/i/output.txt"
+        [ "$(rr2_plan mine plan <<<"$FIXTURE_OUTPUT")" = "build-install" ] \
+            || fail "i: mine must plan build-install:" "$fixture/i/output.txt"
+
+        # Exactly one transaction, carrying this recipe's archive only.
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 1 ] \
+            || fail "i: exactly one pacman -U transaction expected:" "$GSA_FAKE_PACMAN_LOG"
+        mine_archive=$(printf 'mine-1.0-1-any.pkg.tar.zst')
+        grep '^pacman -U ' "$GSA_FAKE_PACMAN_LOG" | grep -F "$mine_archive" >/dev/null \
+            || fail "i: the transaction must install this recipe's own archive:" "$GSA_FAKE_PACMAN_LOG"
+        if grep '^pacman -U ' "$GSA_FAKE_PACMAN_LOG" | grep -F 'other-9.0-1-any.pkg.tar.zst' >/dev/null; then
+            fail "i: a cached sibling archive must never be transacted:" "$GSA_FAKE_PACMAN_LOG"
+        fi
+
+        # One side-car row per recipe: the sibling archive is not this
+        # recipe's instance (a duplicate row made retention and -Q double).
+        GSA_CONF="$ws/../.rr2-conf/gsa.conf" GSA_STATE_DIR="$fixture/i/state" \
+            run_engine_user "$ws" -Qb
+        [ "$FIXTURE_RC" = 0 ] || fail "i: -Qb rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        rows=$(grep -c '^mine|' <<<"$FIXTURE_OUTPUT" || true)
+        [ "$rows" = 1 ] \
+            || fail "i: the index must hold exactly one row for mine (got $rows): $FIXTURE_OUTPUT"
+        if grep -q '^other|' <<<"$FIXTURE_OUTPUT"; then
+            fail "i: a cached sibling's archive must not be registered to this recipe: $FIXTURE_OUTPUT"
+        fi
     )
 fi
 
