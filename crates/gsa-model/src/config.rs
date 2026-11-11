@@ -157,7 +157,20 @@ pub fn build_root_with_source(cfg: &GsaConfig) -> Result<(PathBuf, &'static str)
             ))
         },
     )?;
-    Ok((resolved.value, resolved.source))
+    // A relative root is legal (`--state-dir state` next to the workspace is
+    // a common spelling and `tests/gsa-sched-v2` §7 pins it), but every
+    // consumer must see an ABSOLUTE path: the PACMAN shim is handed to
+    // makepkg, which runs with the recipe's cwd, and a relative shim path
+    // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
+    // here, so no downstream seam has to re-derive it (blind review,
+    // 2026-11-11).
+    let mut root = resolved.value;
+    if !root.is_absolute() {
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
+        root = cwd.join(root);
+    }
+    Ok((root, resolved.source))
 }
 
 /// Pin the run's build root (contract §J.2). Called once, by the CLI, before
@@ -666,7 +679,20 @@ pub fn resolve_state_dir_from(
             resolved.source
         ));
     }
-    Ok((resolved.value, resolved.source))
+    // A relative root is legal (`--state-dir state` next to the workspace is
+    // a common spelling and `tests/gsa-sched-v2` §7 pins it), but every
+    // consumer must see an ABSOLUTE path: the PACMAN shim is handed to
+    // makepkg, which runs with the recipe's cwd, and a relative shim path
+    // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
+    // here, so no downstream seam has to re-derive it (blind review,
+    // 2026-11-11).
+    let mut root = resolved.value;
+    if !root.is_absolute() {
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
+        root = cwd.join(root);
+    }
+    Ok((root, resolved.source))
 }
 
 /// The canonical recipe store root (2026-10-17 relocation): the build
@@ -702,7 +728,20 @@ pub fn recipe_root_from(
     let resolved = resolve(&recipe_tiers(env, cfg), || {
         Ok((default_recipe_root(home), "the built-in default"))
     })?;
-    Ok((resolved.value, resolved.source))
+    // A relative root is legal (`--state-dir state` next to the workspace is
+    // a common spelling and `tests/gsa-sched-v2` §7 pins it), but every
+    // consumer must see an ABSOLUTE path: the PACMAN shim is handed to
+    // makepkg, which runs with the recipe's cwd, and a relative shim path
+    // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
+    // here, so no downstream seam has to re-derive it (blind review,
+    // 2026-11-11).
+    let mut root = resolved.value;
+    if !root.is_absolute() {
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
+        root = cwd.join(root);
+    }
+    Ok((root, resolved.source))
 }
 
 fn recipe_tiers(env: Option<&str>, cfg: &GsaConfig) -> [(&'static str, Option<PathBuf>); 2] {
@@ -958,8 +997,8 @@ mod tests {
             ..GsaConfig::default()
         };
         assert_eq!(
-            resolve_state_dir_from(Some("--flag"), Some("/env"), &cfg).unwrap(),
-            (PathBuf::from("--flag"), "--state-dir")
+            resolve_state_dir_from(Some("/flag"), Some("/env"), &cfg).unwrap(),
+            (PathBuf::from("/flag"), "--state-dir")
         );
         assert_eq!(
             resolve_state_dir_from(None, Some("/env"), &cfg).unwrap(),
@@ -973,6 +1012,14 @@ mod tests {
             resolve_state_dir_from(None, Some("  "), &GsaConfig::default()).unwrap(),
             (PathBuf::from(DEFAULT_STATE_DIR), "the built-in default")
         );
+        // A RELATIVE root is accepted and normalized: the spelling is the
+        // operator's, the value every consumer sees is absolute (the PACMAN
+        // shim reaches makepkg, which runs with the recipe's cwd).
+        let (root, source) = resolve_state_dir_from(Some("relstate"), None, &GsaConfig::default())
+            .expect("a relative state root is legal");
+        assert!(root.is_absolute(), "{}", root.display());
+        assert!(root.ends_with("relstate"), "{}", root.display());
+        assert_eq!(source, "--state-dir");
         // A blank flag is unset too, and a blank env never masks the config.
         assert_eq!(
             resolve_state_dir_from(Some(" "), Some("  "), &cfg).unwrap(),
