@@ -126,11 +126,19 @@ pub fn preflight_installs() -> Result<(), String> {
     let output = sudo_true_command()
         .output()
         .map_err(|e| format!("sudo cannot install non-interactively ({e})"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err("sudo cannot install non-interactively".to_string())
+    if !output.status.success() {
+        return Err("sudo cannot install non-interactively".to_string());
     }
+    // A stale lock makes every install of the run impossible (pacman refuses
+    // to open the database while the file exists), so refuse BEFORE building
+    // instead of wasting the whole run and then blaming a live holder
+    // (blind-review 2026-11-11, ci-fleet-operator). A LIVE lock is not a
+    // refusal: it can clear while the run builds, and the executor waits
+    // for it bounded.
+    if let Some(stale) = crate::register::stale_db_lock(&crate::pacman_db_root()) {
+        return Err(crate::register::stale_db_lock_message(&stale));
+    }
+    Ok(())
 }
 
 /// The ONE `sudo -n pacman -U …` command for a transaction (§K.3).
@@ -192,6 +200,16 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
     // marker that cannot be recorded aborts with nothing mutated.
     if let Err(message) = crate::stage_repair_markers(&req.state_dir, &req.repairs) {
         return TxnOutcome::Failed { rc: -1, message };
+    }
+    // A stale `db.lck` cannot be transacted through at all (pacman refuses
+    // while the file exists) and must never be deleted here: fail with the
+    // staleness named rather than letting pacman indict the file and the
+    // engine repeat "wait for the other package manager" (which never ends).
+    if let Some(stale) = crate::register::stale_db_lock(&crate::pacman_db_root()) {
+        return TxnOutcome::Failed {
+            rc: -1,
+            message: crate::register::stale_db_lock_message(&stale),
+        };
     }
     // A live `db.lck` is waited for, not raced: firing `pacman -U` into it
     // reported pacman's "unable to lock database … you can remove" line as

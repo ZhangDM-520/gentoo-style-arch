@@ -194,6 +194,35 @@ fn date_tag() -> String {
     format!("{y:04}{m:02}{d:02}")
 }
 
+/// The path of a `db.lck` that exists with no live holder — the aftermath of
+/// a killed pacman. `None` when the lock is absent or alive.
+///
+/// A stale lock must never be silently proceeded past: pacman itself refuses
+/// to open the database while the file exists, so the only honest outcomes
+/// are a named refusal that tells the operator to clear it deliberately, or
+/// (for the read-only registration seam) an announcement. Announcing
+/// staleness and then letting `pacman -U` fail on the *file* reported the
+/// lock as LIVE-held with retry advice that could never terminate
+/// (blind-review 2026-11-11, ci-fleet-operator).
+pub fn stale_db_lock(db_root: &Path) -> Option<PathBuf> {
+    let lock = db_root.join("db.lck");
+    if lock.exists() && !lock_has_live_holder(&lock) {
+        Some(lock)
+    } else {
+        None
+    }
+}
+
+/// The one sentence a refusal owes for a stale lock: what it is, that no
+/// live process holds it, and the deliberate clear (never automatic).
+pub fn stale_db_lock_message(lock: &Path) -> String {
+    format!(
+        "stale db.lck at {}: no live process holds it — a killed package manager left it, and pacman refuses to open the database while the file exists; clear it deliberately (sudo rm {}) and retry",
+        lock.display(),
+        lock.display()
+    )
+}
+
 /// Does some live process hold this lock file open? Idleness is proven by an
 /// open-file-descriptor scan over `/proc/*/fd` (gsa-sched::lock
 /// `pacman_lock_probe`'s technique), never by filenames and never by
@@ -247,10 +276,10 @@ pub fn wait_for_db_lock(db_root: &Path) -> Result<(), String> {
         if !lock.exists() {
             return Ok(());
         }
-        if !lock_has_live_holder(&lock) {
+        if let Some(stale) = stale_db_lock(db_root) {
             eprintln!(
                 "gsa: note: stale db.lck at {} (no live holder) — proceeding without touching it",
-                lock.display()
+                stale.display()
             );
             return Ok(());
         }

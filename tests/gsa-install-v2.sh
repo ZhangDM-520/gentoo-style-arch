@@ -12,8 +12,9 @@ set -euo pipefail
 # expected names come from the staged `.PKGINFO`s, expected order/parks come
 # from the fixture's own build-order edges.
 #
-# Pinned here (nine ( subshell ) sections, one per scenario; run one alone
-# with GSA_INSTALL_V2_ONLY=a…i):
+# Pinned here (( subshell ) sections, one per scenario; run one alone with
+# GSA_INSTALL_V2_ONLY=<letter>, the letters being the `if want <letter>`
+# blocks below):
 #   a. decision rows (§E.2/§E.3) through `--install-decide checked|force`
 #      (§D.1: rc 0 plan / 1 refusal / 2 bad usage, touches nothing): install,
 #      skip (`already-current` — the same-version + install-date rule, plus
@@ -81,7 +82,7 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_INSTALL_V2_ONLY=<a..h> runs exactly one section.
+# Section filter: GSA_INSTALL_V2_ONLY=<letter> runs exactly one section.
 want() { [ -z "${GSA_INSTALL_V2_ONLY:-}" ] || [ "${GSA_INSTALL_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
@@ -1444,6 +1445,101 @@ STUB
         if grep -qF 'you can remove' <<<"$FIXTURE_OUTPUT"; then
             fail "l: pacman's 'you can remove db.lck' line must never be forwarded: $FIXTURE_OUTPUT"
         fi
+    )
+fi
+
+if want m; then
+    # ─── 13. a STALE db.lck is refused by name, before the build ──────────
+    # A stale lock (present, no live holder) was announced, then pacman -U
+    # failed on the FILE and the record blamed a LIVE package manager with
+    # "wait for it to finish and retry" — advice that can never terminate,
+    # after a whole run's builds were wasted (blind-review 2026-11-11,
+    # ci-fleet-operator).
+    (
+        set -euo pipefail
+        ws="$fixture/m/ws"
+        db="$fixture/m/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        add_package "$ws" staley "$gsa_meta_any" git
+        archive="$ws/packages/staley/staley-1.0-1-any.pkg.tar.zst"
+        stage_pkginfo "$fixture/m/stage" staley staley "1.0-1" 0
+        make_archive "$archive" "$fixture/m/stage"
+        export GSA_FAKE_PACMAN_LOG="$fixture/m/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/m/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/m/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SPAWN_LOG"
+
+        # (i) the lock is stale BEFORE the run: refused at the install
+        # preflight, so nothing compiles and nothing transacts.
+        printf 'fixture lock marker\n' >"$db/db.lck"
+        cp "$db/db.lck" "$fixture/m/db.lck.pre"
+        run_engine "$ws" -S --state-dir "$fixture/m/state" --config "$ws/pacman.conf" staley
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/m/output.txt"
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "m: a stale db.lck refuses before the build (rc 3), got $FIXTURE_RC:" "$fixture/m/output.txt"
+        grep -Fq 'stale db.lck' "$fixture/m/output.txt" \
+            || fail "m: the refusal must name the lock as stale:" "$fixture/m/output.txt"
+        grep -Fq 'no live process holds it' "$fixture/m/output.txt" \
+            || fail "m: the refusal must say the holder is dead:" "$fixture/m/output.txt"
+        grep < <(record_section outcome) -Eq '^staley never-started - - preflight-refused$' \
+            || fail "m: the preflight refusal rows must say preflight-refused:" "$fixture/m/output.txt"
+        if grep -q '^SPAWN staley ' "$GSA_FAKE_SPAWN_LOG"; then
+            fail "m: a stale lock must be refused BEFORE the build:" "$GSA_FAKE_SPAWN_LOG"
+        fi
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "m: a stale-lock refusal is pacman-free:" "$GSA_FAKE_PACMAN_LOG"
+        cmp -s "$db/db.lck" "$fixture/m/db.lck.pre" \
+            || fail "m: the engine must never delete or rewrite db.lck (rule 23):" "$db/db.lck"
+        command rm -f "$db/db.lck"
+
+        # (ii) the lock's holder dies MID-RUN (a killed pacman): the
+        # transaction names staleness instead of spawning pacman and
+        # blaming a live holder. Event-driven — the makepkg wrapper holds
+        # the build open until the fixture kills the holder and releases it.
+        mv "$ws/bin/makepkg" "$ws/bin/makepkg-real"
+        cat >"$ws/bin/makepkg" <<STUB
+#!/usr/bin/env bash
+printf 'SPAWN %s\n' "\$(basename "\$PWD")" >>"\${GSA_FAKE_SPAWN_LOG:?}"
+while [ ! -e "$fixture/m/release" ]; do sleep 0.05; done
+exec "$ws/bin/makepkg-real" "\$@"
+STUB
+        chmod +x "$ws/bin/makepkg"
+        : >"$GSA_FAKE_SPAWN_LOG"
+        printf 'fixture lock marker\n' >"$db/db.lck"
+        cp "$db/db.lck" "$fixture/m/db.lck.pre2"
+        sleep 300 300<"$db/db.lck" &
+        holder=$!
+        (run_engine "$ws" -S --state-dir "$fixture/m/state2" --config "$ws/pacman.conf" staley
+         printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/m/output2.txt"
+         printf '%s\n' "$FIXTURE_RC" >"$fixture/m/rc2") &
+        runner=$!
+        n=0
+        until grep -q '^SPAWN staley' "$GSA_FAKE_SPAWN_LOG" 2>/dev/null; do
+            n=$((n + 1))
+            [ "$n" -le 600 ] || fail "m: the build never started under a live lock"
+            sleep 0.05
+        done
+        kill "$holder" 2>/dev/null || true
+        wait "$holder" 2>/dev/null || true
+        : >"$fixture/m/release"
+        wait "$runner" || true
+        FIXTURE_OUTPUT=$(cat "$fixture/m/output2.txt")
+        [ "$(cat "$fixture/m/rc2")" = 4 ] \
+            || fail "m: a lock that dies mid-run is a transaction failure (rc 4), got $(cat "$fixture/m/rc2"):" "$fixture/m/output2.txt"
+        grep < <(record_section outcome) -Fq 'stale db.lck' \
+            || fail "m: the transaction failure must name staleness, not a live holder:" "$fixture/m/output2.txt"
+        if grep < <(record_section outcome) -Fq 'wait for it to finish'; then
+            fail "m: a stale lock must not carry live-holder retry advice:" "$fixture/m/output2.txt"
+        fi
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "m: a stale lock must not reach pacman:" "$GSA_FAKE_PACMAN_LOG"
+        cmp -s "$db/db.lck" "$fixture/m/db.lck.pre2" \
+            || fail "m: the engine must never delete or rewrite db.lck (rule 23):" "$db/db.lck"
     )
 fi
 
