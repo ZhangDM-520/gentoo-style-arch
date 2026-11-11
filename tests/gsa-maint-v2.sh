@@ -567,6 +567,18 @@ if want f; then
         has_row "$FIXTURE_OUTPUT" "toolchain drift only-in-config setb" "config-only member"
         has_row "$FIXTURE_OUTPUT" "stale computed " "computed sets are listed"
         [ "$(config_sha)" = "$config_before" ] || fail "a listing must never rewrite config/sets"
+        # A FRESH build is not stale. The index row stores the canonical
+        # `0:1.0.0-1` while the recipe says `1.0.0-1`; a raw string compare
+        # called every built recipe stale while `-Qu` (the same question)
+        # stayed silent (2026-11-11 blind-review finding).
+        run_engine "$ws" -B --no-prefetch --leaf --state-dir "$state" seta
+        [ "$FIXTURE_RC" = 0 ] || fail "f: the stale-set seed build is rc 0: $FIXTURE_OUTPUT"
+        run_engine "$ws" -Ms @stale --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "f: -Ms @stale is rc 0: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "stale computed 0 member(s)" "a fresh build is not stale"
+        if printf '%s\n' "$FIXTURE_OUTPUT" | grep -q '^stale member seta'; then
+            fail "f: a freshly built recipe must not be listed stale: $FIXTURE_OUTPUT"
+        fi
 
         # --add/--remove edit the kv side ONLY; the rows name the edit.
         run_engine "$ws" -Ms --add toolchain setc --state-dir "$state"

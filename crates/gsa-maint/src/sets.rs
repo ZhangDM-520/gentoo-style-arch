@@ -333,7 +333,14 @@ fn computed_rows(ctx: &MaintCtx<'_>, state: &StateRoot, name: &str) -> Result<Ve
                 let Some(committed) = ctx.committed_version(id) else {
                     continue;
                 };
-                if built != committed {
+                // Canonical form on BOTH sides (epoch default 0): the index
+                // row stores `0:1.0-1` while the recipe says `1.0-1`, and a
+                // raw string compare called every fresh build stale while
+                // `-Qu` (the same question) stayed silent (2026-11-11
+                // blind review).
+                let built_key = gsa_recipe::pkginfo::canonical_version(&built);
+                let committed_key = gsa_recipe::pkginfo::canonical_version(&committed);
+                if built_key != committed_key {
                     count += 1;
                     rows.push(Row::new(
                         name,
