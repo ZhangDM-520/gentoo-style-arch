@@ -175,6 +175,15 @@ if [ -z "$only" ] || [ "$only" = a ]; then
         if grep -q $'\x1b' <<<"$FIXTURE_OUTPUT"; then
             fail "a: the -Q machine rows carried an escape byte:" "$FIXTURE_OUTPUT"
         fi
+        # A listing has ONE row vocabulary: `--machine` changes nothing
+        # (contract §L.9 — the mode selects the event grammar of the RUN
+        # verbs; a listing emits no events). 2026-11-11 blind-review
+        # finding: the help promised the mode for all families.
+        plain=$FIXTURE_OUTPUT
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Q --machine
+        [ "$FIXTURE_RC" -eq 0 ] || fail "a: -Q --machine rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_OUTPUT" = "$plain" ] \
+            || fail "a: --machine must leave a listing's rows byte-identical (§L.9): $FIXTURE_OUTPUT"
     )
 fi
 

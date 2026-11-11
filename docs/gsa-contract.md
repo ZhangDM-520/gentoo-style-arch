@@ -1535,7 +1535,12 @@ dispatch; a failure parks a cone (§I).
    "presentation follows the terminal"**: `--color=always` is an explicit
    request for the human rendering, so it crosses a pipe too (the machine
    vocabulary has no colour to ask for); `--machine` still wins. `-Qb`
-   stays the verbatim wire row and is never styled.
+   stays the verbatim wire row and is never styled. **The mode is a RUN
+   concept** (2026-11-11): `--machine` selects the event grammar for the
+   verbs that emit events (`-S`/`-B`/`-U`/`-M` runs); the listing and query
+   verbs (`-Q*`, `-Sl`, `-Ml`) render one stable row vocabulary and have no
+   event stream, so the flag is accepted and changes nothing — `gsa --help`
+   says exactly that, and no listing grows a second format for it.
 10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
    "it works" means the packaged `gsa` binary behaves. Every smoke check and
    the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and
