@@ -160,22 +160,20 @@ fn sudo_pacman_command(req: &TxnRequest) -> Command {
 
 /// Credential-loss classification (§K.3) for one failed `sudo -n pacman -U`
 /// attempt: the credential is gone and cannot be refreshed without prompting,
-/// so dispatch must stop exactly once. The English phrase match is the belt
-/// over the silent-rc-1 rule; sudo's exit codes discriminate nothing finer
-/// (sudo exits 1 for nearly every failure and propagates pacman's rc), so no
-/// rc-only classification exists to prefer.
-pub fn sudo_credential_lost(rc: i32, stdout: &str, stderr: &str) -> bool {
+/// so dispatch must stop exactly once.
+///
+/// Only sudo's OWN words count. sudo runs with `-n`, so a credential problem
+/// always speaks on stderr; a transaction that dies without a word is not
+/// evidence of a lost credential — treating it as one reported a silent
+/// `pacman` failure as "sudo credential expired", with dispatch halted for a
+/// hiccup (blind-review finding, 2026-11-11). The caller now reports such a
+/// failure as `exited N with no output`.
+pub fn sudo_credential_lost(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
-    if lower.contains("password")
+    lower.contains("password")
         || lower.contains("prompt")
         || lower.contains("no tty")
         || lower.contains("a terminal is required")
-    {
-        return true;
-    }
-    // sudo failed with rc 1 and pacman never spoke (§K.3 — the engine never
-    // prompts).
-    rc == 1 && stdout.trim().is_empty() && stderr.trim().is_empty()
 }
 
 /// Run the ONE `pacman -U` transaction for this call, serialized through the
@@ -219,9 +217,8 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             // The credential is gone and cannot be refreshed without
-            // prompting: sudo says so, or sudo failed with rc 1 and pacman
-            // never spoke (§K.3 — the engine never prompts).
-            if sudo_credential_lost(rc, &stdout, &stderr) {
+            // prompting — and sudo says so (§K.3: the engine never prompts).
+            if sudo_credential_lost(&stderr) {
                 return TxnOutcome::SudoLost;
             }
             let message = stderr
@@ -230,7 +227,15 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
                 .find(|l| !l.trim().is_empty())
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| "pacman -U failed".to_string());
+                .unwrap_or_else(|| {
+                    // No prose at all: name the exit status instead of
+                    // inventing a cause.
+                    if stdout.trim().is_empty() {
+                        format!("pacman -U exited {rc} with no output")
+                    } else {
+                        format!("pacman -U exited {rc}")
+                    }
+                });
             TxnOutcome::Failed { rc, message }
         }
     }
@@ -354,25 +359,21 @@ mod tests {
             "sudo: 3 incorrect password attempts",
         ] {
             assert!(
-                sudo_credential_lost(1, "", stderr),
+                sudo_credential_lost(stderr),
                 "{stderr:?} must classify as SudoLost"
             );
         }
-        // The silent-rc-1 belt: sudo failed and pacman never spoke.
-        assert!(sudo_credential_lost(1, "", ""));
+        // Silence is NOT a credential loss: sudo -n always says why.
+        assert!(!sudo_credential_lost(""));
     }
 
     #[test]
     fn pacman_failures_are_never_credential_loss() {
         // pacman's own error prose is not sudo asking for anything.
         assert!(!sudo_credential_lost(
-            1,
-            "",
             "error: failed to commit transaction (conflicting files)\n"
         ));
-        // pacman spoke → the failure is pacman's, not a lost credential.
-        assert!(!sudo_credential_lost(1, "progress output\n", ""));
-        // Non-1 silent failures are not the §K.3 signature.
-        assert!(!sudo_credential_lost(2, "", ""));
+        // pacman's silence is pacman's failure, not a lost credential.
+        assert!(!sudo_credential_lost(""));
     }
 }

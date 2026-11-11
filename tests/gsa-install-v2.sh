@@ -1351,4 +1351,49 @@ if want j; then
     )
 fi
 
+if want k; then
+    # ─── 11. a silent transaction failure is not a lost credential ────────
+    # sudo runs with `-n`, so a credential problem always speaks; a pacman
+    # that exits 1 with no output used to be reported as "sudo credential
+    # expired", halting dispatch for a hiccup (blind-review 2026-11-11).
+    (
+        set -euo pipefail
+        ws="$fixture/k/ws"
+        db="$fixture/k/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        add_package "$ws" quiet "$gsa_meta_any" git
+        archive="$ws/packages/quiet/quiet-1.0-1-any.pkg.tar.zst"
+        stage_pkginfo "$fixture/k/stage" quiet quiet "1.0-1" 0
+        make_archive "$archive" "$fixture/k/stage"
+
+        # The fixture's own pacman stub answers every query; only the
+        # transaction dies silently.
+        mkdir -p "$fixture/k/bin"
+        cat >"$fixture/k/bin/pacman" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    [ "\$arg" = "-U" ] && exit 1
+done
+exec "$ws/bin/pacman" "\$@"
+STUB
+        chmod +x "$fixture/k/bin/pacman"
+        export PATH="$fixture/k/bin:$PATH"
+        export GSA_FAKE_SUDO_LOG="$fixture/k/sudo.log"
+        export GSA_FAKE_PACMAN_LOG="$fixture/k/pacman.log"
+        : >"$GSA_FAKE_SUDO_LOG"
+        : >"$GSA_FAKE_PACMAN_LOG"
+
+        run_engine "$ws" -Uf --state-dir "$fixture/k/state" --config "$ws/pacman.conf" "$archive"
+        [ "$FIXTURE_RC" = 4 ] \
+            || fail "k: a failed transaction is rc 4, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep < <(record_section outcome) -Fq 'install-failed pacman -U exited 1 with no output' \
+            || fail "k: the failure must name the silent exit, got: $(record_section outcome)"
+        if grep -qF 'sudo credential' <<<"$FIXTURE_OUTPUT"; then
+            fail "k: a silent pacman failure must not be blamed on sudo credentials: $FIXTURE_OUTPUT"
+        fi
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'
