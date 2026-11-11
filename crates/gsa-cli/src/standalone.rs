@@ -193,6 +193,10 @@ pub(crate) fn apply(
             one_line(token)
         );
     }
+    inv.standalone_tokens = standalone
+        .iter()
+        .map(|(token, _)| token.to_string())
+        .collect();
     inv.targets = ids;
     inv.standalone_root = Some(root.clone());
     Ok(Some(Staged { root, ephemeral }))

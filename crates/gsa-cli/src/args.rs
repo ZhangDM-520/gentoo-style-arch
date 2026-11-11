@@ -622,6 +622,11 @@ pub struct Invocation {
     /// staged ids; `crate::resolve_workspace` prefers this root over
     /// workspace discovery.
     pub standalone_root: Option<PathBuf>,
+    /// The ORIGINAL standalone tokens (the paths the user typed), kept beside
+    /// the rewritten `targets`: the continuation restates the invocation, and
+    /// a staged id names a workspace that no longer exists
+    /// (blind-review finding, 2026-11-11).
+    pub standalone_tokens: Vec<String>,
 }
 
 impl Invocation {
@@ -854,6 +859,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         no_build_dir_prompt: false,
         allow_broken_rustc: false,
         standalone_root: None,
+        standalone_tokens: Vec::new(),
     };
 
     let mut rest = &args[1..];

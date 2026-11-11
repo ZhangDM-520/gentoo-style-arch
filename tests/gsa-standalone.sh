@@ -127,6 +127,19 @@ if [ -z "$only" ] || [ "$only" = a ]; then
         *'solo-recipe build'*) ;;
         *) fail "a: the plan must carry a row for the staged id: $FIXTURE_OUTPUT" ;;
         esac
+        # The continuation restates the PATH the user typed: a staged id names
+        # a workspace the next run never recreates, so `gsa -S --dry-run
+        # solo-recipe` exited 2 with `unknown reference` (blind-review
+        # finding, 2026-11-11).
+        cmd=$(rr2_continuation command < <(printf '%s\n' "$FIXTURE_OUTPUT"))
+        case " $cmd " in
+        *" $fixture/a/shared/solo-recipe "*) ;;
+        *) fail "a: the continuation must restate the standalone path, got: $cmd" ;;
+        esac
+        # And the restated command really replays.
+        ( cd "$ws" && GSA_CONF="$conf" GSA_STATE_DIR="$state" bash -c "${cmd/gsa /$engine }" ) \
+            >"$fixture/a/replay.out" 2>&1 \
+            || fail "a: the continuation does not replay: $(cat "$fixture/a/replay.out")"
         # Ephemeral staging: a dry run writes no state at all (§B.10).
         [ ! -e "$state" ] || fail "a: a dry run must leave no state: $(ls -R "$state" 2>&1)"
     )

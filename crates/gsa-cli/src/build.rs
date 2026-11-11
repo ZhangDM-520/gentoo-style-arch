@@ -1834,6 +1834,7 @@ mod tests {
             no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
+            standalone_tokens: Vec::new(),
         }
     }
 

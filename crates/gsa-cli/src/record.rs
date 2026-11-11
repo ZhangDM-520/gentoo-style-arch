@@ -374,9 +374,20 @@ pub fn build_plan_record(
         command.push_str(" --leaf");
     }
     command.push_str(&mirror_flags(inv, Some(budget)));
-    for (_, id) in &selection.listed {
-        command.push(' ');
-        command.push_str(id.as_str());
+    if inv.standalone_tokens.is_empty() {
+        for (_, id) in &selection.listed {
+            command.push(' ');
+            command.push_str(id.as_str());
+        }
+    } else {
+        // A standalone run staged the user's own paths under ids that name a
+        // workspace the next run never recreates: the continuation restates
+        // the PATHS it was given (shell-quoted), so it replays
+        // (blind-review finding, 2026-11-11).
+        for token in &inv.standalone_tokens {
+            command.push(' ');
+            command.push_str(&shell_quote(token));
+        }
     }
     command.push_str(&mirror_pacman_args(inv));
 
@@ -698,9 +709,18 @@ pub fn build_txn_record(
         .filter(|row| row.status != RowStatus::Succeeded && row.pkg.as_str() != "-")
         .map(|row| row.pkg.clone())
         .collect();
-    for id in &remaining {
-        command.push(' ');
-        command.push_str(id.as_str());
+    if inv.standalone_tokens.is_empty() {
+        for id in &remaining {
+            command.push(' ');
+            command.push_str(id.as_str());
+        }
+    } else {
+        // Standalone: restate the user's paths, not the staged ids a replay
+        // cannot resolve (blind-review finding, 2026-11-11).
+        for token in &inv.standalone_tokens {
+            command.push(' ');
+            command.push_str(&shell_quote(token));
+        }
     }
     command.push_str(&mirror_pacman_args(inv));
 
@@ -882,6 +902,7 @@ mod tests {
             no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
+            standalone_tokens: Vec::new(),
         };
         let record = build_plan_record(
             &inv,
@@ -948,6 +969,7 @@ mod tests {
             no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
+            standalone_tokens: Vec::new(),
         };
         let record = build_plan_record(
             &inv,
@@ -1000,6 +1022,7 @@ mod tests {
             no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
+            standalone_tokens: Vec::new(),
         };
         let outcomes = vec![
             OutcomeRow {
@@ -1135,6 +1158,7 @@ mod tests {
             no_build_dir_prompt: false,
             allow_broken_rustc: false,
             standalone_root: None,
+            standalone_tokens: Vec::new(),
         }
     }
 
