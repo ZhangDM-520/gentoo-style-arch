@@ -572,7 +572,13 @@ than replacing it (a replacement lever would silently drop the shipped
 toolchain identity hashes (rule 6), so editing it forces the one-time clean. `/etc/makepkg.conf`, `/etc/makepkg.conf.d/*.conf` and
 `~/.makepkg.conf` are NEVER sourced (`crates/gsa-model/src/makepkg_conf.rs`).
 `SRCDEST` resolves through the `srcdest` key only — the environment rung and
-both makepkg.conf rungs are retired.
+both makepkg.conf rungs are retired. The composite's `BUILDDIR` is ABSOLUTE
+by the lane contract (a relative one does not survive the fakeroot phase), and
+makepkg records it plus `startdir` in every archive's `.BUILDINFO`; archives
+built from identical sources under different build roots therefore differ in
+that member. The engine never rewrites archive metadata — the field's meaning
+and the reproducibility consequence are documented in `docs/build-guide.md`
+("Archives record the build root").
 
 **What the built-in bodies carry** (amended 2026-11-10, second audit). The
 compiler line is `-march=native -mtune=native` — never a literal ISA, so a

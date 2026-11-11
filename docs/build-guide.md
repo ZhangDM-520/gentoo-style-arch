@@ -606,6 +606,20 @@ a shared `PKGDEST` can never hand over another recipe's archive. A run whose
 build-cache layout is unusable refuses rather than silently falling back to
 recipe-dir trees.
 
+**Archives record the build root.** makepkg writes `builddir` (the resolved
+`BUILDDIR`) and `startdir` (the directory it ran in, i.e. the recipe's place
+in the store) as ABSOLUTE paths into every archive's `.BUILDINFO`; the lane
+contract requires absolute paths (a relative `BUILDDIR` does not survive the
+fakeroot phase), so the engine cannot make these members path-free, and it
+never rewrites archive metadata. Two consequences, both by design: archives
+built from identical sources under different `--build-dir` roots (or store
+locations) are not byte-identical — `.BUILDINFO` differs, and `builddate`
+differs too unless `SOURCE_DATE_EPOCH` is pinned — so a reproducibility check
+pins the build root (a devtools-style stable tree) and the epoch, or compares
+the payload minus `.BUILDINFO`; and an archive published from this engine
+advertises the build user's cache and store paths in that file. Verified by
+building one recipe under two roots and diffing the member.
+
 Sources are a separate story: `SRCDEST` stays governed by `makepkg.conf` —
 the environment `SRCDEST`, then the build user's `~/.makepkg.conf`, then
 `/etc/makepkg.conf` — and the engine resolves through that chain rather than
