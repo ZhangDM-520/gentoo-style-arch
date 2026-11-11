@@ -111,12 +111,7 @@ pub fn prompt_app_selection(
         // buried the question it was asking. The dashboard's idiom
         // (`ESC[nA` up, `ESC[2K` clear) replaces the previous frame when the
         // terminal can take it; `TERM=dumb` keeps the old append behaviour.
-        write_frame(
-            out,
-            &frame,
-            &mut drawn,
-            !crate::style::term_is_dumb(),
-        )?;
+        write_frame(out, &frame, &mut drawn, !crate::style::term_is_dumb())?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
             return Ok(PromptOutcome::Abort("app selection aborted (input closed)"));
@@ -390,7 +385,10 @@ mod tests {
             3,
             "one erase per new line plus one per stale row: {text:?}"
         );
-        assert!(text.contains("\x1b[2A"), "the cursor returns to the frame: {text:?}");
+        assert!(
+            text.contains("\x1b[2A"),
+            "the cursor returns to the frame: {text:?}"
+        );
     }
 
     #[test]
