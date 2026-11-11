@@ -630,6 +630,15 @@ pub struct Invocation {
 }
 
 impl Invocation {
+    /// Did the caller ask for the machine vocabulary explicitly
+    /// (`--machine`)? A machine channel is never a dialogue: no prompt may
+    /// run under it (see `prompt::interactive`).
+    pub fn machine_requested(&self) -> bool {
+        self.output_mode == Some(crate::output::Mode::Machine)
+    }
+}
+
+impl Invocation {
     /// The restated spelling used by the continuation's `command:` line.
     pub fn spelling(&self) -> String {
         let mut spelling = self.family.as_str().to_string();

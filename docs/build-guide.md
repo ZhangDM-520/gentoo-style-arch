@@ -708,6 +708,10 @@ the three planning defaults):
 **Inherited environment that changes behaviour** without being validated
 configuration:
 
+- `CI` — any non-empty value other than `0`/`false` marks an unattended run:
+  neither the build-dir question nor the `@app` menu is asked, even when the
+  runner allocated a pty (`docker -t`, `ssh -t`, GitLab's `script`). Without
+  it such a runner blocked forever on a question nothing could answer.
 - `SRCDEST` — makepkg's source-mirror root; the version-sync path consults it
   when locating declared sources.
 - `TMPDIR` — scratch root for version-sync and toolchain-probe work; version

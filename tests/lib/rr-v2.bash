@@ -608,7 +608,7 @@ rr2_env_forward() {
     local v
     for v in $(compgen -e); do
         case $v in
-        PATH | HOME | TMPDIR | TZ | LANG | LC_* | MAKEFLAGS | NINJAFLAGS | SRCDEST | PKGDEST | BUILDDIR | GSA_* | _GSA_*)
+        PATH | HOME | TMPDIR | TZ | LANG | LC_* | MAKEFLAGS | NINJAFLAGS | SRCDEST | PKGDEST | BUILDDIR | CI | GSA_* | _GSA_*)
             _rr2_fwd_out+=("$v=${!v}")
             ;;
         esac

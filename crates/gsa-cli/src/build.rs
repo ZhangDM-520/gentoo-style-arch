@@ -151,7 +151,11 @@ fn run_build_with(
     // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
     //    (rc 3) before any interactive input is rendered or consumed ──────
     let mut selection = draft
-        .finish_for_build(&ctx, err)
+        .finish_for_build(
+            &ctx,
+            err,
+            crate::prompt::interactive(inv.machine_requested()),
+        )
         .map_err(|error| Exit::Usage(error.message))?;
 
     // ── build-cache root (§J.2): asked AFTER the selection prompt, before
@@ -867,9 +871,15 @@ pub(crate) fn plan_only(
     // so its continuation restates the chosen root (§J.2/§H.2).
     let mut owned = inv.clone();
     let inv = &mut owned;
-    let mut selection =
-        select::build_selection_for_build(ctx, &inv.targets, &inv.ranges, inv.leaf, err)
-            .map_err(|error| error.message)?;
+    let mut selection = select::build_selection_for_build(
+        ctx,
+        &inv.targets,
+        &inv.ranges,
+        inv.leaf,
+        err,
+        crate::prompt::interactive(inv.machine_requested()),
+    )
+    .map_err(|error| error.message)?;
     crate::write_notes(err, &selection.notes);
     // resolve() owns its typed usage exit; the plan's rc is the run's (§H.2).
     if let Err(exit) = crate::builddir::resolve(inv, err) {

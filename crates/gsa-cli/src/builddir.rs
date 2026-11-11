@@ -19,12 +19,12 @@
 //! set_build_root_override`]) and exported to lane/fetch children through
 //! `GSA_BUILD_DIR`, because a child re-resolves the layout in its own process.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::args::Invocation;
 use crate::exit::Exit;
-use crate::prompt::{prompt_build_dir, BuildDirOutcome};
+use crate::prompt::{self, prompt_build_dir, BuildDirOutcome};
 
 /// Resolve the run's build root, prompting on a TTY when nothing named it.
 /// `Ok(())` means every later `build_layout_for_run()` call agrees; `Err(exit)`
@@ -39,10 +39,13 @@ pub fn resolve(inv: &mut Invocation, err: &mut dyn Write) -> Result<(), Exit> {
     if inv.no_build_dir_prompt || gsa_model::config::env_build_root().is_some() {
         return Ok(());
     }
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
+    // The prompt is a dialogue: a non-interactive run (piped stdin or
+    // stderr, `CI`, `--machine`) resolves the root silently from the
+    // layers above instead of blocking on a question nothing can answer.
+    if !prompt::interactive(inv.machine_requested()) {
         return Ok(());
     }
+    let stdin = std::io::stdin();
     let cfg = gsa_model::config::load().map_err(Exit::Usage)?;
     let (default, source) = gsa_model::config::build_root_with_source(&cfg).map_err(Exit::Usage)?;
     let home = gsa_model::config::build_user_home().unwrap_or_else(|_| PathBuf::from("/"));

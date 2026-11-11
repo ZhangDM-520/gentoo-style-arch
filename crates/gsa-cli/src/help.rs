@@ -45,6 +45,7 @@ pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
     ("GSA_TARGET_CPU", "the target CPU class for recipe selection"),
     ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
     ("NO_COLOR", "any non-empty value turns the human rendering's colour off (the --color flag beats it; the machine channel is never coloured)"),
+    ("CI", "any non-empty value other than 0/false marks an unattended run: no prompt is asked, even when the runner allocated a pty"),
 ];
 
 const SECTIONS: &[Section] = &[
@@ -428,6 +429,7 @@ mod tests {
             "GSA_TARGET_CPU",
             "GSA_VCS_SKIP_TOLERANCE",
             "NO_COLOR",
+            "CI",
         ];
         assert_eq!(
             ENV_INPUTS.iter().map(|(name, _)| *name).collect::<Vec<_>>(),

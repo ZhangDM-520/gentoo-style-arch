@@ -287,7 +287,12 @@ which root the build cache lives under BEFORE anything resolves the layout,
 and blocks for the answer on a TTY. The question is skipped when something
 already answered it: `--build-dir`, `GSA_BUILD_DIR` (an explicit environment
 override is an answer, not a default — it is also what keeps fixtures and
-scripts silent), `--no-build-dir-prompt`, or a non-TTY stdin. The prompt
+scripts silent), `--no-build-dir-prompt`, or a non-interactive run — a
+non-TTY stdin OR stderr (the question is written to stderr, so a redirected
+stderr makes it invisible), `CI` set to a non-empty value other than
+`0`/`false`, or `--machine`. A runner that allocates a pty (`docker -t`,
+`ssh -t`, GitLab's `script`) sets `CI`; before that gate existed the prompt
+blocked forever on a question nothing could answer (blind-review 2026-11-11). The prompt
 shows the resolved root WITH its provenance (`gsa.conf build_dir`,
 `GSA_BUILD_DIR`, `the built-in default`), so a stale config path or a stray
 environment override is visible before it is accepted; Enter keeps it, an
@@ -730,8 +735,9 @@ contribution prompts — a positional app member (or an app member seeded
 through any other target) is never prompt-filtered (fish-era `test "$g" =
 app` rule), and an app member named both ways survives an unchecked row. An
 abort is exactly ONE error line carrying its reason (`app selection aborted`,
-or `app selection aborted (input closed)` on EOF). Non-TTY runs and listings
-take the whole group silently. Records carrying the same `app-cluster=<name>`
+or `app selection aborted (input closed)` on EOF). A non-interactive run —
+non-TTY stdin or stderr, `CI`, or `--machine` (`prompt::interactive`) — and
+every listing take the whole group silently. Records carrying the same `app-cluster=<name>`
 tag present as ONE row (toggling checks the whole cluster; "N checked" counts
 rows). The prompt is a FILTER in front of the normal pipeline: whatever it
 returns becomes the group's contribution to the selection, and every later step

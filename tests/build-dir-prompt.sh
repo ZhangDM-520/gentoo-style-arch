@@ -21,6 +21,13 @@ set -euo pipefail
 #   H. q aborts (rc 2, one named line) and a relative --build-dir is a
 #      usage error naming the flag                                [refusals]
 #   I. a non-build spelling refuses --build-dir as deferred         [gate]
+#   J. CI (any non-empty value but 0/false) answers it silently: an
+#      unattended runner asks nothing, even on a pty                [CI]
+#   K. --machine answers it silently (a machine channel is never a
+#      dialogue)                                                  [flag]
+#   L. a redirected stderr answers it silently: the question is
+#      written to stderr, so an invisible prompt must not block
+#      (blind-review 2026-11-11, ci-fleet-operator/locale-terminal) [stream]
 #
 # The engine is invoked directly (not through rr2_engine_argv) ON PURPOSE:
 # that helper exports GSA_BUILD_DIR whenever the caller did not pin one, which
@@ -62,7 +69,7 @@ run_dir() {
     local conf=$1 out=$2 input=$3
     shift 3
     local runner=$fixture/runner.sh
-    local -a renv=(-u GSA_BUILD_DIR
+    local -a renv=(-u GSA_BUILD_DIR -u CI
         "HOME=$fixture/home" "TMPDIR=$fixture/tmp" "GSA_CONF=$conf"
         "GSA_STATE_DIR=$fixture/state" "GSA_RECIPES_DIR=$fixture/recipes")
     if ((${#RUN_ENV[@]})); then
@@ -100,6 +107,31 @@ run_pipe() {
                 GSA_RECIPES_DIR="$fixture/recipes" \
                 "$gsa_bin" "$@"
     ) >"$out" 2>&1 </dev/null
+    RC=$?
+    ((RC == 0)) && set -e
+    return "$RC"
+}
+
+# run_dir_quiet_stderr OUT ERRFILE [ARG...] — the same PTY run with stderr
+# redirected to ERRFILE: the question would be invisible there, so the engine
+# must not ask it (and must not block on the answer).
+run_dir_quiet_stderr() {
+    local out=$1 errfile=$2
+    shift 2
+    local runner=$fixture/runner.sh
+    {
+        printf '#!/bin/bash\n'
+        printf 'cd %q || exit 127\n' "$ws"
+        printf 'exec env -u GSA_BUILD_DIR -u CI HOME=%q TMPDIR=%q GSA_CONF=%q ' \
+            "$fixture/home" "$fixture/tmp" "$fixture/gsa.conf"
+        printf 'GSA_STATE_DIR=%q GSA_RECIPES_DIR=%q ' "$fixture/state" "$fixture/recipes"
+        printf '%q' "$gsa_bin"
+        printf ' %q' "$@"
+        printf ' 2>%q\n' "$errfile"
+    } >"$runner"
+    set +e
+    printf '' | timeout 60 env TERM=dumb \
+        script -qec "/bin/bash $(printf %q "$runner")" /dev/null >"$out" 2>&1
     RC=$?
     ((RC == 0)) && set -e
     return "$RC"
@@ -243,3 +275,29 @@ run_pipe "$fixture/i.out" -Q --build-dir /tmp/x
 [ "$RC" = 2 ] || fail "-Q accepted a build-only flag (rc=$RC)" "$fixture/i.out"
 grep -q 'deferred to a later phase' "$fixture/i.out" \
     || fail "-Q did not refuse --build-dir through the deferred vocabulary" "$fixture/i.out"
+
+# ── J. CI marks an unattended run: no question, no blocking ────────────────
+RUN_ENV=("CI=1")
+run_dir "$fixture/gsa.conf" "$fixture/j.out" '' -B --dry-run --leaf p1 \
+    || fail "CI plan failed (rc=$RC)" "$fixture/j.out"
+assert_no_prompt "$fixture/j.out"
+RUN_ENV=("CI=false")
+run_dir "$fixture/gsa.conf" "$fixture/j0.out" '\n' -B --dry-run --leaf p1 \
+    || fail "CI=false plan failed (rc=$RC)" "$fixture/j0.out"
+assert_prompt "$fixture/j0.out"
+RUN_ENV=()
+
+# ── K. --machine asks nothing: the machine channel is not a dialogue ───────
+run_dir "$fixture/gsa.conf" "$fixture/k.out" '' -B --dry-run --leaf p1 --machine \
+    || fail "--machine plan failed (rc=$RC)" "$fixture/k.out"
+assert_no_prompt "$fixture/k.out"
+
+# ── L. a redirected stderr cannot show the question, so it is not asked ───
+run_dir_quiet_stderr "$fixture/l.out" "$fixture/l.err" -B --dry-run --leaf p1 \
+    || fail "redirected-stderr plan failed (rc=$RC)" "$fixture/l.out"
+assert_no_prompt "$fixture/l.out"
+if grep -q 'build directory (makepkg' "$fixture/l.err"; then
+    fail "the run wrote a question to a redirected stderr" "$fixture/l.err"
+fi
+
+printf 'build-dir-prompt: PASS\n'

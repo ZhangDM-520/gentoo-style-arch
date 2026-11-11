@@ -17,7 +17,35 @@
 //!   substitution can never swallow them; only the chosen IDs travel the
 //!   data channel.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
+
+/// Is a prompt allowed to run? ONE decision for every prompt (the build
+/// root, the `@app` filter): the question must be askable AND readable —
+/// stdin and the stream the question is written to (stderr) are both
+/// terminals — and no non-interactive signal may be set.
+///
+/// `--machine` asks for the machine vocabulary, never a dialogue; `CI`
+/// marks an unattended run even when the runner allocated a pty
+/// (`docker -t`, `ssh -t`, GitLab's `script`), which is the shape that used
+/// to block forever on a question nobody could answer (blind-review
+/// 2026-11-11, ci-fleet-operator and locale-terminal). `CI` follows the
+/// convention: any non-empty value except `0`/`false` marks CI.
+pub fn interactive(machine: bool) -> bool {
+    if machine || ci_requested() {
+        return false;
+    }
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+fn ci_requested() -> bool {
+    match std::env::var("CI") {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !(value.is_empty() || value == "0" || value == "false")
+        }
+        Err(_) => false,
+    }
+}
 
 /// One toggle row of the menu.
 pub struct AppRow {

@@ -498,8 +498,9 @@ pub fn build_selection(
 }
 
 /// The build paths' selection: the §C.4 prompt engages only when the
-/// selection carries an `@app` group contribution AND stdin is a terminal
-/// (fish-era `test -t 0` rule) — a piped run can never hang on it.
+/// selection carries an `@app` group contribution AND the caller says the
+/// run is interactive (`prompt::interactive`: stdin and stderr terminals, no
+/// `CI`, no `--machine`) — an unattended run can never hang on it.
 /// App-member seeds render as toggle rows (app-cluster members share one
 /// row) and only the confirmed subset seeds the closure; non-app seeds pass
 /// through untouched.
@@ -509,8 +510,9 @@ pub fn build_selection_for_build(
     ranges: &[String],
     leaf: bool,
     menu: &mut dyn Write,
+    interactive: bool,
 ) -> Result<Selection, SelectError> {
-    resolve_selection(ctx, targets, ranges, leaf)?.finish_for_build(ctx, menu)
+    resolve_selection(ctx, targets, ranges, leaf)?.finish_for_build(ctx, menu, interactive)
 }
 
 impl SelectionDraft {
@@ -526,9 +528,10 @@ impl SelectionDraft {
         self,
         ctx: &Ctx<'_>,
         menu: &mut dyn Write,
+        interactive: bool,
     ) -> Result<Selection, SelectError> {
-        let stdin = std::io::stdin();
-        if std::io::IsTerminal::is_terminal(&stdin) {
+        if interactive {
+            let stdin = std::io::stdin();
             self.finish(ctx, Some((menu, &mut stdin.lock())))
         } else {
             self.finish(ctx, None)

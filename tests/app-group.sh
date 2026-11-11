@@ -86,6 +86,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/gsa-app-fixture.XXXXXX")
 trap '/usr/bin/sudo -n rm -rf -- "$fixture" 2>/dev/null || rm -rf -- "$fixture" 2>/dev/null || true' EXIT
+# The prompt sections below ask deliberately: an ambient CI (a battery run
+# inside a runner) would suppress the question — section 13 sets it again.
+unset CI
 
 fail() {
     printf '%s\n' "$1" >&2
@@ -764,6 +767,30 @@ while read -r pkg; do
     grep -qx "SPAWN $pkg" "$fixture/o12.spawn" \
         || fail "$pkg was not built" "$fixture/o12"
 done <"$fixture/app.expected"
+
+# ── 13. An unattended run (@app under CI / --machine) takes the group ──────
+# A pty that no human watches used to block forever on the menu
+# (blind-review 2026-11-11, ci-fleet-operator/locale-terminal): `CI` and
+# `--machine` both mean "not a dialogue", and the whole group is taken.
+export CI=1
+run_pty_gsa '' "$fixture/o13" -B --state-dir "$fixture/state-13" --dry-run @app \
+    || fail "CI -B --dry-run @app failed" "$fixture/o13"
+if grep -q 'choose what to build' "$fixture/o13"; then
+    fail "CI=1 rendered the @app prompt" "$fixture/o13"
+fi
+sed 's/\r$//' "$fixture/o13" >"$fixture/o13.clean"
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o13.clean")")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "CI=1 did not take the whole group: got [$(rr2_scalar order <"$fixture/o13.clean")]" "$fixture/o13"
+unset CI
+
+run_pty_gsa '' "$fixture/o13m" -B --state-dir "$fixture/state-13m" --dry-run @app --machine \
+    || fail "--machine -B --dry-run @app failed" "$fixture/o13m"
+if grep -q 'choose what to build' "$fixture/o13m"; then
+    fail "--machine rendered the @app prompt" "$fixture/o13m"
+fi
+sed 's/\r$//' "$fixture/o13m" >"$fixture/o13m.clean"
+[ "$(sorted_ids "$(rr2_scalar order <"$fixture/o13m.clean")")" = "$(cat "$fixture/app.expected")" ] \
+    || fail "--machine did not take the whole group: got [$(rr2_scalar order <"$fixture/o13m.clean")]" "$fixture/o13m"
 
 # Restore the untagged records the cluster scenario started from.
 set_topology_record "$fixture" app2 app 'extdep'

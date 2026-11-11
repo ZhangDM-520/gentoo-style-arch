@@ -817,6 +817,12 @@ fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) 
             if *name == "NO_COLOR" {
                 return false;
             }
+            // `CI` decides whether THIS process may prompt; a resume assesses
+            // its own stream (a paste into a terminal may prompt), so the
+            // continuation neither restates it nor warns about it.
+            if *name == "CI" {
+                return false;
+            }
             lookup(name).is_some()
         })
         .map(|name| name.to_string())
@@ -1177,8 +1183,9 @@ mod tests {
         // listable, so a documented variable can never be dropped silently.
         for (name, _) in crate::help::ENV_INPUTS {
             // Presentation inputs are documented but never `env-required`:
-            // a continuation picks its own rendering (the `--machine` rule).
-            if *name == "NO_COLOR" {
+            // a continuation picks its own rendering (the `--machine` rule),
+            // and `CI` likewise assesses its own stream before prompting.
+            if *name == "NO_COLOR" || *name == "CI" {
                 continue;
             }
             assert!(
