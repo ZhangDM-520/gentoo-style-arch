@@ -176,6 +176,13 @@ pub fn sudo_credential_lost(stderr: &str) -> bool {
         || lower.contains("a terminal is required")
 }
 
+/// Wait for a live pacman database lock the way registration does (rule 9/23:
+/// bounded, never deleted) before the transaction spawns. A stale lock (no
+/// live holder) proceeds untouched.
+fn await_db_lock() -> Result<(), String> {
+    crate::register::wait_for_db_lock(&crate::pacman_db_root())
+}
+
 /// Run the ONE `pacman -U` transaction for this call, serialized through the
 /// state-root mutex. `-S` runs call this once per built package (an install
 /// transaction per package, install-before-dependents); `-U` runs once.
@@ -184,6 +191,12 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
     // transaction lands (fish `repair_marker_write`) — fail-closed, a
     // marker that cannot be recorded aborts with nothing mutated.
     if let Err(message) = crate::stage_repair_markers(&req.state_dir, &req.repairs) {
+        return TxnOutcome::Failed { rc: -1, message };
+    }
+    // A live `db.lck` is waited for, not raced: firing `pacman -U` into it
+    // reported pacman's "unable to lock database … you can remove" line as
+    // the failure reason, which invites deleting a LIVE lock.
+    if let Err(message) = await_db_lock() {
         return TxnOutcome::Failed { rc: -1, message };
     }
     let mutex_path = gsa_build::shim::mutex_path(&req.state_dir);
@@ -220,6 +233,18 @@ pub fn execute_txn(req: &TxnRequest) -> TxnOutcome {
             // prompting — and sudo says so (§K.3: the engine never prompts).
             if sudo_credential_lost(&stderr) {
                 return TxnOutcome::SudoLost;
+            }
+            // A lock failure names the lock and says what NOT to do: pacman's
+            // own last line ("you can remove …") is an invitation the engine
+            // must never forward (rule 9/23).
+            if stderr.contains("unable to lock database") {
+                return TxnOutcome::Failed {
+                    rc,
+                    message: format!(
+                        "another package manager holds the database lock — wait for it to finish and retry; never delete {}",
+                        crate::pacman_db_root().join("db.lck").display()
+                    ),
+                };
             }
             let message = stderr
                 .lines()

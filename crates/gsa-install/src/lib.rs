@@ -20,7 +20,7 @@ pub mod register;
 use std::path::{Path, PathBuf};
 
 pub use exec::{execute_txn, preflight_installs, TxnOutcome, TxnRequest};
-pub use localdb::{InstalledPackage, LocalDb};
+pub use localdb::{pacman_db_root, InstalledPackage, LocalDb};
 pub use register::{names_for_archive, register_ignorepkg, RegisterReport};
 
 use gsa_model::{Decision, DecisionRow};

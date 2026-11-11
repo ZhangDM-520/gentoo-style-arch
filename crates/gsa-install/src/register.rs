@@ -232,7 +232,14 @@ fn lock_has_live_holder(lock: &Path) -> bool {
 /// Bounded `db.lck` wait (rule 9/23): a held lock is polled (1s) until it
 /// clears, up to 300s; a stale lock (no live holder) proceeds loudly and is
 /// NEVER touched. Timeout → `Err` (the install refuses).
-fn wait_for_db_lock(db_root: &Path) -> Result<(), String> {
+///
+/// One policy for every pacman caller: the transaction executor waits through
+/// the same helper before spawning `pacman -U`, because registration is not
+/// the only step that can meet a live lock (blind-review finding,
+/// 2026-11-11: an `-U` run with the name already in IgnorePkg fired the
+/// transaction immediately and reported pacman's "you can remove db.lck"
+/// line as the reason).
+pub fn wait_for_db_lock(db_root: &Path) -> Result<(), String> {
     let lock = db_root.join("db.lck");
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut waiting = false;

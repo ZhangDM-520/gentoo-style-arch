@@ -1396,4 +1396,55 @@ STUB
     )
 fi
 
+if want l; then
+    # ─── 12. a live database lock is waited for, never deleted ────────────
+    # `-U` with the name already registered used to fire the transaction into
+    # a live `db.lck` and report pacman's "you can remove …" line as the
+    # reason — an invitation to delete a LIVE lock (blind-review 2026-11-11).
+    (
+        set -euo pipefail
+        ws="$fixture/l/ws"
+        db="$fixture/l/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        add_package "$ws" locky "$gsa_meta_any" git
+        archive="$ws/packages/locky/locky-1.0-1-any.pkg.tar.zst"
+        stage_pkginfo "$fixture/l/stage" locky locky "1.0-1" 0
+        make_archive "$archive" "$fixture/l/stage"
+
+        # A pacman that always answers the lock error (with the misleading
+        # tail pacman itself prints).
+        mkdir -p "$fixture/l/bin"
+        cat >"$fixture/l/bin/pacman" <<STUB
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    if [ "\$arg" = "-U" ]; then
+        echo "error: failed to init transaction (unable to lock database)" >&2
+        echo "  if you're sure a package manager is not already running, you can remove /var/lib/pacman/db.lck." >&2
+        exit 1
+    fi
+done
+exec "$ws/bin/pacman" "\$@"
+STUB
+        chmod +x "$fixture/l/bin/pacman"
+        export PATH="$fixture/l/bin:$PATH"
+        export GSA_FAKE_PACMAN_LOG="$fixture/l/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/l/sudo.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+
+        run_engine "$ws" -Uf --state-dir "$fixture/l/state" --config "$ws/pacman.conf" "$archive"
+        [ "$FIXTURE_RC" = 4 ] \
+            || fail "l: a lock failure is rc 4, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep < <(record_section outcome) -Fq 'another package manager holds the database lock' \
+            || fail "l: the failure must name the live lock, got: $(record_section outcome)"
+        grep < <(record_section outcome) -Fq 'never delete' \
+            || fail "l: the failure must say not to delete the lock, got: $(record_section outcome)"
+        if grep -qF 'you can remove' <<<"$FIXTURE_OUTPUT"; then
+            fail "l: pacman's 'you can remove db.lck' line must never be forwarded: $FIXTURE_OUTPUT"
+        fi
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'
