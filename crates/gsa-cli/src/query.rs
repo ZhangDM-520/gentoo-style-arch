@@ -328,6 +328,12 @@ pub fn query_abi(
     for line in &subs.corrupt {
         let _ = writeln!(err, "gsa: note: {line}");
     }
+    // Installed truth, for the one honesty claim this report owes: `-Qa`
+    // reports the RECIPE's derived token, and a reader could take it for the
+    // installed one (blind-review finding, 2026-11-11: `-Qa` answered rc 0
+    // with a token for a package pacman no longer had). An unreadable local
+    // DB is "unknown", never a false "not installed".
+    let db = LocalDb::load(&pacman_db_root()).ok();
     let repo = crate::find_root(inv.state_dir.as_deref());
     for &idx in &indices {
         let record = ctx.graph.record(idx);
@@ -372,6 +378,12 @@ pub fn query_abi(
             style::styled(style::Role::Dim, token.derived.clone()),
             style::styled(override_role, override_state)
         );
+        if let (Some(db), Some(meta)) = (&db, ctx.db.get(id)) {
+            // A split recipe is installed when ANY of its outputs is.
+            if meta.pkgnames().iter().all(|name| db.get(name).is_none()) {
+                let _ = writeln!(out, "{id} installed=no");
+            }
+        }
         if let Some(row) = index.rows_for(id).first() {
             let _ = writeln!(
                 out,

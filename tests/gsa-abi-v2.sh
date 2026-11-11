@@ -833,6 +833,11 @@ if want f; then
         vgrep "$(qa_row "$FIXTURE_OUTPUT" lib subscription-in)" -Eq \
             '^lib subscription-in ghostpkg 0:1\.0\.0-1 recorded-token$' \
             || fail "f: subscription-in row shape (§B.3), got: $FIXTURE_OUTPUT"
+        # Nothing is installed in this fixture yet: the recipe's derived
+        # token must not read as the installed one (blind-review finding,
+        # 2026-11-11 — `-Qa` answered for packages pacman did not have).
+        vgrep "$FIXTURE_OUTPUT" -Fxq 'lib installed=no' \
+            || fail "f: -Qa must say the recipe is not installed, got: $FIXTURE_OUTPUT"
         run_engine "$ws" -Qa --state-dir "$state" ghostpkg
         vgrep "$(qa_row "$FIXTURE_OUTPUT" ghostpkg subscription-out)" -Eq \
             '^ghostpkg subscription-out lib recorded-token$' \
@@ -857,6 +862,10 @@ $FIXTURE_OUTPUT"
         # satisfied pin was reported stale). A pin the provider does not
         # hold is still reported.
         db_entry "$db" lib "0:1.0.0-1" >/dev/null
+        run_engine "$ws" -Qa --state-dir "$state" lib
+        if vgrep "$FIXTURE_OUTPUT" -Fxq 'lib installed=no'; then
+            fail "f: an installed recipe must not be reported installed=no: $FIXTURE_OUTPUT"
+        fi
         e_pin=$(db_entry "$db" pinner "0:2.0.0-1")
         printf '\n%%DEPENDS%%\nlib=1.0.0\n' >>"$e_pin/desc"
         run_engine "$ws" -Qr --state-dir "$state"
