@@ -627,6 +627,24 @@ pub fn resolve_state_dir_from(
         ],
         || Ok((PathBuf::from(DEFAULT_STATE_DIR), "the built-in default")),
     )?;
+    // The lane's PACMAN shim lives under this root and is handed to makepkg
+    // as `PACMAN=<path>`; makepkg resolves it with an UNQUOTED `type -P
+    // $PACMAN`, so any whitespace in the path silently breaks every build
+    // ("An unknown error has occurred.", lane rc 125/10 — blind-review
+    // finding, 2026-11-11). Refuse at the one resolution seam instead of
+    // letting it fail deep inside a lane.
+    if resolved
+        .value
+        .to_string_lossy()
+        .chars()
+        .any(|c| c.is_whitespace())
+    {
+        return Err(format!(
+            "the state root {} (from {}) contains whitespace, which the makepkg PACMAN shim cannot carry — use a path without spaces",
+            resolved.value.display(),
+            resolved.source
+        ));
+    }
     Ok((resolved.value, resolved.source))
 }
 

@@ -14,7 +14,7 @@ set -euo pipefail
 # structure, not a fourth derivation).
 #
 # Pinned here (six ( subshell ) sections, one per scenario; run one alone
-# with GSA_STATE_V2_ONLY=a…f):
+# with GSA_STATE_V2_ONLY=a…g):
 #   a. index registration after a stub build (§J.4): one row per built
 #      instance bound to the archive's sha256+size, `-Qb` renders the §J.4
 #      wire row, `-Qp` agrees with the row and the bytes.
@@ -635,6 +635,30 @@ if want f; then
             || fail "the real /var/lib/gsa must never move under a fixture (§J.3)"
         [ -d "$state" ] && [ -d "$fixture/f/env-state" ] \
             || fail "both overrides live under the fixture tree"
+    )
+fi
+
+# ─── g. a state root with whitespace refuses at the one resolution seam ────
+# The lane's PACMAN shim lives under the state root and reaches makepkg as
+# `PACMAN=<path>`; makepkg resolves it with an unquoted `type -P $PACMAN`, so
+# a space silently killed every build (lane rc 125/10, "An unknown error has
+# occurred.") — 2026-11-11 blind-review finding. Refuse it up front.
+if want g; then
+    (
+        set -euo pipefail
+        ws="$fixture/g/ws"
+        make_workspace "$ws" 1 auto low
+        add_package "$ws" spaced "$gsa_meta_any" git
+        GSA_STATE_DIR="$fixture/g/state with space" \
+            run_engine_user "$ws" -Q
+        [ "$FIXTURE_RC" -eq 2 ] \
+            || fail "g: a state root with whitespace is a usage error (rc 2), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        case $FIXTURE_OUTPUT in
+        *'contains whitespace'*) ;;
+        *) fail "g: the refusal must name the whitespace state root: $FIXTURE_OUTPUT" ;;
+        esac
+        [ ! -e "$fixture/g/state with space" ] \
+            || fail "g: a refused state root must never be created"
     )
 fi
 
