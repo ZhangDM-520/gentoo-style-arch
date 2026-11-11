@@ -195,6 +195,19 @@ pub fn parse_srcinfo(content: &str, origin: &str) -> Result<Srcinfo, RecipeError
                 format!("malformed .SRCINFO key '{key}' (expected [a-z0-9_-]+): {line}"),
             ));
         }
+        // An IDENTITY key with no value names nothing: `pkgname = ` used to
+        // enter the expected-output set as an empty string, so discovery
+        // matched no archive, `-Ua` read "no candidates" as "not eligible"
+        // and reported `noop empty-list` rc 0 while the archive sat on disk
+        // (blind review, 2026-11-11). `provides = ` on a split output stays
+        // legal (metadata that names nothing is a lint, not a refusal).
+        if matches!(key, "pkgname" | "pkgbase") && value.is_empty() {
+            return Err(RecipeError::at(
+                origin,
+                line_no,
+                format!("empty {key} value in .SRCINFO: {line}"),
+            ));
+        }
         if key == "pkgname" {
             info.push_multi(key, value.to_string());
         } else if matches!(

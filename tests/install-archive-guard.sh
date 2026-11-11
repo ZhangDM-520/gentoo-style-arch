@@ -1031,4 +1031,28 @@ assert_decisions 'I6/I7 seam: a zero-archive argument list is bad usage' 2 </dev
 # with a loud message on any pacman/sudo contact, and every seam run's rc
 # contract above would have failed with it.
 
+# ─── I8. an empty identity key in .SRCINFO is malformed metadata ──────────
+# `pkgname = ` entered the expected-output set as an empty string, so no
+# archive matched, `-Ua` read "no candidates" as "not eligible", and the run
+# reported `noop empty-list` rc 0 while the archive sat on disk (blind
+# review, 2026-11-11). Identity keys must name something.
+ws="$fixture/empty-name"
+make_workspace "$ws" 1 2 low
+write_engine_stubs "$ws" "$ws/db"
+add_package "$ws" p1 $'pkgver=1.0.0\npkgrel=1\narch=(any)'
+mkdir -p "$ws/packages/p1"
+printf 'pkgbase = p1\n\tpkgver = 1.0.0\n\tpkgrel = 1\n\tarch = any\n\tpkgname = \n' \
+    >"$ws/packages/p1/.SRCINFO"
+run_inst "$ws" -Ua --dry-run --state-dir "$ws/state" --config "$ws/pacman.conf"
+[ "$FIXTURE_RC" = 2 ] \
+    || { printf 'I8: an empty pkgname must be a usage-class refusal, got rc=%s:\n%s\n' \
+        "$FIXTURE_RC" "$FIXTURE_OUTPUT" >&2; exit 1; }
+grep -F 'empty pkgname value' <<<"$FIXTURE_OUTPUT" >/dev/null \
+    || { printf 'I8: the refusal must name the empty key:\n%s\n' "$FIXTURE_OUTPUT" >&2; exit 1; }
+if grep -Eq 'noop empty-list' <<<"$FIXTURE_OUTPUT"; then
+    printf 'I8: a malformed identity key must not read as an empty list:\n%s\n' \
+        "$FIXTURE_OUTPUT" >&2
+    exit 1
+fi
+
 printf 'install archive guard fixture: PASS\n'
