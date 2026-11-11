@@ -56,6 +56,14 @@ fn join_list(values: &[String]) -> String {
 /// spaces; a single token that cannot fit on a line of its own is SPLIT, so a
 /// long URL or a `name::url` override never overflows the terminal.
 fn wrap_at(text: &str, start_column: usize, width: usize, indent: usize) -> String {
+    // Progress is the invariant: every line keeps at least one usable column.
+    // A continuation indent that consumed the whole width (a `-Qi` on a
+    // 20-column terminal: width == indent == 20, room == 0) let the loop emit
+    // a newline plus indent and re-queue the SAME word forever — a hang that
+    // grew memory ~240 MB/s and reached 16 GB in a minute
+    // (blind-review 2026-11-11, locale-terminal).
+    let width = width.max(1);
+    let indent = indent.min(width - 1);
     let mut out = String::with_capacity(text.len() + 8);
     let mut column = start_column;
     let mut first = true;
@@ -135,7 +143,19 @@ fn row_role(status: RowStatus) -> Role {
 /// the human rendering (`None`: no wrapping, so a captured `-Qi` stays
 /// byte-identical); the caller probes it once per block, never per field.
 fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
-    let label_cell = style::styled(Role::Dim, format!("{label:<18}"));
+    // The label cell keeps its 18-column alignment, but a label longer than
+    // a narrow terminal is CUT: the colon must stay on the label's own line
+    // (a 20-column `-Qi` otherwise emitted a 22-column line).
+    let padded = format!("{label:<18}");
+    let cell_text = match width {
+        Some(width) => padded
+            .chars()
+            .take(width.saturating_sub(1))
+            .collect::<String>(),
+        None => padded,
+    };
+    let label_cell = style::styled(Role::Dim, cell_text);
+    let start = style::visible_width(&label_cell) + 2;
     if value.is_empty() {
         return format!("{label_cell}:");
     }
@@ -150,8 +170,13 @@ fn field_w(label: &str, value: &str, width: Option<usize>) -> String {
     out.push_str(&label_cell);
     out.push_str(": ");
     match width {
-        Some(width) if 20 + style::visible_width(&painted) > width => {
-            out.push_str(&wrap_at(&painted, 20, width, 20));
+        Some(width) if start + style::visible_width(&painted) > width => {
+            // The value column is 20 wide; the continuation indent is too,
+            // but only while the terminal can afford it. Aligning under the
+            // value at a 20-column terminal would leave one column per line
+            // (one character, one line at a time); half the width keeps the
+            // wrapped field readable (blind-review 2026-11-11).
+            out.push_str(&wrap_at(&painted, start, width, width.min(20) / 2));
         }
         _ => out.push_str(&painted),
     }
@@ -1162,6 +1187,26 @@ mod tests {
     use gsa_model::OutcomeRow;
 
     use super::*;
+
+    /// The ≤20-column hang: `width == indent` used to re-queue the same word
+    /// forever. The wrapper must terminate and never exceed the width.
+    #[test]
+    fn wrap_terminates_when_the_indent_fills_the_width() {
+        let out = wrap_at("aaaa bbbb cccc dddd", 20, 20, 20);
+        assert!(!out.is_empty());
+        for line in out.split('\n') {
+            assert!(
+                style::visible_width(line) <= 20,
+                "line wider than the terminal: {line:?}"
+            );
+        }
+        // A single long token, the same degenerate width: still bounded.
+        let out = wrap_at(&"x".repeat(50), 20, 20, 20);
+        for line in out.split('\n') {
+            assert!(style::visible_width(line) <= 20, "{line:?}");
+        }
+        assert_eq!(out.chars().filter(|c| *c == 'x').count(), 50);
+    }
 
     fn row(
         pkg: &str,

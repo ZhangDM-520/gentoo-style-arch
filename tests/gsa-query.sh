@@ -450,4 +450,47 @@ if [ -z "$only" ] || [ "$only" = j ]; then
     )
 fi
 
+# ── k. -Qi on a narrow (20-column) terminal must RETURN ───────────────────
+# The wrapper used `indent = 20` with the terminal width floored at 20, so at
+# exactly 20 columns every wrapped field re-queued the same word forever:
+# nothing printed, memory grew ~240 MB/s, 16 GB in a minute (blind-review
+# 2026-11-11, locale-terminal). A pty is the only place a width exists.
+if [ -z "$only" ] || [ "$only" = k ]; then
+    (
+        ws="$fixture/k/ws"
+        state="$fixture/k/state"
+        make_workspace "$ws" 1 1 low
+        add_package "$ws" foo "$gsa_meta_any"
+        make_local_db "$fixture/k/db"
+        make_pacman_stubs "$ws/bin" "$fixture/k/db"
+        export PATH="$ws/bin:$PATH"
+        export GSA_FAKE_PACMAN_LOG="$fixture/k/pacman.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        runner=$fixture/k/runner.sh
+        {
+            printf '#!/bin/bash\n'
+            printf 'cd %q || exit 127\n' "$ws"
+            printf 'stty cols 20 rows 40 2>/dev/null || true\n'
+            printf 'exec env GSA_CONF=%q GSA_STATE_DIR=%q %q -Qi foo\n' \
+                "$conf" "$state" "$engine"
+        } >"$runner"
+        set +e
+        timeout 30 env TERM=dumb script -qec "/bin/bash $(printf %q "$runner")" /dev/null \
+            >"$fixture/k/out" 2>&1
+        rc=$?
+        set -e
+        [ "$rc" -eq 0 ] \
+            || fail "k: -Qi on a 20-column terminal must return rc 0, got $rc (a hang here is the wrap loop):" "$fixture/k/out"
+        grep -q 'Name' "$fixture/k/out" \
+            || fail "k: the narrow-terminal -Qi rendered nothing:" "$fixture/k/out"
+        # No line may exceed the terminal: the wrap budget is the width.
+        # Engine notes are their own stream (and are not wrapped); the -Qi
+        # body must stay inside the terminal.
+        tr -d '\r' <"$fixture/k/out" | grep -v '^gsa:' >"$fixture/k/body"
+        if awk 'length($0) > 21 { wide = 1 } END { exit !wide }' "$fixture/k/body"; then
+            fail "k: a -Qi line ran past the 20-column terminal:" "$fixture/k/body"
+        fi
+    )
+fi
+
 printf 'gsa-query: PASS\n'
