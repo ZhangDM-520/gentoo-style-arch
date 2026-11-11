@@ -196,25 +196,32 @@ before this automatic clean; an unreachable ref still refuses before the
 archive and its baseline are removed.
 
 After that check, `--skip` (long-only — the short `-s` is dropped; `s` is
-pacman's search idiom) keeps the archive-mtime versus
-`PKGBUILD`-mtime predicate. For non-VCS recipes, that remains the full
-freshness check. For a VCS recipe, it is only the first gate: the engine
-compares the actual source revisions recorded for that archive after a
-successful build with the current remote revision of each VCS source's
-declared ref (`git`, `svn`, `hg`, or `bzr`). Every declared ref must still
-match before the archive can be skipped. A moved ref makes the archive stale
-and the package follows the ordinary build path. Resolve the declared ref, not
-an unrelated repository `HEAD` or the mutable shared source checkout.
+pacman's search idiom) gates the recipe on CONTENT, not mtime (2026-11-11):
+makepkg records the PKGBUILD hash it built from in the archive's `.BUILDINFO`
+(`pkgbuild_sha256sum`), and `--skip` compares that record with the current
+PKGBUILD's sha256. A differing hash rebuilds with `recipe-changed` even when
+the PKGBUILD's mtime is older (`git checkout` and copies preserve mtimes); a
+matching hash skips even when the mtime is newer (an automated `touch` is not
+a content change). An archive with NO record — built by an older makepkg, or
+imported — falls back to the archive-mtime versus `PKGBUILD`-mtime predicate
+(`recipe-newer`), the only case that compare still governs. For a VCS recipe
+the recipe gate is only the first gate: the engine compares the actual source
+revisions recorded for that archive after a successful build with the current
+remote revision of each VCS source's declared ref (`git`, `svn`, `hg`, or
+`bzr`). Every declared ref must still match before the archive can be skipped.
+A moved ref makes the archive stale and the package follows the ordinary build
+path. Resolve the declared ref, not an unrelated repository `HEAD` or the
+mutable shared source checkout.
 
-"Already built" means more than an mtime match (2026-10-05): the archive must
-be part of the *complete* output set its recipe declares (every split output
-present at the evaluated `pkgver-pkgrel`), every member must pass a payload
-readability probe (`pacman -Qp`), and a VCS archive must match the sha256+size
-identity its revision baseline was recorded with. A missing sibling output, a
-truncated write, a pkgver change, a replaced archive, or an old-format
-baseline each forces a rebuild with a named diagnostic; anomaly diagnostics
-print even in quiet output. A partial output set never reaches install
-discovery at all.
+"Already built" means more than a matching recipe hash (2026-10-05): the
+archive must be part of the *complete* output set its recipe declares (every
+split output present at the evaluated `pkgver-pkgrel`), every member must pass
+a payload readability probe (`pacman -Qp`), and a VCS archive must match the
+sha256+size identity its revision baseline was recorded with. A missing
+sibling output, a truncated write, a pkgver change, a replaced archive, or an
+old-format baseline each forces a rebuild with a named diagnostic; anomaly
+diagnostics print even in quiet output. A partial output set never reaches
+install discovery at all.
 
 Two flags reshape the skip decision (2026-10-06, `docs/JOURNAL.md`):
 

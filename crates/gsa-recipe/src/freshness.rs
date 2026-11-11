@@ -477,6 +477,23 @@ pub fn decide(ctx: &FreshnessContext) -> Verdict {
     // the set is evidence; one changed member invalidates the set.
     match ctx.skip_mode {
         SkipMode::Skip => {
+            // Content truth first: the archive's recorded PKGBUILD hash
+            // differs (or the file is unreadable). The mtime list carries
+            // only archives that could not record a hash.
+            let changed: Vec<String> = ctx
+                .recipe_changed_since
+                .iter()
+                .map(|p| short_name(p))
+                .collect();
+            if !changed.is_empty() {
+                return build(
+                    build_reason::RECIPE_CHANGED,
+                    format!(
+                        "PKGBUILD changed since the build of {} — rebuilding",
+                        changed.join(" ")
+                    ),
+                );
+            }
             let stale: Vec<String> = ctx
                 .pkgbuild_newer_than
                 .iter()
@@ -485,7 +502,10 @@ pub fn decide(ctx: &FreshnessContext) -> Verdict {
             if !stale.is_empty() {
                 return build(
                     build_reason::RECIPE_NEWER,
-                    format!("PKGBUILD is newer than {} — rebuilding", stale.join(" ")),
+                    format!(
+                        "PKGBUILD is newer than {} (no recorded hash) — rebuilding",
+                        stale.join(" ")
+                    ),
                 );
             }
         }
@@ -888,6 +908,24 @@ pub fn fingerprint_archive(archive: &Path) -> Result<ArchiveFingerprint, Freshne
         sha256: hex_sha256_of(hasher),
         size,
     })
+}
+
+/// The PKGBUILD's current content hash — the `--skip` recipe gate's truth.
+/// A content-identical rewrite is NOT a change (mtime over-reports it), and a
+/// restored file with an older mtime IS one (mtime under-reports it). `None`
+/// = the PKGBUILD is unreadable, which is never evidence for a claim.
+pub fn pkgbuild_content_hash(recipe_dir: &Path) -> Option<String> {
+    let mut file = fs::File::open(recipe_dir.join("PKGBUILD")).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hex_sha256_of(hasher))
 }
 
 fn hex_sha256_of(hasher: Sha256) -> String {

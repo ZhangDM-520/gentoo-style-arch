@@ -487,10 +487,26 @@ pub fn skip_decision(
             .insert(archive.clone(), freshness::archive_payload_ok(archive));
     }
     if mode == SkipMode::Skip {
-        // The mtime gate: `test PKGBUILD -nt archive` (nanosecond mtimes).
-        match std::fs::metadata(recipe_dir.join("PKGBUILD")).and_then(|m| m.modified()) {
-            Ok(recipe_time) => {
-                for archive in &discovery.archives {
+        // The recipe gate is CONTENT first (blind review 2026-11-11, F): the
+        // archive records the PKGBUILD hash it was built from (`.BUILDINFO`
+        // `pkgbuild_sha256sum`), so a restored or copied recipe with an older
+        // mtime no longer skips a genuine change, and a content-identical
+        // rewrite no longer forces a rebuild. Only an archive with no record
+        // (older makepkg, a foreign archive) falls back to the mtime compare
+        // `test PKGBUILD -nt archive` (nanosecond mtimes).
+        let current_hash = freshness::pkgbuild_content_hash(recipe_dir);
+        let recipe_time = std::fs::metadata(recipe_dir.join("PKGBUILD"))
+            .and_then(|m| m.modified());
+        for archive in &discovery.archives {
+            let recorded = gsa_recipe::pkginfo::buildinfo_field(archive, "pkgbuild_sha256sum");
+            if let (Some(current), Some(built)) = (current_hash.as_deref(), recorded.as_deref()) {
+                if current != built {
+                    ctx.recipe_changed_since.push(archive.clone());
+                }
+                continue;
+            }
+            match recipe_time {
+                Ok(recipe_time) => {
                     if let Ok(archive_time) = std::fs::metadata(archive).and_then(|m| m.modified())
                     {
                         if recipe_time > archive_time {
@@ -498,11 +514,8 @@ pub fn skip_decision(
                         }
                     }
                 }
-            }
-            Err(_) => {
                 // An unreadable PKGBUILD is not evidence for a claim.
-                ctx.pkgbuild_newer_than
-                    .extend(discovery.archives.iter().cloned());
+                Err(_) => ctx.pkgbuild_newer_than.push(archive.clone()),
             }
         }
     } else {

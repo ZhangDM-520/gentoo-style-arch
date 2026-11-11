@@ -213,6 +213,36 @@ pub fn read_pkginfo(archive: &Path) -> Result<Pkginfo, PkginfoError> {
     Err(PkginfoError::Missing)
 }
 
+/// One `.BUILDINFO` value by key (makepkg writes `key = value` lines there,
+/// top-level). `None` = no `.BUILDINFO`, no such key, or an unreadable
+/// archive — the caller treats absence as "no record", never as a match.
+pub fn buildinfo_field(archive: &Path, key: &str) -> Option<String> {
+    let mut tar = open_archive(archive).ok()?;
+    let entries = tar.entries().ok()?;
+    for entry in entries.flatten() {
+        let mut entry = entry;
+        let name = entry.path().ok()?.to_string_lossy().into_owned();
+        if name != ".BUILDINFO" && name != "./.BUILDINFO" {
+            continue;
+        }
+        let mut body = String::new();
+        entry.read_to_string(&mut body).ok()?;
+        for line in body.lines() {
+            let Some((field, value)) = line.split_once('=') else {
+                continue;
+            };
+            if field.trim() == key {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+        return None;
+    }
+    None
+}
+
 /// Every member name of one archive, in archive order (streamed; the names
 /// alone are kept). `Err` = the archive could not be read.
 pub fn member_names(archive: &Path) -> Result<Vec<String>, String> {
@@ -437,6 +467,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn buildinfo_field_reads_makepkgs_recorded_pkgbuild_hash() {
+        let dir = scratch("buildinfo");
+        let archive = dir.join("p1-1.0-1-any.pkg.tar.zst");
+        write_archive(
+            &archive,
+            &[
+                (".PKGINFO", b"pkgname = p1\n"),
+                (
+                    ".BUILDINFO",
+                    b"format = 2\nbuilddate = 1\npkgbuild_sha256sum = abc123\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            buildinfo_field(&archive, "pkgbuild_sha256sum").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(buildinfo_field(&archive, "builddate").as_deref(), Some("1"));
+        // An absent key and an archive without the member are both `None`,
+        // never an empty match.
+        assert_eq!(buildinfo_field(&archive, "not_a_field"), None);
+        let bare = dir.join("p2-1.0-1-any.pkg.tar.zst");
+        write_archive(&bare, &[(".PKGINFO", b"pkgname = p2\n")]);
+        assert_eq!(buildinfo_field(&bare, "pkgbuild_sha256sum"), None);
     }
 
     fn write_archive(path: &Path, entries: &[(&str, &[u8])]) {

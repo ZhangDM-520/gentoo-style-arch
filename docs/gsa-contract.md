@@ -297,7 +297,7 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | --- | --- |
 | `--dry-run` | render the plan without building, installing, fetching, or mutating anything (today `-n`); an install run (`-U`, `-S`) also renders its §E decision rows, while a build plan carries plan rows only — the archives do not exist yet, so there is no install decision to compute |
 | `--leaf` | leaf-only selection: build exactly the named recipes, no consumer expansion (today `--no-deps`) |
-| `--skip` | skip-if-fresh resume (today `-s`): skip a package whose archive set is fresh against its recorded VCS baselines; the `freshness-waived` and `abi-provider-waived` waiver reasons and the `upstream-unverified` deferral are kept verbatim (`docs/build-guide.md` "Skip and resume") |
+| `--skip` | skip-if-fresh resume (today `-s`): skip a package whose archive set is fresh against its recorded VCS baselines; the recipe gate is CONTENT based (the archive's `.BUILDINFO` `pkgbuild_sha256sum` vs the current PKGBUILD's hash, mtime only as the no-record fallback — amendment 2026-11-11 below); the `freshness-waived` and `abi-provider-waived` waiver reasons and the `upstream-unverified` deferral are kept verbatim (`docs/build-guide.md` "Skip and resume") |
 | `--skip-built` | skip anything already built: newest complete, payload-valid output set at any version; no upstream probes, no waivers; a recipe commit newer than the set rebuilds (kept verbatim) |
 | `--vcs-skip-tolerance N` | the `--skip` waive threshold (positive integers only; overrides `GSA_VCS_SKIP_TOLERANCE`) |
 | `--no-sync` | build the committed version and sums as-is: no provider query, no anchoring, no rewrite (kept) |
@@ -357,6 +357,22 @@ integration test): one environment read
 default, `~`/`~/…` expanded against the build user's home — an engine-only
 checkout has no recipe tree, so those checks SKIP loudly (rc 0) rather than
 fail.
+
+*Amendment (2026-11-11, the `--skip` recipe gate is CONTENT based).* The
+`--skip` row no longer keys "the recipe did not change" to an mtime compare.
+The archive records the PKGBUILD hash makepkg built from (`.BUILDINFO`'s
+`pkgbuild_sha256sum`, read through `gsa_recipe::pkginfo::buildinfo_field`),
+and that record is the gate: a differing hash rebuilds with the named
+`recipe-changed` diagnostic regardless of mtimes (a restored or copied recipe
+carries an old mtime while its content moved), and a matching hash skips even
+when the PKGBUILD's mtime is newer (a checkout or automated `touch` is not a
+content change). An archive WITHOUT the record — older makepkg, an imported
+archive — falls back to the mtime predicate (`PKGBUILD` newer than the
+archive ⇒ `recipe-newer`), the only case the old gate still covers. Both
+diagnostics are log detail, not row reasons (§H.3 keeps the row reason `ok`
+for a build). The VCS baseline gate is unchanged and follows the recipe gate.
+Pinned by `tests/skip-content-hash.sh`; the crate seam is
+`freshness.rs::decide()` plus `freshness::pkgbuild_content_hash`.
 
 *Amendments (2026-10-14, cutover gaps G6/G11 + G4).* Three operational
 points this section was silent on, resolved as the code behaves:

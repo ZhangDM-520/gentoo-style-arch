@@ -241,6 +241,23 @@ fn skip_mode_pkgbuild_newer_than_archive_forces_build() {
 }
 
 #[test]
+fn skip_mode_pkgbuild_content_change_forces_build() {
+    // Content truth: the archive's recorded PKGBUILD hash differs (a restored
+    // or copied recipe with an older mtime lands here, not in the mtime
+    // list). blind review 2026-11-11, F.
+    let archives = vec![PathBuf::from("/w/p1-1.0-1-x86_64.pkg.tar.zst")];
+    let mut ctx = skip_ok_ctx(&archives);
+    ctx.recipe_changed_since.push(archives[0].clone());
+    let verdict = decide(&ctx);
+    assert_eq!(verdict.reason_key(), build_reason::RECIPE_CHANGED);
+    assert!(
+        verdict_reason(&verdict).contains("changed since the build of"),
+        "the content gate must name the archive: {}",
+        verdict_reason(&verdict)
+    );
+}
+
+#[test]
 fn skip_mode_partial_split_set_names_missing_output() {
     let archives = vec![PathBuf::from("/w/p1-1.0-1-x86_64.pkg.tar.zst")];
     let mut ctx = skip_ok_ctx(&archives);
