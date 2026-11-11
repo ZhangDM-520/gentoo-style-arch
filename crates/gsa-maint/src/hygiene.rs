@@ -216,7 +216,15 @@ fn stale_class(name: &str) -> Option<&'static str> {
 /// a write-time gate, not a doctor repair.
 pub fn ownership_rows(state: &Path) -> Vec<Row> {
     let mut rows = Vec::new();
-    let uid = gsa_sched::signals::current_uid();
+    // The expected owner is the STATE ROOT's own owner, never the invoking
+    // user: the root is root-owned by design (§J, rule 19), so comparing
+    // against the caller turned every correct file into a finding for an
+    // unprivileged `-Md` (2026-11-11). An absent root has no expectation.
+    use std::os::unix::fs::MetadataExt;
+    let uid = match std::fs::metadata(state) {
+        Ok(meta) => meta.uid(),
+        Err(_) => return rows,
+    };
     let mut stack = vec![state.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -227,7 +235,6 @@ pub fn ownership_rows(state: &Path) -> Vec<Row> {
             let Ok(meta) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            use std::os::unix::fs::MetadataExt;
             if meta.uid() != uid {
                 rows.push(Row::new(
                     path.display().to_string(),

@@ -321,6 +321,15 @@ if want b; then
         [ "$FIXTURE_RC" = 0 ] || fail "-Md reports and exits 0 (§E.4), got $FIXTURE_RC: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "$gone orphan-row archive-gone docb instance=1" "orphan index row"
         has_row "$FIXTURE_OUTPUT" "$ghost orphan-archive no-index-row doca" "orphan archive"
+        # The state root is root-owned BY DESIGN (§J, rule 19): an
+        # unprivileged doctor over it must report no ownership finding —
+        # `want` is the state root's own owner, never the invoking user
+        # (2026-11-11 blind-review finding: 25 `wrong-owner uid=0 want=1000`
+        # rows on a fresh root, and `--fix` could never clear them).
+        run_engine_user "$ws" -Md --state-dir "$state"
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "b: -Md as a plain user is rc 0 (report-only), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        absent_row "$FIXTURE_OUTPUT" "wrong-owner" "a root-owned state root is correct state"
         # The summary count is the row stream's own (derived, not pinned).
         summary=$(printf '%s\n' "$FIXTURE_OUTPUT" | awk '$1 == "doctor" && $2 == "report" { print; exit }')
         [ -n "$summary" ] || fail "-Md must lead with a doctor report row: $FIXTURE_OUTPUT"
