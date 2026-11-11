@@ -212,7 +212,13 @@ pub fn txn_outcome_rows(rows: &[DecisionRow], txn: &TxnOutcome, dur: i64) -> Vec
                     status: RowStatus::Succeeded,
                     rc: Some(0),
                     dur: None,
-                    reason: format!("skipped-current {}", row.reason),
+                    // The class is part of the key (§H.3), so an empty
+                    // decision reason must not leave a trailing space the
+                    // strict record parser has to special-case.
+                    reason: format!(
+                        "skipped-current {}",
+                        nonempty_reason(&row.reason, "already-current")
+                    ),
                 },
                 Decision::Noop => OutcomeRow {
                     pkg,
@@ -2135,6 +2141,13 @@ mod tests {
         let outcomes = txn_outcome_rows(&rows, &TxnOutcome::Ok, 0);
         assert_eq!(outcomes[0].reason, "skipped-current already-current 1-1");
         assert_eq!(outcomes[0].status, RowStatus::Succeeded);
+
+        // A decision row without evidence still names a class: the reason is
+        // `<key> <evidence>` with no empty tail, so the strict record reader
+        // never meets a trailing space (external review, 2026-11-12).
+        let bare = vec![row("p", Decision::Skip, "")];
+        let outcomes = txn_outcome_rows(&bare, &TxnOutcome::Ok, 0);
+        assert_eq!(outcomes[0].reason, "skipped-current already-current");
     }
 
     #[test]

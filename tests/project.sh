@@ -1151,6 +1151,21 @@ EOF
     done
     grep -F 'gsa: note: added build-order prerequisite lib (not installed)' <<<"$FIXTURE_OUTPUT" >/dev/null ||
         fail "d: the run did not announce the addition: $FIXTURE_OUTPUT"
+    # e. the FETCH run reads the same selection rule: `-Sw` is the verb that
+    # runs before a disconnect, so a prerequisite whose sources are never
+    # fetched is the same failure one step later.
+    rm -rf "$db"
+    run_engine "$ws" -Sw --dry-run app
+    [ "$FIXTURE_RC" = 0 ] || fail "e: the fetch plan failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = 'lib app' ] ||
+        fail "e: the fetch plan order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want [lib app]"
+    grep -F 'gsa: note: added build-order prerequisite lib (not installed)' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "e: the fetch plan did not announce the addition: $FIXTURE_OUTPUT"
+    run_engine "$ws" -Sw --dry-run --leaf app
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = app ] ||
+        fail "e: a leaf fetch must fetch exactly the named recipes: $(rr2_scalar order <<<"$FIXTURE_OUTPUT")"
+
+
 
     printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact)\n'
 )

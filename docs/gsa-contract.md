@@ -274,8 +274,11 @@ cluster's strength: `-Mcc` deletes archives exactly as `-Mccc` deletes
 sources, so both stop without `--noconfirm`, while a plan that removes
 nothing applies silently (a healthy `-Mm` used to fail on exactly the trees a
 script runs it on). On a terminal the gate asks ONE `y`/`N` question on the
-error stream (`prompt::interactive` — stdin and stderr both terminals, no
-`CI`, not `--machine`; anything but `y`/`yes` is NO, including EOF). A
+error stream (`prompt::interactive_consent` — stdin, stderr AND stdout
+terminals, no `CI`, not `--machine`; anything but `y`/`yes` is NO, including
+EOF). The plan is what is being consented to, so a CAPTURED plan is not a
+consentable one: `gsa -Mcc | tee log` refuses at rc 3 with the paste-safe
+command instead of blocking on a question whose subject went into a file. A
 non-interactive caller is never prompted and gets the refusal plus the
 paste-safe replay (`gsa -Mcc --noconfirm …`). Pinned by
 `tests/gsa-maint-v2.sh` §h (PTY consent and decline) and §e (mirrors).
@@ -778,7 +781,12 @@ split recipe with one installed output is left alone for the same reason — and
 (`gsa: note: added build-order prerequisite <id> (not installed)`), joins the
 plan in topological position (§C.5), and appears in the dry run, which reads
 the same installed DB as the run. An unreadable installed DB refuses (rule
-71). Pinned by `tests/project.sh` §10.
+71). The expansion is ONE seam applied by every verb whose selection becomes
+work — the build run, its `--dry-run` plan, and `-Sw` (fetch is the "before
+you disconnect" verb: fetching only the named targets leaves the build to
+discover a missing source with no network). `-Sl` is a LISTING and keeps
+showing the selection as given; the record and the fetch plan show the
+additions. Pinned by `tests/project.sh` §10 (plan, run, `--leaf`, `-Sw`).
 
 *Amendment (2026-11-01, direction rule).* The ABI rebuild wave (`gsa-abi`'s
 coupled batches and `:=` subscription terms) obeys the same direction rule:
@@ -1187,7 +1195,11 @@ row: `empty-list` belongs to a genuinely empty candidate plan.
 Continuation lines: `command:` (the restated invocation — `sudo gsa …` when
 the run needed root, because §B.10's `-S`/`-B`/`-Sw`/`-Sy`/`-Su`/`-Syu`/`-U`
 refuse to run as a plain user, and OMITTED when `remaining:` is empty: a
-selection-less continuation cannot be pasted, §B.1), `remaining:` (space-
+selection-less continuation cannot be pasted, §B.1; a STANDALONE run restates
+the operator's own paths, never the staged ids a replay cannot resolve, and a
+run that carried RANGES restates them after its targets — a range indexes the
+listing, so replaying it against a narrowed `remaining:` would select a
+different package), `remaining:` (space-
 separated package IDs — every row not `succeeded`, in row order: failed,
 parked, deferred, never-started, interrupted — a failed package must rebuild
 before its consumers; the `-` placeholder subject of an empty-list plan is

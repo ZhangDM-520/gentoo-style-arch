@@ -700,7 +700,10 @@ EXTEND the shipped flags from `gsa.conf` (e.g.
 `extra_cflags = -fstack-clash-protection`): they emit `CFLAGS+=`,
 `CXXFLAGS+=` and `LDFLAGS+=`, so a site body's base survives, and the
 appended text is part of the toolchain identity — editing it forces the
-one-time clean (rule 6). `/etc/makepkg.conf`,
+one-time clean (rule 6). Each append carries a LEADING SPACE: a bare
+`VAR+='-fstack'` concatenates onto the previous value (`-O3-fstack`) and the
+same form is written into the composite, so a site body with no trailing
+whitespace cannot corrupt the last flag. `/etc/makepkg.conf`,
 `/etc/makepkg.conf.d/*.conf` and `~/.makepkg.conf` are never read. A recipe
 that needs a package-specific flag appends it (`CFLAGS+=" …"`) as before; the
 base values come from the engine.

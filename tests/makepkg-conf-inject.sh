@@ -260,8 +260,10 @@ appended=$(grep -n '^# caller flags from gsa.conf' "$composite" | sed -n '1p' | 
 site=$(grep -n "source '$conf_dir/gcc-makepkg.conf'" "$composite" | sed -n '1p' | cut -d: -f1)
 [ -n "$appended" ] || fail 'I: the composite carries no caller-flag block' "$composite"
 [ "$site" -lt "$appended" ] || fail 'I: the caller flags must follow the site body' "$composite"
-for line in "CFLAGS+='-fstack-clash-protection'" \
-    "CXXFLAGS+='-fstack-clash-protection'" "LDFLAGS+='-Wl,--build-id=sha1'"; do
+# The leading space inside the quoted value is load-bearing: without it the
+# `+=` concatenates onto the previous flag with no delimiter.
+for line in "CFLAGS+=' -fstack-clash-protection'" \
+    "CXXFLAGS+=' -fstack-clash-protection'" "LDFLAGS+=' -Wl,--build-id=sha1'"; do
     grep -Fq "$line" "$composite" || fail "I: the composite lost '$line'" "$composite"
 done
 # `+=` composes: sourcing yields the site/base flags PLUS the caller's.
@@ -276,6 +278,18 @@ vgrep "$sourced" -Fq -- '-fstack-clash-protection' ||
     fail 'I: the caller CFLAGS never reached the composite:'$'\n'"$sourced"
 vgrep "$sourced" -Fq -- '-Wl,--build-id=sha1' ||
     fail 'I: the caller LDFLAGS never reached the composite:'$'\n'"$sourced"
+# ...and every caller flag arrives as its OWN whitespace-separated word. Bash
+# `VAR+='x'` concatenates with no delimiter, so a missing separator produces
+# one corrupt token (`-O3-fstack-clash-protection`) that a compiler rejects
+# outright — a substring match cannot see that, an exact-word match can.
+cflags_line=$(sed -n '1p' <<<"$sourced")
+ldflags_line=$(sed -n '2p' <<<"$sourced")
+for word in -O3 -fstack-clash-protection; do
+    grep -Fxq -- "$word" < <(printf '%s\n' "$cflags_line" | tr ' ' '\n') ||
+        fail "I: '$word' is not a standalone CFLAGS token: $cflags_line"
+done
+grep -Fxq -- '-Wl,--build-id=sha1' < <(printf '%s\n' "$ldflags_line" | tr ' ' '\n') ||
+    fail "I: the caller LDFLAGS token is glued to the shipped linker flags: $ldflags_line"
 run_engine "$ws" --build-identity gcc
 [ "$FIXTURE_RC" -eq 0 ] || fail 'I: --build-identity failed after the flags:'$'\n'"$FIXTURE_OUTPUT"
 [ "$FIXTURE_OUTPUT" != "$identity_before" ] ||

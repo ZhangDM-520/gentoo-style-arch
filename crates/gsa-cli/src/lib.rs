@@ -1228,7 +1228,11 @@ mod tests {
         let scratch = std::env::temp_dir().join(format!("gsa-cli-qbin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).unwrap();
-        let (code, out, err) = run_capture(&["-Qb", "--state-dir", scratch.to_str().unwrap()]);
+        // `--machine` pins the row-only channel: the human rendering states
+        // an empty verdict (§B.3's zero-row amendment), and a test that ran
+        // on a terminal used to see that sentence and call it a row.
+        let (code, out, err) =
+            run_capture(&["-Qb", "--machine", "--state-dir", scratch.to_str().unwrap()]);
         assert_eq!(code, 0, "{err}");
         assert!(out.is_empty(), "an empty index prints no rows: {out}");
     }

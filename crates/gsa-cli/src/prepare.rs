@@ -438,6 +438,60 @@ pub fn drift_clean(recipe_dir: &Path, log: &mut Vec<String>) {
     }
 }
 
+/// Apply the missing build-order prerequisite expansion to a selection and
+/// announce it (contract §C.3, owner decision 2026-11-11). ONE seam for the
+/// three verbs that must agree on what a selection means: the build run, its
+/// dry-run plan, and the fetch run (`-Sw`, which must fetch the sources the
+/// build will need). `Err` carries the unreadable installed-DB message; the
+/// caller picks the refusal class its surface owes.
+pub fn apply_missing_prerequisites(
+    selection: &mut Selection,
+    graph: &Graph<'_>,
+    db: &RecipeDb,
+    inv: &Invocation,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let candidates = prerequisite_candidates(graph, selection, inv.leaf);
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let conf = inv.config.as_deref().map(Path::new);
+    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
+    let installed = gsa_install::LocalDb::load(&db_root)?;
+    let additions = missing_prerequisites(graph, &candidates, db, &installed);
+    for id in &additions {
+        let _ = writeln!(
+            err,
+            "gsa: note: added build-order prerequisite {id} (not installed)"
+        );
+    }
+    merge_prerequisites(selection, &additions, graph);
+    Ok(())
+}
+
+/// Merge prerequisite additions into the selection in BUILD ORDER: plan,
+/// record and dispatch carry the one topological order (§C.3), so an added
+/// prerequisite precedes its consumer instead of trailing the plan. Anchors
+/// are renumbered consecutively — they render the plan's row indices, and a
+/// range was already resolved against the listing before this point.
+fn merge_prerequisites(selection: &mut Selection, additions: &[String], graph: &Graph<'_>) {
+    if additions.is_empty() {
+        return;
+    }
+    for id in additions {
+        selection.listed.push((
+            0,
+            RecipeId::new(id).expect("additions come from the topology"),
+        ));
+    }
+    selection
+        .listed
+        .sort_by_key(|(_, id)| graph.index_of(id.as_str()).map(|idx| graph.position(idx)));
+    for (n, (anchor, _)) in selection.listed.iter_mut().enumerate() {
+        *anchor = n + 1;
+    }
+}
+
 /// The `--skip` / `--skip-built` claim decision for one recipe (the pure
 /// port of fish `freshness_skip_decision`, minus the sync interleaving the
 /// pass owns). `skip_allowed` is the pass's "nothing to do" answer.

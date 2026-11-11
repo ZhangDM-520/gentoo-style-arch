@@ -37,6 +37,16 @@ pub fn interactive(machine: bool) -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
+/// The DESTRUCTION gate's interactivity (contract §B.7): the plan is the very
+/// thing being consented to, so a captured stdout makes the caller
+/// non-interactive — `gsa -Mcc | tee log` must stop with the paste-safe
+/// command instead of asking a question whose subject is already in a file
+/// (external review, 2026-11-12). Every other prompt keeps `interactive`:
+/// their question and its subject share the same stream.
+pub fn interactive_consent(machine: bool) -> bool {
+    interactive(machine) && std::io::stdout().is_terminal()
+}
+
 fn ci_requested() -> bool {
     match std::env::var("CI") {
         Ok(value) => {

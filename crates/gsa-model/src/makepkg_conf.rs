@@ -331,6 +331,13 @@ export RUSTFLAGS NINJAFLAGS
     // The caller's appended flags go LAST, after every site body and the
     // engine-owned block: the tail is the operator's, and `+=` composes with
     // whatever the body above assigned (contract §B.11).
+    //
+    // The appended text carries a LEADING SPACE and the value's own trailing
+    // whitespace is trimmed: `VAR+='-fstack'` concatenates onto the previous
+    // value with no delimiter, so `CFLAGS="-O3"` became `-O3-fstack` and every
+    // compile failed on an unrecognized option (external review, HIGH). The
+    // space is inside the quoted text so a value that already starts with
+    // whitespace is still separated exactly once.
     let mut appended = false;
     let mut push_flag = |name: &str, value: &Option<String>| {
         if let Some(value) = value.as_deref().filter(|v| !v.trim().is_empty()) {
@@ -340,7 +347,10 @@ export RUSTFLAGS NINJAFLAGS
                 );
                 appended = true;
             }
-            body.push_str(&format!("{name}+='{}'\n", shell_single_quote(value.trim())));
+            body.push_str(&format!(
+                "{name}+=' {}'\n",
+                shell_single_quote(value.trim())
+            ));
         }
     };
     push_flag("CFLAGS", &flags.cflags);
@@ -430,13 +440,16 @@ mod render_tests {
             .expect("the appended block names its source");
         let owned = body.find("export RUSTFLAGS NINJAFLAGS").unwrap();
         assert!(owned < tail, "the caller tail must be last: {body}");
-        // `+=` composes with the body above; it never replaces it.
-        assert!(body.contains("CFLAGS+='-fstack-clash-protection -pipe'"));
+        // `+=` composes with the body above; it never replaces it. The
+        // LEADING SPACE is part of the lever: without it the value glues onto
+        // the body's last flag (`-O3-fstack-clash-protection`) and every
+        // compile fails on an unrecognized option.
+        assert!(body.contains("CFLAGS+=' -fstack-clash-protection -pipe'"));
         assert!(
-            body.contains("CXXFLAGS+='-fstack-clash-protection -pipe'"),
+            body.contains("CXXFLAGS+=' -fstack-clash-protection -pipe'"),
             "a site body expands CXXFLAGS from CFLAGS at its own assignment"
         );
-        assert!(body.contains("LDFLAGS+='-Wl,--build-id=sha1'"));
+        assert!(body.contains("LDFLAGS+=' -Wl,--build-id=sha1'"));
         assert!(
             !body.contains("CFLAGS=\"-fstack"),
             "a replacement, not a lever"
@@ -447,7 +460,7 @@ mod render_tests {
             ldflags: None,
         };
         let body = render_with(Toolchain::Gcc, &[], &flags);
-        assert!(body.contains(r#"CFLAGS+='-DVALUE='\''x'\'''"#), "{body}");
+        assert!(body.contains(r#"CFLAGS+=' -DVALUE='\''x'\'''"#), "{body}");
         assert!(!body.contains("LDFLAGS+="));
     }
 

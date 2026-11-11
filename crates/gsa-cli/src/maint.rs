@@ -700,7 +700,7 @@ fn consent_to_destroy(
     // The plan IS the thing being consented to.
     let _ = write!(out, "{}", render_rows(plan));
     let command = paste_command(inv);
-    if crate::prompt::interactive(inv.machine_requested()) {
+    if crate::prompt::interactive_consent(inv.machine_requested()) {
         let mut input = std::io::stdin().lock();
         let question = format!("{what}: {count} item(s) would be removed or rewritten — proceed?");
         match crate::prompt::confirm(err, &mut input, &question) {

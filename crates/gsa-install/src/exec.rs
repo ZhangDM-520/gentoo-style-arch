@@ -350,10 +350,18 @@ mod tests {
             Ok(_) => panic!("the lock file cannot be created below a regular file"),
         }
         // The production entry maps it to the named failure class, never the
-        // 600 s-timeout row.
+        // 600 s-timeout row. A SYNTHETIC configuration, not `None`: with no
+        // `--config` the preflight reads the HOST database's `db.lck`, so a
+        // package manager running on this machine decided this unit test's
+        // outcome (the assertion below then reported a stale lock instead of
+        // the mutex it is about).
+        let conf = dir.join("pacman.conf");
+        // `pacman-conf` resolves DBPath, so the directory must exist.
+        std::fs::create_dir_all(dir.join("db")).unwrap();
+        std::fs::write(&conf, format!("[options]\nDBPath = {}/db\n", dir.display())).unwrap();
         let req = TxnRequest {
             state_dir: dir.clone(),
-            conf: None,
+            conf: Some(conf),
             archives: Vec::new(),
             pacman_args: Vec::new(),
             repairs: Vec::new(),

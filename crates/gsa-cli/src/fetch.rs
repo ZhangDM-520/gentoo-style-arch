@@ -18,7 +18,7 @@ use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
-use crate::exit::{self, Exit};
+use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::select::{self, Ctx};
 use crate::{record, render};
 
@@ -53,10 +53,23 @@ fn run_fetch_only_inner(
         db: &db,
         user_sets: select::load_user_sets(inv),
     };
-    let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+    let mut selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
         .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
-
+    // ── missing build-order prerequisites (contract §C.3) ────────────────
+    // Fetch is the "before you disconnect" verb: a build run expands to the
+    // prerequisites the system lacks and then needs THEIR sources, so fetching
+    // only the named targets left the run to discover a missing source later
+    // with no network (external review, 2026-11-12). The same seam decides and
+    // the same note announces it; `--leaf` stays exact.
+    if let Err(message) =
+        crate::prepare::apply_missing_prerequisites(&mut selection, &graph, &db, inv, err)
+    {
+        // An unreadable installed DB cannot answer "what is missing", and
+        // guessing would fetch a set the build will not reproduce.
+        let _ = writeln!(err, "gsa: {message}");
+        return Err(Exit::Refuse(Refusal::silent(RefusalClass::StartupRefused)));
+    }
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),

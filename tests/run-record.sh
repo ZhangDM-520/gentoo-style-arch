@@ -609,6 +609,25 @@ EOF
         fail "a plan must name the family it would use: $(rr2_scalar toolchain <"$fixture/s7.out")" "$fixture/s7.out"
     [ "$(rr2_scalar toolchain-identity <"$fixture/s7.out")" = - ] ||
         fail "a plan probes no compiler (identity must be -): $(rr2_scalar toolchain-identity <"$fixture/s7.out")" "$fixture/s7.out"
+    # "Probes no compiler" is a claim about PROCESSES, not just the value:
+    # a `gcc` that fails loudly must never be reached by a plan.
+    if [ -f "$ws/bin/gcc" ]; then
+        fail "the workspace already carries a gcc stub; pick another name"
+    fi
+    cat >"$ws/bin/gcc" <<'EOF'
+#!/usr/bin/env bash
+printf 'invoked\n' >>"${GSA_FAKE_GCC_LOG:?}"
+exit 3
+EOF
+    chmod +x "$ws/bin/gcc"
+    export GSA_FAKE_GCC_LOG="$fixture/s7-gcc.log"
+    : >"$GSA_FAKE_GCC_LOG"
+    run_engine "$ws" -B --dry-run p1
+    [ "$FIXTURE_RC" = 0 ] || fail "the probe-free plan failed: $FIXTURE_OUTPUT"
+    [ ! -s "$GSA_FAKE_GCC_LOG" ] ||
+        fail "a dry run must not execute the compiler: $(cat "$GSA_FAKE_GCC_LOG")"
+    grep -Eq '^toolchain-identity: -$' <<<"$FIXTURE_OUTPUT" ||
+        fail "the probe-free plan lost its identity marker:"$'\n'"$FIXTURE_OUTPUT"
     [[ $(rr2_scalar started <"$fixture/s7.out") =~ ^[0-9]+$ ]] ||
         fail "a plan record still carries started: $(rr2_scalar started <"$fixture/s7.out")" "$fixture/s7.out"
     # The continuation carries the resolved budget: a resumed real run must

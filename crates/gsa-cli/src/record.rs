@@ -258,6 +258,47 @@ pub(crate) fn set_run_started_for_test(at: i64) {
     RUN_STARTED.store(at, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// The selection half of a restated invocation (contract §H.2): the subjects
+/// a replay must name, then the ranges the run carried.
+///
+/// ONE helper for every record builder. A per-builder copy is how a standalone
+/// run printed the staged id instead of the path the operator gave (a replay
+/// cannot resolve a workspace it never recreates), and how a range-restricted
+/// run reprinted a bare target that re-expanded into the consumers the range
+/// had excluded (external review, 2026-11-12).
+///
+/// A range indexes the LISTING, so it is replayed against the same selection:
+/// with ranges in play the command restates the run's own targets rather than
+/// the (possibly narrowed) `remaining:` rows, because re-indexing a shorter
+/// list would pick a different package.
+fn selection_argv(inv: &Invocation, subjects: &[RecipeId]) -> String {
+    let mut out = String::new();
+    if inv.standalone_tokens.is_empty() {
+        if inv.ranges.is_empty() {
+            for id in subjects {
+                out.push(' ');
+                out.push_str(id.as_str());
+            }
+        } else {
+            for target in &inv.targets {
+                out.push(' ');
+                out.push_str(&shell_quote(target));
+            }
+        }
+    } else {
+        // Standalone: the user's paths, never the ids staging invented.
+        for token in &inv.standalone_tokens {
+            out.push(' ');
+            out.push_str(&shell_quote(token));
+        }
+    }
+    for range in &inv.ranges {
+        out.push(' ');
+        out.push_str(&shell_quote(range));
+    }
+    out
+}
+
 /// The mirrored flags of a continuation's `command:` line (contract §H.2) —
 /// everything the run made real restated as explicit flags: the five
 /// §B.8 sync/freshness/toolchain modifiers (`--skip`, `--skip-built`,
@@ -432,21 +473,8 @@ pub fn build_plan_record(
         command.push_str(" --leaf");
     }
     command.push_str(&mirror_flags(inv, Some(budget)));
-    if inv.standalone_tokens.is_empty() {
-        for (_, id) in &selection.listed {
-            command.push(' ');
-            command.push_str(id.as_str());
-        }
-    } else {
-        // A standalone run staged the user's own paths under ids that name a
-        // workspace the next run never recreates: the continuation restates
-        // the PATHS it was given (shell-quoted), so it replays
-        // (blind-review finding, 2026-11-11).
-        for token in &inv.standalone_tokens {
-            command.push(' ');
-            command.push_str(&shell_quote(token));
-        }
-    }
+    let listed: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    command.push_str(&selection_argv(inv, &listed));
     command.push_str(&mirror_pacman_args(inv));
 
     RunRecord {
@@ -524,16 +552,14 @@ pub fn build_run_record(
         .filter(|row| row.status != RowStatus::Succeeded && row.pkg.as_str() != "-")
         .map(|row| row.pkg.clone())
         .collect();
-    for id in &remaining {
-        command.push(' ');
-        command.push_str(id.as_str());
-    }
+    command.push_str(&selection_argv(inv, &remaining));
     command.push_str(&mirror_pacman_args(inv));
     // A run with nothing left has NO replay: `remaining:` is empty and a
     // selection-less `gsa -S` is a usage error (§B.1), so the line is
     // omitted rather than emitting a command that cannot be pasted
-    // (owner decision 2026-11-11).
-    if remaining.is_empty() {
+    // (owner decision 2026-11-11). A standalone run's subjects are its
+    // paths, not rows, so it keeps its replay until every row succeeded.
+    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
         command.clear();
     }
 
@@ -598,11 +624,8 @@ pub fn build_fetch_record(
         .filter(|row| row.status != RowStatus::Succeeded)
         .map(|row| row.pkg.clone())
         .collect();
-    for id in &remaining {
-        command.push(' ');
-        command.push_str(id.as_str());
-    }
-    if remaining.is_empty() {
+    command.push_str(&selection_argv(inv, &remaining));
+    if remaining.is_empty() && inv.standalone_tokens.is_empty() {
         command.clear();
     }
 
@@ -789,19 +812,7 @@ pub fn build_txn_record(
         .filter(|row| row.status != RowStatus::Succeeded && row.pkg.as_str() != "-")
         .map(|row| row.pkg.clone())
         .collect();
-    if inv.standalone_tokens.is_empty() {
-        for id in &remaining {
-            command.push(' ');
-            command.push_str(id.as_str());
-        }
-    } else {
-        // Standalone: restate the user's paths, not the staged ids a replay
-        // cannot resolve (blind-review finding, 2026-11-11).
-        for token in &inv.standalone_tokens {
-            command.push(' ');
-            command.push_str(&shell_quote(token));
-        }
-    }
+    command.push_str(&selection_argv(inv, &remaining));
     command.push_str(&mirror_pacman_args(inv));
     if remaining.is_empty() && inv.standalone_tokens.is_empty() {
         command.clear();
@@ -1259,6 +1270,87 @@ mod tests {
             standalone_root: None,
             standalone_tokens: Vec::new(),
         }
+    }
+
+    /// A standalone run staged the operator's own paths under ids that name a
+    /// workspace the next run never recreates: a failed row must not turn that
+    /// into a continuation naming the staged id (a replay answers `unknown
+    /// reference`). The subjects are the PATHS, quoted as given.
+    #[test]
+    fn a_failed_standalone_run_continuation_names_the_paths_not_the_staged_ids() {
+        let mut inv = inv_for(Family::B);
+        inv.standalone_tokens = vec!["/w/recipe dir".to_string()];
+        let plan = vec![PlanRow {
+            pkg: RecipeId::new("gsa-standalone-1-2").unwrap(),
+            action: PlanAction::Build,
+            reason: "ok".to_string(),
+        }];
+        let outcomes = vec![OutcomeRow {
+            pkg: RecipeId::new("gsa-standalone-1-2").unwrap(),
+            status: RowStatus::Failed,
+            rc: Some(1),
+            dur: Some(3),
+            reason: "build-failed".to_string(),
+        }];
+        let outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_run_record(
+            &inv,
+            &["/w/recipe dir".to_string()],
+            &[],
+            None,
+            plan,
+            vec![RecipeId::new("gsa-standalone-1-2").unwrap()],
+            outcomes,
+            &outcome,
+            None,
+        );
+        assert!(
+            record.continuation.command.contains("'/w/recipe dir'"),
+            "the continuation must restate the path: {}",
+            record.continuation.command
+        );
+        assert!(
+            !record.continuation.command.contains("gsa-standalone"),
+            "the continuation must not name a staged id: {}",
+            record.continuation.command
+        );
+    }
+
+    /// A range indexes the listing, so a replay that dropped it re-expanded a
+    /// target into the consumer closure the range had excluded.
+    #[test]
+    fn a_range_restricted_run_continuation_replays_the_range_and_its_targets() {
+        let mut inv = inv_for(Family::S);
+        inv.targets = vec!["app".to_string(), "gui".to_string()];
+        inv.ranges = vec!["2..2".to_string()];
+        let outcomes = vec![OutcomeRow {
+            pkg: RecipeId::new("gui").unwrap(),
+            status: RowStatus::Failed,
+            rc: Some(1),
+            dur: Some(2),
+            reason: "build-failed".to_string(),
+        }];
+        let outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_run_record(
+            &inv,
+            &inv.targets.clone(),
+            &inv.ranges.clone(),
+            None,
+            Vec::new(),
+            vec![RecipeId::new("gui").unwrap()],
+            outcomes,
+            &outcome,
+            None,
+        );
+        let command = &record.continuation.command;
+        assert!(
+            command.ends_with("app gui 2..2"),
+            "the replay restates the targets and the range: {command}"
+        );
+        assert!(
+            !command.ends_with(" gui 2..2 app"),
+            "the subjects precede the range: {command}"
+        );
     }
 
     /// The record shape: every env input read by the run is warned about, and a

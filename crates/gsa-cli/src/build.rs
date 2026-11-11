@@ -168,16 +168,8 @@ fn run_build_with(
     // for a prerequisite nobody selected. The prerequisites the SYSTEM lacks
     // now join the selection; an installed one is never added and never
     // rebuilt, and `--leaf` builds exactly what was named.
-    match missing_prerequisite_additions(&graph, &selection, &db, inv) {
-        Ok(additions) => {
-            for id in &additions {
-                let _ = writeln!(
-                    err,
-                    "gsa: note: added build-order prerequisite {id} (not installed)"
-                );
-            }
-            merge_prerequisites(&mut selection, &additions, &graph);
-        }
+    match prepare::apply_missing_prerequisites(&mut selection, &graph, &db, inv, err) {
+        Ok(()) => {}
         Err(message) => {
             // The additions decide what the run builds, so an unreadable
             // installed DB is a refusal, never "nothing is missing" (which
@@ -852,7 +844,7 @@ fn run_build_with(
         prefetch_warnings,
     );
     // Which compiler built this, under which identity, and when (§H.2).
-    let (toolchain, toolchain_identity) = record_toolchain(&graph, &record_root, &selection);
+    let (toolchain, toolchain_identity) = record_toolchain(&graph, &record_root, &selection, true);
     record.stamp = gsa_model::RecordStamp {
         toolchain,
         toolchain_identity,
@@ -905,6 +897,7 @@ fn record_toolchain(
     graph: &Graph<'_>,
     root: &std::path::Path,
     selection: &Selection,
+    probe: bool,
 ) -> (Option<String>, Option<String>) {
     let mut families = std::collections::BTreeSet::new();
     for (_, id) in &selection.listed {
@@ -922,7 +915,13 @@ fn record_toolchain(
         0 => (None, None),
         1 => {
             let family = *families.iter().next().expect("one family");
-            let identity = gsa_recipe::toolchain::build_identity(family).ok();
+            // A PLAN names the family and probes nothing (contract §H.2): the
+            // identity is `-`, so running `gcc --version` and `bash -n` over
+            // every site body would be a subprocess spent on a value the
+            // record then discards (external review, 2026-11-12).
+            let identity = probe
+                .then(|| gsa_recipe::toolchain::build_identity(family).ok())
+                .flatten();
             (Some(family.as_str().to_string()), identity)
         }
         _ => (Some("mixed".to_string()), None),
@@ -991,16 +990,8 @@ pub(crate) fn plan_only(
     // unreadable installed DB is the run's refusal, so the plan reports that
     // predicted class rather than a false 0.
     let mut prereq_refused = false;
-    match missing_prerequisite_additions(ctx.graph, &selection, ctx.db, inv) {
-        Ok(additions) => {
-            for id in &additions {
-                let _ = writeln!(
-                    err,
-                    "gsa: note: added build-order prerequisite {id} (not installed)"
-                );
-            }
-            merge_prerequisites(&mut selection, &additions, ctx.graph);
-        }
+    match prepare::apply_missing_prerequisites(&mut selection, ctx.graph, ctx.db, inv, err) {
+        Ok(()) => {}
         Err(message) => {
             let _ = writeln!(err, "gsa: {message}");
             prereq_refused = true;
@@ -1063,7 +1054,7 @@ pub(crate) fn plan_only(
         record::build_plan_record(inv, &selection, &inv.targets, &inv.ranges, &budget, rc);
     // A plan names the family it would use; it probes no compiler, so the
     // identity is `-` — the plan did not build.
-    let (toolchain, _) = record_toolchain(ctx.graph, root, &selection);
+    let (toolchain, _) = record_toolchain(ctx.graph, root, &selection, false);
     rec.stamp = gsa_model::RecordStamp {
         toolchain,
         toolchain_identity: None,
@@ -1752,55 +1743,6 @@ pub(crate) fn wave_check(
         additions: plan.additions,
         uncovered: !plan.uncovered.is_empty(),
     })
-}
-
-/// The prerequisite additions one run makes: the selection's transitive
-/// build-order prerequisites with no installed output (owner decision
-/// 2026-11-11 — expand to what the system is MISSING, never rebuild an
-/// installed prerequisite). The installed DB is read only when the selection
-/// actually has unselected prerequisites, so the common run pays nothing.
-fn missing_prerequisite_additions(
-    graph: &Graph<'_>,
-    selection: &Selection,
-    db: &RecipeDb,
-    inv: &Invocation,
-) -> Result<Vec<String>, String> {
-    let candidates = prepare::prerequisite_candidates(graph, selection, inv.leaf);
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let conf = inv.config.as_deref().map(std::path::Path::new);
-    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
-    let installed = gsa_install::LocalDb::load(&db_root)?;
-    Ok(prepare::missing_prerequisites(
-        graph,
-        &candidates,
-        db,
-        &installed,
-    ))
-}
-
-/// Merge prerequisite additions into the selection in BUILD ORDER: plan,
-/// record and dispatch carry the one topological order (§C.3), so an added
-/// prerequisite precedes its consumer instead of trailing the plan. Anchors
-/// are renumbered consecutively — they render the plan's row indices, and a
-/// range was already resolved against the listing before this point.
-fn merge_prerequisites(selection: &mut Selection, additions: &[String], graph: &Graph<'_>) {
-    if additions.is_empty() {
-        return;
-    }
-    for id in additions {
-        selection.listed.push((
-            0,
-            RecipeId::new(id).expect("additions come from the topology"),
-        ));
-    }
-    selection
-        .listed
-        .sort_by_key(|(_, id)| graph.index_of(id.as_str()).map(|idx| graph.position(idx)));
-    for (n, (anchor, _)) in selection.listed.iter_mut().enumerate() {
-        *anchor = n + 1;
-    }
 }
 
 /// Append computed wave additions to the plan (anchors continue past the

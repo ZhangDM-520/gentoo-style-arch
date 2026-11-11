@@ -1160,6 +1160,33 @@ arch=(any)'
             fail "interactive y is consent, got rc=$MCC_PTY_RC: $(cat "$fixture/h/pty-yes.out")"
         [ ! -e "$ws/packages/prgamma/prgamma-pty-yes-1.0.0-1-any.pkg.tar.zst" ] ||
             fail "interactive y must apply the prune: $(cat "$fixture/h/pty-yes.out")"
+        # A captured PLAN is not a consentable plan (contract §B.7): with
+        # stdout redirected the gate must refuse with the paste-safe command
+        # rather than block on a question about a plan that went into a file.
+        : >"$ws/packages/prgamma/prgamma-pty-pipe-1.0.0-1-any.pkg.tar.zst"
+        {
+            pipe_argv=()
+            rr2_engine_argv sudo "$ws" pipe_argv -Mcc --state-dir "$state"
+            pipe_runner="$fixture/.mcc-pipe.sh"
+            {
+                printf '#!/bin/bash\ncd %q || exit 127\nunset CI\nexec' "$ws"
+                printf ' %q' "${pipe_argv[@]}"
+                printf ' >%q\n' "$fixture/h/pipe-stdout.out"
+            } >"$pipe_runner"
+            set +e
+            printf 'y\n' |
+                timeout 60 env TERM=dumb script -qec "/bin/bash $(printf %q "$pipe_runner")" /dev/null \
+                    >"$fixture/h/pty-pipe.out" 2>&1
+            pipe_rc=$?
+            set -e
+        }
+        [ "$pipe_rc" = 3 ] ||
+            fail "a piped-stdout -Mcc must refuse rc 3, got $pipe_rc: $(cat "$fixture/h/pty-pipe.out")"
+        grep -F 'confirmation-required' "$fixture/h/pty-pipe.out" >/dev/null ||
+            fail "the piped-stdout refusal must name confirmation-required: $(cat "$fixture/h/pty-pipe.out")"
+        [ -f "$ws/packages/prgamma/prgamma-pty-pipe-1.0.0-1-any.pkg.tar.zst" ] ||
+            fail "a piped-stdout -Mcc must delete nothing"
+
         : >"$ws/packages/prgamma/prgamma-pty-no-1.0.0-1-any.pkg.tar.zst"
         mcc_pty 'n\n' "$fixture/h/pty-no.out"
         [ "$MCC_PTY_RC" = 3 ] ||
