@@ -773,7 +773,7 @@ fn env_required(inv: &Invocation) -> Vec<String> {
 /// set?", so the roster filter is unit-testable without touching the
 /// process environment.
 fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
-    let mut env: Vec<String> = crate::help::ENV_INPUTS
+    let env: Vec<String> = crate::help::ENV_INPUTS
         .iter()
         .map(|(name, _)| *name)
         .filter(|name| {
@@ -781,6 +781,14 @@ fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) 
             // children; that is the run's own choice (mirrored as a flag),
             // not an environment input the resume must reproduce.
             if *name == "GSA_BUILD_DIR" && inv.build_dir.is_some() {
+                return false;
+            }
+            // `--state-dir` mirrors the root as a flag, so the variable is
+            // not something the resume must reproduce — and exporting a
+            // different one would silently change which root the paste uses
+            // (the build root's rule, applied to its twin; blind-review
+            // finding, 2026-11-11).
+            if *name == "GSA_STATE_DIR" && inv.state_dir.is_some() {
                 return false;
             }
             // `NO_COLOR` is PRESENTATION (like `--machine`, never mirrored):
@@ -793,9 +801,6 @@ fn env_required_with(inv: &Invocation, lookup: impl Fn(&str) -> Option<String>) 
         })
         .map(|name| name.to_string())
         .collect();
-    if inv.state_dir.is_some() && !env.iter().any(|n| n == "GSA_STATE_DIR") {
-        env.push("GSA_STATE_DIR".to_string());
-    }
     env
 }
 
@@ -1064,13 +1069,13 @@ mod tests {
             "{:?}",
             record.continuation.not_mirrored
         );
-        // --state-dir is mirrored as an explicit flag and the ambient env
-        // is warned about too (§H.2).
+        // --state-dir is mirrored as an explicit flag, which is exactly why
+        // the variable is NOT advertised (§H.2: the flag restates the root).
         assert!(record
             .continuation
             .command
             .contains("--state-dir /scratch/state"));
-        assert!(record
+        assert!(!record
             .continuation
             .env_required
             .iter()
@@ -1165,10 +1170,17 @@ mod tests {
         assert!(
             env_required_with(&inv, |n| (n == "GSA_BUILD_DIR").then(|| "1".to_string())).is_empty()
         );
-        // `--state-dir` still names the relocated root when the variable is unset.
+        // `--state-dir` is mirrored as a flag: the variable is never listed,
+        // set or not (an exported one could name another root).
         inv.state_dir = Some("/scratch/state".to_string());
+        assert!(
+            env_required_with(&inv, |n| (n == "GSA_STATE_DIR").then(|| "1".to_string())).is_empty()
+        );
+        assert!(env_required_with(&inv, |_| None).is_empty());
+        // Without the flag the ambient root IS required.
+        inv.state_dir = None;
         assert_eq!(
-            env_required_with(&inv, |_| None),
+            env_required_with(&inv, |n| (n == "GSA_STATE_DIR").then(|| "1".to_string())),
             vec!["GSA_STATE_DIR".to_string()]
         );
     }

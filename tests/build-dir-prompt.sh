@@ -204,6 +204,19 @@ esac
 [ "$replay_rc" = 0 ] ||
     fail "the advertised continuation does not replay (rc=$replay_rc)" "$fixture/g2-replay.out"
 
+# ── G3. a flagged state root is mirrored, never env-required ──────────────
+# The twin of E/F for the other directory flag: the flag restates the root,
+# so the variable must not be advertised (an exported one could name a
+# different root) — blind-review finding, 2026-11-11.
+statedir=$fixture/flag-state
+run_pipe "$fixture/g3.out" -B --dry-run --leaf p1 --state-dir "$statedir" \
+    || fail "a flagged state root plan failed (rc=$RC)" "$fixture/g3.out"
+continuation_command "$fixture/g3.out" | grep -qF -- "--state-dir $statedir" \
+    || fail "the continuation does not restate --state-dir" "$fixture/g3.out"
+if grep < <(rr2_continuation env-required <"$fixture/g3.out" | tr ' ' '\n') -Fxq GSA_STATE_DIR; then
+    fail "a flagged --state-dir must not be advertised as env-required" "$fixture/g3.out"
+fi
+
 # ── H. refusals ───────────────────────────────────────────────────────────
 set +e
 run_dir "$fixture/gsa.conf" "$fixture/h1.out" 'q\n' -B --dry-run --leaf p1
