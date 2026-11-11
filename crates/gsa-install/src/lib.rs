@@ -905,7 +905,24 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // version-moves vs the installed provides of the same pkgname (or
         // its stock→house counterpart). Runs BEFORE the force branch: force
         // bypasses the same-version skip, never this gate.
-        let drift = gsa_abi::provide_drift(&info.pkgname, &info.provides, &view);
+        let mut drift = gsa_abi::provide_drift(&info.pkgname, &info.provides, &view);
+        // Shipped-SONAME truth on top of the declared provides (rule 25(c)):
+        // a recipe with no `provides=` still moves `libfoo.so.1` →
+        // `libfoo.so.2`, and the gate used to stand down silently while a
+        // live consumer broke (2026-11-11 blind review). An archive whose
+        // payload cannot be walked is a `discover-failed`-class damage: the
+        // read fails closed through the same `?` the NEEDED probe uses.
+        let shipped_sonames: Vec<String> =
+            gsa_recipe::pkginfo::members_with_dynamic(&candidate.archive)
+                .map_err(|e| format!("cannot read {}: {e}", candidate.archive.display()))?
+                .into_iter()
+                .filter_map(|(_, soname, _)| soname)
+                .collect();
+        for extra in gsa_abi::soname_drift(&info.pkgname, &shipped_sonames, &view) {
+            if !drift.iter().any(|d| d.name == extra.name) {
+                drift.push(extra);
+            }
+        }
         // Rule 25(d) in-run repair targets for THIS provider (consumers the
         // run rebuilds later) — folded into the install row's open REASON
         // (§E.3 gap-G1) only when the move lands (the row is `install`).

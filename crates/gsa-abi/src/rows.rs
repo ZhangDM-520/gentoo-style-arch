@@ -89,6 +89,54 @@ pub fn provide_drift(pkgname: &str, built_provides: &[String], view: &InstalledV
     drift
 }
 
+/// The SONAME-surface drift of one build against the installed package (or
+/// its stock counterpart): every `DT_SONAME` the INSTALLED payload shipped
+/// that the new archive no longer ships.
+///
+/// `provide_drift` alone cannot see this: a recipe that declares no
+/// `provides=` still moves `libfoo.so.1` → `libfoo.so.2`, and the install
+/// gate then stood down — a live consumer was left linked against a soname
+/// that disappeared (blind-review finding, 2026-11-11, rc 0 and a 127 for
+/// the consumer). Shipped bytes are the truth (rule 25(c)); feeds the same
+/// link-truth refusal as a provide move.
+pub fn soname_drift(pkgname: &str, shipped: &[String], view: &InstalledView) -> Vec<Drift> {
+    let installed = match view.get(pkgname) {
+        Some(pkg) => pkg,
+        None => {
+            let stock = stock_name(pkgname);
+            if stock == pkgname {
+                return Vec::new();
+            }
+            match view.get(&stock) {
+                Some(pkg) => pkg,
+                None => return Vec::new(),
+            }
+        }
+    };
+    let mut drift = Vec::new();
+    for file in &installed.files {
+        let Some(bytes) = view.read_elf(file) else {
+            continue;
+        };
+        let Some(soname) = gsa_recipe::elf::soname(&bytes) else {
+            continue;
+        };
+        if shipped.iter().any(|name| name == &soname) {
+            continue;
+        }
+        if drift.iter().any(|d: &Drift| d.name == soname) {
+            continue;
+        }
+        drift.push(Drift {
+            pkgname: pkgname.to_string(),
+            name: soname,
+            inst_ver: "-".to_string(),
+            built_ver: None,
+        });
+    }
+    drift
+}
+
 fn elf_home(path: &str) -> bool {
     path.starts_with("usr/lib")
         || path.starts_with("usr/libexec")
@@ -354,6 +402,40 @@ mod tests {
         // A fresh install with nothing installed has no drift (rule: no
         // surface can disappear).
         assert!(provide_drift("fresh", &built, &view).is_empty());
+    }
+
+    /// A recipe that declares NO `provides=` still moves its soname: the
+    /// shipped-bytes surface is the truth, and the gate must see it
+    /// (2026-11-11 blind review: a live consumer was left on a soname that
+    /// disappeared, rc 0).
+    #[test]
+    fn soname_drift_sees_a_move_the_provides_cannot() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-soname-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        std::fs::write(
+            dir.join("usr/lib/libgreet.so.1"),
+            crate::test_support::elf64(Some("libgreet.so.1"), &[]),
+        )
+        .unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [pkg("libgreet", &[], &[], &["usr/lib/libgreet.so.1"])],
+        );
+
+        // The new build ships `libgreet.so.2` only.
+        let drift = soname_drift("libgreet", &["libgreet.so.2".to_string()], &view);
+        assert_eq!(
+            drift.len(),
+            1,
+            "the vanished soname is the drift: {drift:?}"
+        );
+        assert_eq!(drift[0].name, "libgreet.so.1");
+
+        // The same soname still shipped, or nothing installed: no drift.
+        assert!(soname_drift("libgreet", &["libgreet.so.1".to_string()], &view).is_empty());
+        assert!(soname_drift("notinstalled", &[], &view).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
