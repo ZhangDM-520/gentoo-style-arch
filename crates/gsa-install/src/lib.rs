@@ -135,6 +135,13 @@ pub struct RecipeArchives {
     pub missing: Vec<String>,
     /// The chosen set mixes full versions — `refuse partial-set … mixed-versions`.
     pub mixed_versions: bool,
+    /// Archives that LOOK like this recipe's own output (filename stem) but
+    /// whose `.PKGINFO` cannot be read. Not candidates — and not absent
+    /// either (rule 71): a `-U <ref>` that finds only these must refuse
+    /// `unreadable <path>`, never report the empty list a Force run turns
+    /// into a silent `noop` success (blind-review finding, 2026-11-11: a
+    /// truncated archive made `-Uf` exit 0 installing nothing).
+    pub unreadable: Vec<(PathBuf, String)>,
 }
 
 /// How discovery ranks same-name candidates.
@@ -245,6 +252,7 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
     let layout = gsa_model::config::build_layout_for_run()?;
     let scan_dirs = gsa_model::config::archive_dirs(recipe_dir, &layout);
     let mut by_name: Vec<(String, std::time::SystemTime, PathBuf, String)> = Vec::new();
+    let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
     let mut scanned = false;
     for scan_dir in &scan_dirs {
         let Ok(entries) = std::fs::read_dir(scan_dir) else {
@@ -262,8 +270,22 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
             if !name.ends_with(".pkg.tar.zst") {
                 continue;
             }
-            let Ok(pkginfo) = read_pkginfo(&path) else {
-                continue;
+            let pkginfo = match read_pkginfo(&path) {
+                Ok(pkginfo) => pkginfo,
+                Err(error) => {
+                    // Unreadable is not absent (rule 71) — but only a file
+                    // that claims one of THIS recipe's names is ours to
+                    // report; a shared PKGDEST holds other recipes' files.
+                    let ours = expected.is_empty()
+                        || expected.iter().any(|want| {
+                            name.strip_prefix(want.as_str())
+                                .is_some_and(|rest| rest.starts_with('-'))
+                        });
+                    if ours {
+                        unreadable.push((path.clone(), error.to_string()));
+                    }
+                    continue;
+                }
             };
             if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
                 continue;
@@ -352,6 +374,7 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
     versions.dedup();
 
     Ok(RecipeArchives {
+        unreadable,
         recipe_dir: recipe_dir.to_path_buf(),
         candidates,
         missing,

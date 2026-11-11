@@ -628,8 +628,18 @@ fn run_upgrade_inner(
             match discover_recipe(&recipe_dir) {
                 Ok(found) => {
                     if found.candidates.is_empty() {
-                        // Not eligible: the recipe has no archives at all
-                        // (`-Ua` installs the workspace's built archives).
+                        // No usable archive — but an archive that IS there
+                        // and cannot be read is not an absent one (rule 71):
+                        // refuse loudly rather than let the empty list read
+                        // as "nothing to do".
+                        if !found.unreadable.is_empty() {
+                            items.push(Item::Rejected(unreadable_row(
+                                record.id.as_str(),
+                                &found.unreadable,
+                            )));
+                        }
+                        // Otherwise not eligible: the recipe has no archives
+                        // at all (`-Ua` installs the workspace's built ones).
                         continue;
                     }
                     if !found.missing.is_empty() || found.mixed_versions {
@@ -679,7 +689,12 @@ fn run_upgrade_inner(
                         // branch above skips it too): the expectation that
                         // makes `missing` non-empty must not relabel
                         // "nothing was built" as a shrunken set.
-                        if !found.candidates.is_empty()
+                        if found.candidates.is_empty() && !found.unreadable.is_empty() {
+                            items.push(Item::Rejected(unreadable_row(
+                                record.id.as_str(),
+                                &found.unreadable,
+                            )));
+                        } else if !found.candidates.is_empty()
                             && (!found.missing.is_empty() || found.mixed_versions)
                         {
                             items.push(Item::Rejected(vec![partial_set_row(
@@ -1312,6 +1327,18 @@ fn parked_subjects(state_dir: &Path) -> BTreeMap<String, String> {
 /// valid install position exists at all" — so a stale twin never installs
 /// and discovery damage (a shrunken set) never preempts the park with a
 /// `refuse` row.
+/// A named recipe whose only archives are unreadable: refuse, naming each
+/// file and why (rule 71 — an unreadable archive is not an absent one).
+fn unreadable_row(id: &str, bad: &[(std::path::PathBuf, String)]) -> Vec<DecisionRow> {
+    bad.iter()
+        .map(|(path, error)| DecisionRow {
+            subject: id.to_string(),
+            decision: Decision::Refuse,
+            reason: format!("unreadable {} {error}", path.display()),
+        })
+        .collect()
+}
+
 fn parked_row(subject: &str, reason: &str) -> DecisionRow {
     DecisionRow {
         subject: subject.to_string(),

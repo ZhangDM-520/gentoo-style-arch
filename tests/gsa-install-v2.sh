@@ -1306,4 +1306,40 @@ PKG
     )
 fi
 
+if want j; then
+    # ─── 10. an unreadable archive is not an absent one (rule 71) ─────────
+    # A truncated archive used to vanish from discovery, so `-Uf <ref>`
+    # planned an empty list, Force turned it into `noop`, and the run exited
+    # 0 having installed nothing (blind-review finding, 2026-11-11).
+    (
+        set -euo pipefail
+        ws="$fixture/j/ws"
+        db="$fixture/j/db"
+        make_workspace "$ws" 1 auto low
+        install_ws "$ws" "$db"
+        mkdir -p "$db"
+        ver="1.0-1"
+        add_package "$ws" solo "$gsa_meta_any" git
+        archive="$ws/packages/solo/solo-$ver-any.pkg.tar.zst"
+        stage_pkginfo "$fixture/j/stage" solo solo "$ver" 7
+        make_archive "$archive" "$fixture/j/stage"
+        truncate -s 40 "$archive"
+        export GSA_FAKE_PACMAN_LOG="$fixture/j/pacman.log"
+        export GSA_FAKE_SUDO_LOG="$fixture/j/sudo.log"
+        export GSA_FAKE_SPAWN_LOG="$fixture/j/spawn.log"
+        : >"$GSA_FAKE_PACMAN_LOG"
+        : >"$GSA_FAKE_SUDO_LOG"
+
+        run_engine "$ws" -Uf --state-dir "$fixture/j/state" --config "$ws/pacman.conf" solo
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "j: an unreadable archive must refuse rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep < <(record_section plan) -Fq "solo refused unreadable $archive" \
+            || fail "j: the refusal must name the unreadable archive: $(record_section plan)"
+        [ ! -s "$GSA_FAKE_PACMAN_LOG" ] \
+            || fail "j: a refused plan must stay pacman-free: $(cat "$GSA_FAKE_PACMAN_LOG")"
+        [ ! -s "$GSA_FAKE_SUDO_LOG" ] \
+            || fail "j: a refused plan must stay sudo-free: $(cat "$GSA_FAKE_SUDO_LOG")"
+    )
+fi
+
 printf 'gsa-install-v2 fixture: PASS\n'
