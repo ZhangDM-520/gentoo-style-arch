@@ -1092,7 +1092,13 @@ pub fn install_built_package(
     recipe_dir: &Path,
     run: &InstallRun,
 ) -> Result<(Vec<DecisionRow>, Option<TxnOutcome>), String> {
-    let discovered = discover_recipe(recipe_dir)?;
+    // THIS PACKAGE WAS JUST BUILT: the archive the lane wrote is the newest
+    // file, and the version-ranked chooser is what let a stale
+    // higher-version archive lying in the recipe directory hijack the install
+    // (a build of 1.3 installed 9.9 — blind-review finding, 2026-11-11).
+    // Newest-mtime is the same rank the post-build registration uses, so the
+    // installed archive and the recorded instance are the same bytes.
+    let discovered = discover_recipe_ranked(recipe_dir, Rank::Mtime)?;
 
     // Discovery damage owns the plan: a shrunken set is never installed
     // silently (rule 11; fish `install_plan`'s `_GSA_DISCOVER_REFUSALS`).

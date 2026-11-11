@@ -1276,6 +1276,33 @@ PKG
         if grep -q '^other|' <<<"$FIXTURE_OUTPUT"; then
             fail "i: a cached sibling's archive must not be registered to this recipe: $FIXTURE_OUTPUT"
         fi
+
+        rows=$(grep -c '^mine|' <<<"$FIXTURE_OUTPUT" || true)
+        [ "$rows" = 1 ] \
+            || fail "i: the index must hold exactly one row for mine (got $rows): $FIXTURE_OUTPUT"
+        if grep -q '^other|' <<<"$FIXTURE_OUTPUT"; then
+            fail "i: a cached sibling's archive must not be registered to this recipe: $FIXTURE_OUTPUT"
+        fi
+
+        # A STALE HIGHER-VERSION archive lying in the recipe dir must never
+        # hijack the install: the lane just wrote 1.0-1, and the newest file
+        # is that build (2026-11-11 blind-review finding: a build of 1.3
+        # installed 9.9 from the recipe directory).
+        mkdir -p "$fixture/i/stale"
+        printf 'pkgbase = mine\npkgname = mine\npkgver = 9.9-1\narch = any\n' \
+            >"$fixture/i/stale/.PKGINFO"
+        tar --zstd -cf "$ws/packages/mine/mine-9.9-1-any.pkg.tar.zst" \
+            -C "$fixture/i/stale" .PKGINFO
+        : >"$GSA_FAKE_PACMAN_LOG"
+        run_engine "$ws" -Sf --leaf --state-dir "$fixture/i/state2" \
+            --config "$ws/pacman.conf" mine
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "i: a stale higher-version neighbour must not fail the run: $FIXTURE_OUTPUT"
+        grep '^pacman -U ' "$GSA_FAKE_PACMAN_LOG" | grep -F 'mine-1.0-1-any.pkg.tar.zst' >/dev/null \
+            || fail "i: the archive the lane just built must be the one installed:" "$GSA_FAKE_PACMAN_LOG"
+        if grep '^pacman -U ' "$GSA_FAKE_PACMAN_LOG" | grep -F 'mine-9.9-1-any.pkg.tar.zst' >/dev/null; then
+            fail "i: a stale higher-version archive in the recipe dir was installed:" "$GSA_FAKE_PACMAN_LOG"
+        fi
     )
 fi
 
