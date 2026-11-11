@@ -1189,11 +1189,12 @@ mod tests {
         let (code, _out, err) = run_capture(&["-Ms", "--leaf"]);
         assert_eq!(code, 2);
         assert!(err.contains("--leaf applies to -Mc"), "{err}");
-        // A flag outside a verb's roster keeps the deferred refusal —
-        // per-verb acceptance is §B.7's, not the family's.
+        // A flag outside a verb's roster keeps the usage refusal and names
+        // the owner — per-verb acceptance is §B.7's, not the family's.
         let (code, _out, err) = run_capture(&["-Mc", "--skip", "mesa-git"]);
         assert_eq!(code, 2);
-        assert!(err.contains("deferred to a later phase"), "{err}");
+        assert!(err.contains("is not a flag of this -M action"), "{err}");
+        assert!(!err.contains("deferred to a later phase"), "{err}");
     }
 
     #[test]
