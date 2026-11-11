@@ -166,6 +166,25 @@ ninja_env=$(GSA_LANE_NINJAFLAGS=-j7 bash --noprofile --norc -c '
 vgrep "$ninja_env" -Fq 'NINJAFLAGS=-j7' ||
     fail "F': a child process does not inherit NINJAFLAGS from the composite:"$'\n'"$ninja_env"
 
+# ── F''. a site file that is not valid shell is a REFUSAL, not a degraded build ─
+# The composite used to source site files inside a `[ -r ] &&` chain: a syntax
+# error aborted only that file, the lane built with the floor body, and the run
+# reported success — a silently different build behind a green record (blind
+# review, 2026-11-11). The identity's `bash -n` check refuses first.
+bad_conf="$fixture/bad-site"
+mkdir -p "$bad_conf"
+printf 'CFLAGS="unterminated\n' >"$bad_conf/gcc-makepkg.conf"
+set +e
+bad_out=$(GSA_CONF_DIR="$bad_conf" "$GSA_TEST_GSA_BIN" --build-identity gcc 2>&1)
+bad_rc=$?
+set -e
+[ "$bad_rc" -ne 0 ] \
+    || fail "F'': --build-identity accepted a site body it cannot source (rc=$bad_rc): $bad_out"
+grep -Fq 'is not valid shell' <<<"$bad_out" \
+    || fail "F'': the refusal does not name the invalid site body: $bad_out"
+grep -Fq "$bad_conf/gcc-makepkg.conf" <<<"$bad_out" \
+    || fail "F'': the refusal does not name the file: $bad_out"
+
 # ── G. each family's flags are accepted by that family's compiler ───────────
 # The bodies are shipped text, so the only proof that clang will not choke on
 # the clang composite (or gcc on the gcc one) is to hand them to the driver.

@@ -997,6 +997,26 @@ fn config_digest(toolchain: Toolchain) -> io::Result<String> {
 /// The digest of one resolved lane config: the composite's own bytes plus the
 /// bytes of every site file it sources.
 ///
+/// `bash -n` over one site config: the composite is shell, so a file it
+/// cannot source is a named refusal (which the identity callers turn into
+/// `toolchain-identity`/`toolchain-unavailable`), never a degraded build.
+fn syntax_check(path: &std::path::Path) -> io::Result<()> {
+    let output = Command::new("bash")
+        .env("LC_ALL", "C")
+        .arg("-n")
+        .arg(path)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(io::Error::other(format!(
+        "site config {} is not valid shell ({})",
+        path.display(),
+        detail.lines().next().unwrap_or("bash -n failed").trim()
+    )))
+}
+
 /// The composite only NAMES its site files (`[ -r … ] && source …`), so
 /// hashing it alone left `/etc/gsa/<family>-makepkg.conf` edits invisible —
 /// the documented way to reverse a shipped decision kept every stale marker.
@@ -1012,6 +1032,12 @@ fn digest_of(toolchain: Toolchain, sources: &[std::path::PathBuf]) -> io::Result
         hasher.update([0]);
         match std::fs::read(source) {
             Ok(bytes) => {
+                // Hash the bytes AND prove they parse: the composite sources
+                // a site file inside a `[ -r ] &&` chain, where a syntax
+                // error aborts only that file and the lane builds with the
+                // floor body — a silently different build behind
+                // `outcome: success` (blind review, 2026-11-11).
+                syntax_check(source)?;
                 hasher.update([1]);
                 hasher.update(&bytes);
             }

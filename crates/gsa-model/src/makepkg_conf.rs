@@ -275,9 +275,13 @@ pub fn render(toolchain: Toolchain, sources: &[std::path::PathBuf]) -> String {
     body.push_str(compiler(toolchain));
     for source in sources {
         // A site file is optional by design: a half-populated directory is a
-        // legal site (only gcc tuned, say).
+        // legal site (only gcc tuned, say). A file that IS there and does not
+        // source is fatal: the old `[ -r ] && source` chain aborted only that
+        // file, so a syntax error built the lane with the floor body and
+        // reported success (blind review, 2026-11-11). The identity check
+        // (`bash -n`) refuses first; this line is the belt-and-braces.
         body.push_str(&format!(
-            "[ -r '{path}' ] && source '{path}'\n",
+            "if [ -r '{path}' ]; then source '{path}' || {{ printf 'gsa: cannot source %s\\n' '{path}' >&2; exit 1; }}; fi\n",
             path = shell_single_quote(&source.display().to_string())
         ));
     }
