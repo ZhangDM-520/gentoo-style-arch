@@ -1169,7 +1169,8 @@ fn run_update_inner(
     //    sync pass). A dry run never rewrites recipes, so it runs no sync at
     //    all; the routing below owns the rc classes.
     if inv.sync_first && !inv.no_sync && !inv.dry_run {
-        let phase = prepare::sync_phase(&root, &graph, &selection, out, err);
+        let srcdest = gsa_model::config::resolve_srcdest();
+        let phase = prepare::sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
         if let Some(exit) = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
             resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b)
         }) {

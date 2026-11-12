@@ -208,6 +208,51 @@ semantics (H9): it is now the no-sync stale-set update and `-Syu` is the
 sync-first form; both are live (the old "Phase 4" note is retired). Pinned by
 the `gsa --help` roster tests (`gsa-cli::help`) and the fixture battery.
 
+*Amendment (2026-11-12, W5 — the snapshot-pin provider).* A `#commit=<sha>`
+recipe that is **not** physically staged under `packages/stable` belongs to a
+fourth provider: the `-Sy` pass advances its pin to the last commit at or
+before the most recent Monday 00:00 UTC, and writes the pin and `pkgver=` in
+one transaction. The dispatch is the recipe's own source, never a tag, group
+or name: `packages/stable` stays the Arch provider's (its pins are release
+anchors, not weekly snapshots), and everything else is `not-a-snapshot` →
+Arch provider → `version-sync=nvchecker` → Arch provider, as before.
+
+- **Evidence, not a query.** The commit is resolved from the recipe's own
+  `SRCDEST/<makepkg name>` bare mirror (`git rev-list -1 --before=<boundary>`
+  over `refs/remotes/origin/<ref>`, then `refs/heads/<ref>`, then bare; the
+  branch is `_snapshot_ref=` when the recipe records it). Nothing is fetched
+  at edit time, and no pin is ever placed from the network.
+- **The version is the recipe's own `pkgver()`**, evaluated in `$srcdir` at
+  the new commit — makepkg's `run_function_safe pkgver` cwd — never a second
+  derivation (a central `git describe` would drift from the recipe's
+  definition). EVERY `#commit=`-pinned source is materialized at its own pin,
+  not just the primary: `onlyoffice-git` computes its version from a second
+  source's checkout. The saver is `gsa-recipe::sync::snapshot_checkouts`.
+- **The name is makepkg's `get_filename`**: an explicit `name::` prefix is the
+  checkout name VERBATIM, and only a bare URL is basename-truncated at the
+  first `.git` (`${filename%%.git*}`). A rule that truncates both turns
+  `onlyoffice.github.io` into `onlyoffice`.
+- **Two arms, never mixed.** A missing/unsatisfiable mirror (defective
+  evidence) is a DEFERRAL — `source-unfetchable`, rc 5, recipe unchanged —
+  because one un-fetched mirror must not abort a full-set `-Sy`. A defective
+  RECIPE refuses (rc 3). Refusal keywords: `ref-unresolvable`,
+  `no-commit-before-boundary`, `mirror-missing`, `pkgver-evaluation-failed`,
+  `pkgver-unsafe` defer/refuse as their arm says; `pkgver-function-missing`
+  and `not-a-snapshot` are NO-CHANGES (`NoChangeReason::PkgverFunction` and
+  `::NotASnapshot`), so the exempt recipes in a 667-package set cannot redden
+  the pass.
+- **Skew is measured at the OLD pin.** The recorded `pkgver` is compared with
+  what `pkgver()` computes at the pin the recipe RECORDS; a disagreement is
+  named loudly on the report and both fields still move together. Comparing
+  against the NEW commit instead reports every ordinary version move as skew.
+- Forward-only: a boundary commit that is not a descendant of the recorded
+  pin is left alone (`NoChangeReason::Current`), so a second `-Sy` in one week
+  is a no-op and can never rewind a pin.
+
+Pinned by `tests/sync-snapshot.sh` (move + uncommitted + no-rewind; genuine
+skew named, coherent recipe not; non-pin untouched; absent mirror defers;
+multi-source evaluation and the dotted `get_filename` name).
+
 ### B.5 `-B` — build-only
 
 | Spelling | Action |

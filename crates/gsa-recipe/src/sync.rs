@@ -278,6 +278,31 @@ impl SourceEntry {
     }
 }
 
+/// makepkg's `get_filename` for a git source: the `SRCDEST` mirror directory
+/// name and the `$srcdir` checkout name.
+///
+/// Two rules, and the difference between them is load-bearing: an explicit
+/// `name::` prefix is returned **verbatim** (makepkg prints `${netfile%%::*}`
+/// and stops), while a bare URL is reduced to its basename and THEN truncated
+/// at the first `.git` (`${filename%%.git*}`). Truncating both spellings turns
+/// `onlyoffice.github.io::git+…/onlyoffice.github.io` into `onlyoffice`, which
+/// is not a directory that exists anywhere.
+fn makepkg_git_name(entry: &SourceEntry) -> Option<String> {
+    if let Some(i) = entry.0.find("::") {
+        let name = &entry.0[..i];
+        return if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+    }
+    let name = url_basename(entry.url()?)?;
+    Some(match name.find(".git") {
+        Some(i) => name[..i].to_string(),
+        None => name,
+    })
+}
+
 fn url_basename(url: &str) -> Option<String> {
     let stripped = match url.find(['?', '#']) {
         Some(i) => &url[..i],
@@ -1549,10 +1574,840 @@ pub fn hash_bytes(alg: &str, data: &[u8]) -> Option<String> {
         _ => None,
     }
 }
+// W5 — the snapshot-pin provider (`-Sy`)
+// ---------------------------------------------------------------------------
+//
+// A snapshot recipe is a recipe whose PRIMARY `source=()` entry carries
+// `#commit=<sha>`: the pin IS the snapshot (contract §C.1's alias is derived
+// from it, never from a naming convention). This pass advances that pin to the
+// last commit at or before the most recent Monday 00:00 UTC, and rewrites the
+// recipe's `pkgver=` to what its own `pkgver()` computes at the new commit — in
+// ONE transaction, because a pin whose version lags is a recipe that certifies
+// a version it does not build (rule 18, the same "never observed apart" rule
+// the pkgver/pkgrel rewrite already obeys).
+//
+// Evidence, not guesses: the commit comes from the recipe's OWN bare mirror in
+// `SRCDEST` (never a live query at edit time — a pin placed from the network is
+// unreproducible), and the version comes from EVALUATING the recipe's own
+// `pkgver()` in `$srcdir` at that commit, which is exactly where makepkg runs
+// it. Measured 2026-11-12 over the 98 first-source `#commit=` recipes in the
+// recipe tree: 82 reproduce their committed `pkgver` byte for byte, 11 show a
+// genuine pre-existing skew (the recipe was hand-edited after its pin moved),
+// and 5 have no `pkgver()` to evaluate. The 11 are reported, never silently
+// "fixed" — a rewrite that merely re-derives the version would hide the skew,
+// so the version is compared and any disagreement is named on the report.
 
+/// The Monday 00:00:00 UTC boundary the snapshot pin tracks, as the
+/// `git rev-list --before=` operand.
+///
+/// The most recent Monday 00:00 UTC AT OR BEFORE `now`, so a run on a Monday
+/// resolves that same day's boundary (the week it closes), never the previous
+/// week's — which would make a Monday campaign re-pin to week-old data.
+pub fn monday_boundary(now_unix: i64) -> String {
+    const DAY: i64 = 86_400;
+    let days = now_unix.div_euclid(DAY);
+    // 1970-01-01 was a Thursday. Index Monday as 1.
+    let weekday = (days + 3).rem_euclid(7) + 1;
+    let back = weekday - 1;
+    let monday = (days - back) * DAY;
+    let d = monday.div_euclid(DAY);
+    let (y, m, dd) = civil_from_days(d);
+    format!("{y:04}-{m:02}-{dd:02}T00:00:00Z")
+}
+
+/// Days since the Unix epoch to a civil `(year, month, day)` — Howard
+/// Hinnant's `civil_from_days`. Exact over the whole proleptic Gregorian range
+/// an i64 of seconds can express, and it keeps the calendar math out of a date
+/// crate: the boundary is one formatted string, not a timezone-aware value.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// A named refusal of the snapshot-pin pass. Every variant leaves the recipe
+/// byte-identical; none invents a pin, and none reaches the network.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotRefusal {
+    /// The recipe's primary source is not `#commit=`-pinned: a snapshot is a
+    /// pin, and this recipe is not one.
+    NotASnapshot {
+        /// The ref the recipe actually tracks, for the message.
+        tracking: String,
+    },
+    /// The ref could not be resolved in the mirror at all.
+    RefUnresolvable {
+        /// The ref spelling that failed.
+        reference: String,
+    },
+    /// No commit at or before the Monday boundary exists for this ref.
+    NoCommitBeforeBoundary {
+        /// The boundary timestamp.
+        boundary: String,
+    },
+    /// The mirror is absent from `SRCDEST`.
+    MirrorMissing {
+        /// The path that was expected.
+        path: String,
+    },
+    /// The recipe has no `pkgver()` to evaluate, so the version a pin implies
+    /// cannot be derived here.
+    PkgverFunctionMissing,
+    /// The recipe's own `pkgver()` could not be evaluated at the new commit.
+    PkgverEvaluationFailed {
+        /// The tool's own words (its last line), for the message.
+        detail: String,
+    },
+    /// The evaluated version is not a value makepkg accepts in `pkgver=`.
+    PkgverUnsafe {
+        /// The value the recipe's `pkgver()` produced.
+        value: String,
+    },
+}
+
+impl SnapshotRefusal {
+    /// The stable keyword the run record and fixtures assert on.
+    pub fn keyword(&self) -> &'static str {
+        match self {
+            SnapshotRefusal::NotASnapshot { .. } => "not-a-snapshot",
+            SnapshotRefusal::RefUnresolvable { .. } => "ref-unresolvable",
+            SnapshotRefusal::NoCommitBeforeBoundary { .. } => "no-commit-before-boundary",
+            SnapshotRefusal::MirrorMissing { .. } => "mirror-missing",
+            SnapshotRefusal::PkgverFunctionMissing => "pkgver-function-missing",
+            SnapshotRefusal::PkgverEvaluationFailed { .. } => "pkgver-evaluation-failed",
+            SnapshotRefusal::PkgverUnsafe { .. } => "pkgver-unsafe",
+        }
+    }
+
+    /// The loud one-line reason, naming the value it refused on.
+    pub fn message(&self) -> String {
+        match self {
+            SnapshotRefusal::NotASnapshot { tracking } => format!(
+                "this recipe is not a snapshot: it tracks '{tracking}', not a #commit= pin"
+            ),
+            SnapshotRefusal::RefUnresolvable { reference } => {
+                format!("cannot resolve ref '{reference}' in the source mirror")
+            }
+            SnapshotRefusal::NoCommitBeforeBoundary { boundary } => {
+                format!("no commit at or before the snapshot boundary {boundary}")
+            }
+            SnapshotRefusal::MirrorMissing { path } => format!(
+                "the source mirror '{path}' is absent — refusing to place a pin from the network at edit time"
+            ),
+            SnapshotRefusal::PkgverFunctionMissing => {
+                "the recipe has no pkgver() function, so the version its pin implies cannot be derived — pin it by hand".to_string()
+            }
+            SnapshotRefusal::PkgverEvaluationFailed { detail } => format!(
+                "the recipe's pkgver() could not be evaluated at the new commit ({detail})"
+            ),
+            SnapshotRefusal::PkgverUnsafe { value } => format!(
+                "the recipe's pkgver() produced '{value}', which is not a legal pkgver value"
+            ),
+        }
+    }
+}
+
+/// What the snapshot pass reads out of a recipe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotSource {
+    /// The git URL with the `#fragment` stripped.
+    pub url: String,
+    /// The `#commit=` value currently recorded.
+    pub commit: String,
+    /// The name makepkg gives the entry — the `SRCDEST` mirror's directory
+    /// name, and the name of the checkout `pkgver()` runs inside.
+    pub name: String,
+    /// `_snapshot_ref=<ref>` when the recipe records the branch its pin
+    /// replaced; `None` means the mirror's default ref.
+    pub snapshot_ref: Option<String>,
+}
+
+/// The `git` command shape every site in this pass shares: agent and root
+/// shells inject `safe.bareRepository=explicit` (which makes a bare mirror
+/// unusable) plus filter config that would change archived or diffed bytes.
+fn snapshot_git() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env("GIT_CONFIG_COUNT", "0")
+        .env("GIT_TERMINAL_PROMPT", "0");
+    cmd
+}
+
+/// Read the primary source of a PKGBUILD and decide whether it is a snapshot.
+///
+/// The array is the one the BUILD reads (`pkgbuild_array_checked` evaluates
+/// the PKGBUILD the way makepkg does), because a token-shaped scrape of the
+/// source text gets `…{,.sig}` brace pairs and `$pkgver` wrong.
+pub fn snapshot_source(recipe_dir: &Path) -> Result<SnapshotSource, SnapshotRefusal> {
+    let sources = pkgbuild_array_checked(recipe_dir, "source").map_err(|_| {
+        SnapshotRefusal::RefUnresolvable {
+            reference: "<unreadable source array>".to_string(),
+        }
+    })?;
+    let primary = match sources.first() {
+        Some(s) => SourceEntry::new(s.clone()),
+        None => {
+            return Err(SnapshotRefusal::NotASnapshot {
+                tracking: "<no sources>".to_string(),
+            })
+        }
+    };
+    let Some(url) = primary.url() else {
+        return Err(SnapshotRefusal::NotASnapshot {
+            tracking: "<an in-tree file>".to_string(),
+        });
+    };
+    if primary.vcs().is_none() {
+        return Err(SnapshotRefusal::NotASnapshot {
+            tracking: "<a non-VCS download>".to_string(),
+        });
+    }
+    let (base, fragment) = match url.split_once('#') {
+        Some((b, f)) => (b, Some(f)),
+        None => (url, None),
+    };
+    // `?signed` is makepkg's verification suffix, not part of the ref name.
+    let fragment = fragment.map(|f| f.strip_suffix("?signed").unwrap_or(f));
+    let commit = match fragment {
+        Some(f) => match f.strip_prefix("commit=") {
+            Some(sha) if !sha.is_empty() => sha.to_string(),
+            _ => {
+                return Err(SnapshotRefusal::NotASnapshot {
+                    tracking: format!("#{f}"),
+                })
+            }
+        },
+        None => {
+            return Err(SnapshotRefusal::NotASnapshot {
+                tracking: "the default ref".to_string(),
+            })
+        }
+    };
+    // The mirror/checkout name is makepkg's own `get_filename` (see
+    // `makepkg_git_name`): an explicit `name::` prefix wins verbatim, a bare
+    // URL is basename-truncated at the first `.git` so `…/git.git` fetches
+    // into `SRCDEST/git`.
+    let Some(name) = makepkg_git_name(&primary) else {
+        return Err(SnapshotRefusal::NotASnapshot {
+            tracking: "<a source with no fetch name>".to_string(),
+        });
+    };
+    if name.is_empty() {
+        return Err(SnapshotRefusal::NotASnapshot {
+            tracking: "<a source whose fetch name is empty after makepkg's .git strip>".to_string(),
+        });
+    }
+    // `_snapshot_ref=` is a plain PKGBUILD variable: makepkg's source-fragment
+    // grammar accepts exactly one `#` fragment, so the branch a pin replaced
+    // has to be recorded here.
+    let snapshot_ref = match pkgbuild_var(recipe_dir, "_snapshot_ref") {
+        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => None,
+    };
+    Ok(SnapshotSource {
+        url: base.to_string(),
+        commit,
+        name,
+        snapshot_ref,
+    })
+}
+
+/// The candidate ref spellings, in resolution order.
+///
+/// A mirror can carry a TAG named like the branch and git resolves the
+/// ambiguous bare name to the tag — `autofdo-git` was pinned to a 2024 tag
+/// this way and its build died on `unknown target create_llvm_prof`. So the
+/// fully qualified remote-tracking ref is tried first, then the local branch,
+/// and only then the bare name.
+pub fn snapshot_ref_candidates(explicit: Option<&str>) -> Vec<String> {
+    match explicit {
+        Some(r) => vec![
+            format!("refs/remotes/origin/{r}"),
+            format!("refs/heads/{r}"),
+            r.to_string(),
+        ],
+        None => vec!["refs/remotes/origin/HEAD".to_string(), "HEAD".to_string()],
+    }
+}
+
+/// Resolve the last commit at or before `boundary` for the recipe's ref,
+/// reading the BARE MIRROR in `root` — never the network.
+pub fn snapshot_commit_before(
+    root: &Path,
+    candidates: &[String],
+    boundary: &str,
+) -> Result<String, SnapshotRefusal> {
+    let last = candidates.last().map(|s| s.as_str()).unwrap_or("HEAD");
+    let mut tip: Option<String> = None;
+    for c in candidates {
+        let out = snapshot_git()
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--verify", "--quiet"])
+            .arg(format!("{c}^{{commit}}"))
+            .output();
+        if let Ok(o) = out {
+            if o.status.success() {
+                tip = Some(String::from_utf8_lossy(&o.stdout).trim().to_string());
+                break;
+            }
+        }
+    }
+    let Some(tip) = tip else {
+        return Err(SnapshotRefusal::RefUnresolvable {
+            reference: last.to_string(),
+        });
+    };
+    // `rev-list -1 --before` takes the boundary as EXCLUSIVE of anything at or
+    // after it, which is exactly "last commit at or before Monday 00:00". It
+    // is operands with the RESOLVED tip, never `last`: the candidate that
+    // actually resolved may be any of them.
+    let out = snapshot_git()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "-1", &format!("--before={boundary}")])
+        .arg(&tip)
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let sha = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if sha.is_empty() {
+                Err(SnapshotRefusal::NoCommitBeforeBoundary {
+                    boundary: boundary.to_string(),
+                })
+            } else {
+                Ok(sha)
+            }
+        }
+        Ok(_) => Err(SnapshotRefusal::RefUnresolvable {
+            reference: last.to_string(),
+        }),
+        Err(_) => Err(SnapshotRefusal::MirrorMissing {
+            path: root.display().to_string(),
+        }),
+    }
+}
+
+/// One pinned VCS source the evaluation must materialize in `$srcdir`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotCheckout {
+    /// The makepkg source name — the directory under `$srcdir`.
+    pub name: String,
+    /// The `SRCDEST` mirror the commit is read from.
+    pub mirror: PathBuf,
+    /// The commit to check out detached.
+    pub commit: String,
+}
+
+/// Every `#commit=`-pinned VCS source of a recipe, ready to materialize.
+///
+/// `pkgver()` is recipe code: it may read any source's checkout, not just the
+/// primary one (`onlyoffice-git` computes its version from `$srcdir/core`,
+/// the SECOND source's pin, because upstream tags several build numbers onto
+/// one commit). Materializing only the primary would make such a recipe
+/// unevaluable and park it forever, so the whole pinned set is collected and
+/// each entry is resolved to its own mirror and commit. A pinned source whose
+/// mirror is absent is a deferral: the evaluation needs evidence that is not
+/// here, and a partially materialized `$srcdir` can only mislead.
+pub fn snapshot_checkouts(
+    recipe_dir: &Path,
+    src_root: &Path,
+    primary: &SnapshotSource,
+    resolved_commit: &str,
+) -> Result<Vec<SnapshotCheckout>, SnapshotRefusal> {
+    let sources = pkgbuild_array_checked(recipe_dir, "source").map_err(|_| {
+        SnapshotRefusal::RefUnresolvable {
+            reference: "<unreadable source array>".to_string(),
+        }
+    })?;
+    let mut out: Vec<SnapshotCheckout> = Vec::new();
+    for raw in &sources {
+        let entry = SourceEntry::new(raw.clone());
+        if entry.vcs().is_none() {
+            continue;
+        }
+        let Some(url) = entry.url() else { continue };
+        let Some((_, fragment)) = url.split_once('#') else {
+            continue;
+        };
+        let fragment = fragment.strip_suffix("?signed").unwrap_or(fragment);
+        let Some(commit) = fragment.strip_prefix("commit=") else {
+            continue;
+        };
+        if commit.is_empty() {
+            continue;
+        }
+        // The mirror/checkout name is makepkg's own `get_filename` (see
+        // `makepkg_git_name`): an explicit `name::` prefix wins verbatim, a
+        // bare URL is basename-truncated at the first `.git`.
+        let Some(name) = makepkg_git_name(&entry) else {
+            continue;
+        };
+        if name.is_empty() || out.iter().any(|c| c.name == name) {
+            continue;
+        }
+        // The primary source's commit is the one the caller already resolved
+        // (the pin about to be written); every other source is materialized at
+        // the pin the recipe already records.
+        let commit = if name == primary.name {
+            resolved_commit.to_string()
+        } else {
+            commit.to_string()
+        };
+        let mirror = src_root.join(&name);
+        if !mirror.is_dir() {
+            return Err(SnapshotRefusal::MirrorMissing {
+                path: mirror.display().to_string(),
+            });
+        }
+        out.push(SnapshotCheckout {
+            name,
+            mirror,
+            commit,
+        });
+    }
+    Ok(out)
+}
+
+/// Evaluate the recipe's own `pkgver()` over a materialized `$srcdir`.
+///
+/// This is makepkg's own contract, not an imitation: `pkgver()` runs with
+/// `$srcdir` as its working directory and with `$startdir` pointing at the
+/// recipe, which is why every `cd <name>` in a `pkgver()` body lands in a
+/// checkout. Each checkout is a `--shared --no-checkout` clone (hardlinked
+/// objects, no second copy of the history) at its own detached commit.
+pub fn snapshot_pkgver_at(
+    checkouts: &[SnapshotCheckout],
+    recipe_dir: &Path,
+    scratch: &Path,
+) -> Result<String, SnapshotRefusal> {
+    let srcdir = scratch.join("srcdir");
+    fs::create_dir_all(&srcdir).map_err(|_| SnapshotRefusal::PkgverEvaluationFailed {
+        detail: "cannot create the scratch srcdir".to_string(),
+    })?;
+    for c in checkouts {
+        let checkout = srcdir.join(&c.name);
+        let clone = snapshot_git()
+            .args(["clone", "--quiet", "--shared", "--no-checkout"])
+            .arg(&c.mirror)
+            .arg(&checkout)
+            .output()
+            .map_err(|e| SnapshotRefusal::PkgverEvaluationFailed {
+                detail: format!("git clone {}: {e}", c.name),
+            })?;
+        if !clone.status.success() {
+            return Err(SnapshotRefusal::PkgverEvaluationFailed {
+                detail: summary_line(&clone.stderr),
+            });
+        }
+        let co = snapshot_git()
+            .arg("-C")
+            .arg(&checkout)
+            .args(["checkout", "--quiet", "--detach", &c.commit])
+            .output()
+            .map_err(|e| SnapshotRefusal::PkgverEvaluationFailed {
+                detail: format!("git checkout {}: {e}", c.name),
+            })?;
+        if !co.status.success() {
+            return Err(SnapshotRefusal::PkgverEvaluationFailed {
+                detail: summary_line(&co.stderr),
+            });
+        }
+    }
+    // The scratch tree is engine-made (root under a privileged run) and the
+    // evaluation below executes recipe code as the build user: git refuses to
+    // read a repository owned by another user ("dubious ownership"), so every
+    // rev-parse/describe inside pkgver() would fail. Hand the whole scratch
+    // over first — the clone, its hardlinked objects and the srcdir around
+    // them.
+    if let Err(e) = gsa_model::privilege::own_to_build_user(scratch) {
+        return Err(SnapshotRefusal::PkgverEvaluationFailed {
+            detail: format!("cannot hand the pin evaluation to the build user: {e}"),
+        });
+    }
+    // The evaluator is the recipe's own code (arbitrary shell), so it runs as
+    // the build user like every other recipe evaluation (§ privilege).
+    let out = gsa_model::privilege::build_command("bash")
+        .arg("-c")
+        .arg(PKGVER_EVAL_SCRIPT)
+        .arg("_")
+        .arg(&srcdir)
+        .arg(recipe_dir)
+        .output()
+        .map_err(|e| SnapshotRefusal::PkgverEvaluationFailed {
+            detail: format!("bash: {e}"),
+        })?;
+    match out.status.code() {
+        Some(0) => {
+            let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !version_value_ok(VersionField::Pkgver, &value) {
+                return Err(SnapshotRefusal::PkgverUnsafe { value });
+            }
+            Ok(value)
+        }
+        Some(2) => Err(SnapshotRefusal::PkgverFunctionMissing),
+        _ => Err(SnapshotRefusal::PkgverEvaluationFailed {
+            detail: summary_line(&out.stderr),
+        }),
+    }
+}
+
+/// `$srcdir`/`$startdir`/`$pkgdir` set the way makepkg sets them; `pkgver()`
+/// is then invoked from `$srcdir` (makepkg `run_function_safe pkgver`).
+const PKGVER_EVAL_SCRIPT: &str = r#"
+srcdir=$1
+startdir=$2
+pkgdir=$2/.gsa-pkgver-eval
+export srcdir startdir pkgdir
+mkdir -p "$pkgdir" || exit 1
+cd "$startdir" || exit 1
+source ./PKGBUILD >/dev/null 2>&1 || exit 1
+type pkgver >/dev/null 2>&1 || exit 2
+cd "$srcdir" || exit 1
+pkgver
+"#;
+
+/// The last non-empty stderr line of a failed tool — the operator's hint,
+/// never a dump.
+fn summary_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("no diagnostic")
+        .trim()
+        .to_string()
+}
+
+/// One recipe's snapshot-pin pass. Success leaves the recipe rewritten and
+/// UNCOMMITTED (the maintainer reviews and commits, rule 18); every failure
+/// leaves it byte-identical.
+pub fn sync_snapshot(
+    recipe_dir: &Path,
+    repo_root: &Path,
+    src_root: &Path,
+    boundary: &str,
+) -> SyncReport {
+    let pkg = recipe_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // Absent EVIDENCE defers (retry when the mirror is there); a defective
+    // RECIPE refuses. Folding the two would make one un-fetched mirror abort
+    // a full-set `-Sy` (rc 3) instead of parking the recipe, and would hide a
+    // genuinely un-pinnable recipe inside a retryable park. `refuse` is the
+    // recipe-defect arm; `defer` is the evidence arm.
+    let refuse = |class: SnapshotRefusal, restored: RestoreStatus| SyncReport {
+        pkg: pkg.clone(),
+        outcome: SyncOutcome::Refused {
+            class: RefusalClass::UnsafeVersionText,
+            message: format!("{} — {}", class.keyword(), class.message()),
+            restored,
+        },
+        anchor: None,
+        rows: Vec::new(),
+        log: vec![format!("{pkg}: {}", class.message())],
+    };
+    let defer = |class: SnapshotRefusal| SyncReport {
+        pkg: pkg.clone(),
+        outcome: SyncOutcome::Deferred {
+            reason: DeferReason::SourceUnfetchable,
+            message: format!("{} — {}", class.keyword(), class.message()),
+            restored: RestoreStatus::NothingToRestore,
+        },
+        anchor: None,
+        rows: Vec::new(),
+        log: vec![format!("{pkg}: {}", class.message())],
+    };
+
+    let source = match snapshot_source(recipe_dir) {
+        Ok(s) => s,
+        // Not a snapshot is not a refusal: the recipe simply is not this
+        // pass's business, and reporting it as an error would refuse every
+        // floating recipe in a full-set `-Sy`.
+        Err(SnapshotRefusal::NotASnapshot { .. }) => {
+            return SyncReport::nochange(pkg, NoChangeReason::NotASnapshot)
+        }
+        Err(e) => return refuse(e, RestoreStatus::NothingToRestore),
+    };
+
+    // The mirror: `SRCDEST/<makepkg source name>`. Absent is a deferral-style
+    // refusal, never a network fetch — a pin placed from a live query at edit
+    // time cannot be reproduced from the tree.
+    let mirror = src_root.join(&source.name);
+    if !mirror.is_dir() {
+        return defer(SnapshotRefusal::MirrorMissing {
+            path: mirror.display().to_string(),
+        });
+    }
+
+    let candidates = snapshot_ref_candidates(source.snapshot_ref.as_deref());
+    let sha = match snapshot_commit_before(&mirror, &candidates, boundary) {
+        Ok(s) => s,
+        // Both are properties of the MIRROR's contents, not of the recipe: a
+        // stale or pruned clone is fixed by fetching, so these defer.
+        Err(e) => return defer(e),
+    };
+    if sha.eq_ignore_ascii_case(&source.commit) {
+        return SyncReport::nochange(pkg, NoChangeReason::MetadataCurrent);
+    }
+
+    // A move DOWN is not this pass's business: the boundary can precede the
+    // pin already recorded (a re-run later in the same week). Only forward
+    // moves are written, so a second `-Sy` in one week is a no-op rather than
+    // a rewind.
+    let is_ancestor = snapshot_git()
+        .arg("-C")
+        .arg(&mirror)
+        .args(["merge-base", "--is-ancestor", &source.commit, &sha])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !is_ancestor {
+        return SyncReport::nochange(pkg, NoChangeReason::Current);
+    }
+
+    // The version the new pin implies, from the recipe's OWN pkgver(), in the
+    // working directory makepkg uses. Refusing here (never writing the pin
+    // alone) is what keeps `#commit=` and `pkgver=` from ever disagreeing.
+    let scratch = match ScratchDir::new("snapshot-pin", repo_root) {
+        Ok(s) => s,
+        Err(_) => {
+            return refuse(
+                SnapshotRefusal::PkgverEvaluationFailed {
+                    detail: "no scratch directory for the pin evaluation".to_string(),
+                },
+                RestoreStatus::NothingToRestore,
+            )
+        }
+    };
+    // Every pinned source is materialized, not just the primary: pkgver() is
+    // recipe code and may read any of them.
+    let checkouts = match snapshot_checkouts(recipe_dir, src_root, &source, &sha) {
+        Ok(c) => c,
+        Err(e) => return defer(e),
+    };
+    let new_pkgver = match snapshot_pkgver_at(&checkouts, recipe_dir, scratch.path()) {
+        Ok(v) => v,
+        // No `pkgver()` at all: the version a pin implies cannot be derived,
+        // so the pin is left alone and the recipe is named — a no-change, the
+        // same class `sync_arch` gives a `pkgver()`-driven recipe (one
+        // exempt recipe must not abort a full-set `-Sy`). A checkout or
+        // evaluation that failed is an environment problem and defers.
+        Err(e @ SnapshotRefusal::PkgverFunctionMissing) => {
+            let message = format!("{pkg}: {}", e.message());
+            let mut report = SyncReport::nochange(pkg, NoChangeReason::PkgverFunction);
+            report.log = vec![message];
+            return report;
+        }
+        Err(e @ SnapshotRefusal::PkgverUnsafe { .. }) => {
+            return refuse(e, RestoreStatus::NothingToRestore)
+        }
+        Err(e) => return defer(e),
+    };
+    // The skew the pin uncovers: the committed `pkgver` must equal what the
+    // recipe's own `pkgver()` computes at the pin it RECORDS. A pin move
+    // normally changes the version, so a mismatch against the NEW pin proves
+    // nothing — the OLD pin has to be evaluated to tell "the version moved"
+    // from "the recipe was hand-edited after its pin stopped agreeing with
+    // it". Only a real move pays for the second evaluation, and a failure
+    // here is not a gate: the pin rewrite below is valid either way, so an
+    // unanswerable old pin simply reports no skew.
+    let recorded = pkgbuild_var(recipe_dir, "pkgver").unwrap_or_default();
+    let skew = if recorded.is_empty() || recorded == new_pkgver {
+        None
+    } else {
+        // The recorded pin IS `source.commit`, so materializing at it needs no
+        // second `SnapshotSource` — only a scratch tree of its own.
+        let old_pkgver = ScratchDir::new("snapshot-pin-old", repo_root)
+            .ok()
+            .and_then(|old_scratch| {
+                snapshot_checkouts(recipe_dir, src_root, &source, &source.commit)
+                    .ok()
+                    .and_then(|co| snapshot_pkgver_at(&co, recipe_dir, old_scratch.path()).ok())
+            });
+        match old_pkgver {
+            Some(v) if v != recorded => Some((recorded.clone(), v)),
+            _ => None,
+        }
+    };
+
+    let mut tx = match RecipeTransaction::begin(recipe_dir, repo_root) {
+        Ok(t) => t,
+        Err(_) => {
+            return refuse(
+                SnapshotRefusal::PkgverEvaluationFailed {
+                    detail: "no rollback-safe snapshot".to_string(),
+                },
+                RestoreStatus::NothingToRestore,
+            )
+        }
+    };
+    let staged = match tx.stage() {
+        Ok(p) => p,
+        Err(_) => {
+            let restored = tx.restore();
+            return refuse(
+                SnapshotRefusal::PkgverEvaluationFailed {
+                    detail: "cannot stage the pin rewrite".to_string(),
+                },
+                restored,
+            );
+        }
+    };
+
+    let text = match fs::read_to_string(&staged) {
+        Ok(t) => t,
+        Err(_) => {
+            let restored = tx.restore();
+            return refuse(
+                SnapshotRefusal::PkgverEvaluationFailed {
+                    detail: "cannot read the staged PKGBUILD".to_string(),
+                },
+                restored,
+            );
+        }
+    };
+    // The fragment is rewritten by its VALUE, not by a source-text pattern:
+    // the pin may be spelled `#commit=$_commit`, `#commit=${_commit}` or
+    // literally, and a pattern that guesses wrong either misses (leaving a
+    // pin nobody moved) or matches an unrelated sha.
+    let Some(rewritten) = rewrite_snapshot_pin(&text, &source.commit, &sha) else {
+        let restored = tx.restore();
+        return refuse(
+            SnapshotRefusal::NotASnapshot {
+                tracking: "<the pinned fragment is not spelled in the PKGBUILD text>".to_string(),
+            },
+            restored,
+        );
+    };
+    let rewritten = rewrite_lines(&rewritten, "pkgver=", &format!("pkgver={new_pkgver}"));
+    if write_atomic(&staged, &rewritten).is_err() {
+        let restored = tx.restore();
+        return refuse(
+            SnapshotRefusal::PkgverEvaluationFailed {
+                detail: "cannot write the staged PKGBUILD".to_string(),
+            },
+            restored,
+        );
+    }
+
+    if tx.publish().is_err() {
+        let restored = tx.restore();
+        return refuse(
+            SnapshotRefusal::PkgverEvaluationFailed {
+                detail: "cannot publish the pin rewrite".to_string(),
+            },
+            restored,
+        );
+    }
+
+    // The committed version moved, so the committed `.SRCINFO` is stale truth
+    // from this moment — refresh it in the same pass (the Arch path's rule).
+    let srcinfo = refresh_package_srcinfo(recipe_dir);
+    let pkgrel = pkgbuild_var(recipe_dir, "pkgrel").unwrap_or_default();
+    let new_version = format!("{new_pkgver}-{pkgrel}");
+    let old_version = format!("{recorded}-{pkgrel}");
+    let mut log = vec![format!(
+        "{pkg}: snapshot pin {} → {} (Monday boundary {boundary})",
+        short_sha(&source.commit),
+        short_sha(&sha)
+    )];
+    if let Some((was, computed)) = &skew {
+        log.push(format!(
+            "{pkg}: version skew found at the OLD pin — PKGBUILD said {was}, its pkgver() computes {computed} there; both fields are now written at the new pin, review the version jump before committing"
+        ));
+    }
+    SyncReport {
+        pkg: pkg.clone(),
+        outcome: SyncOutcome::VersionMoved {
+            old: old_version.clone(),
+            new: new_version.clone(),
+            moved_sources: vec![format!(
+                "pin #commit={} → {sha} (Monday boundary {boundary})",
+                source.commit
+            )],
+        },
+        anchor: None,
+        rows: vec![DispositionRow::VersionSynced {
+            pkg: pkg.clone(),
+            old: old_version.clone(),
+            new: new_version.clone(),
+            provider: "Monday snapshot".to_string(),
+            srcinfo,
+        }],
+        log,
+    }
+}
+
+/// Rewrite the `#commit=<old>` fragment of the PRIMARY source entry to `<new>`,
+/// by value.
+///
+/// The recipe may spell the pin three ways — `#commit=<sha>` literally,
+/// `#commit=$_commit`, `#commit=${_commit}` — and the sha itself may live in a
+/// `_commit=` line instead of the source array. Both shapes are handled by
+/// value: the source fragment first, and when it is a variable reference the
+/// variable's own assignment line. A pin that is not in the text at all is a
+/// refusal, never a silent no-op (that would report a moved pin nobody wrote).
+fn rewrite_snapshot_pin(text: &str, old: &str, new: &str) -> Option<String> {
+    // 1. The literal fragment, in the source array.
+    if text.contains(&format!("#commit={old}")) {
+        return Some(text.replace(&format!("#commit={old}"), &format!("#commit={new}")));
+    }
+    // 2. The fragment references a variable (`#commit=$_commit` /
+    //    `#commit=${_commit}`); the sha lives on that variable's own line.
+    //    Only a variable whose CURRENT value is the pinned sha qualifies, so
+    //    a same-named variable carrying another sha cannot be moved by
+    //    accident.
+    for line in text.lines() {
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        // A PKGBUILD assignment may carry a trailing comment (`_commit=<sha> #
+        // = master 2023-10-07 = v2.3`); bash strips it, and so must this, or
+        // the value comparison sees the comment as part of the sha.
+        let value = match value.find('#') {
+            Some(i) => &value[..i],
+            None => value,
+        };
+        if value.trim().trim_matches(['"', '\'']) != old {
+            continue;
+        }
+        if !valid_name(name) {
+            continue;
+        }
+        // The reference must be THIS variable, so `$_commit` (unbraced) and
+        // `${_commit}` both count while `$_commit_other` does not.
+        let braced = format!("${{{name}}}");
+        let bare = format!("${name}");
+        if !text.contains(&braced) && !text.contains(&bare) {
+            continue;
+        }
+        return Some(rewrite_lines(
+            text,
+            &format!("{name}="),
+            &format!("{name}={new}"),
+        ));
+    }
+    None
+}
+
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(12).collect()
+}
 #[cfg(test)]
 mod tests {
-    use super::{hash_bytes, toml_section, toml_str_value, NvcheckerRunner, ProviderFamily};
+    use super::{
+        hash_bytes, monday_boundary, rewrite_snapshot_pin, snapshot_ref_candidates, toml_section,
+        toml_str_value, NvcheckerRunner, ProviderFamily,
+    };
 
     #[test]
     fn hash_bytes_covers_the_coreutils_matrix() {
@@ -1637,6 +2492,85 @@ mod tests {
     fn toml_section_finds_the_named_table_only() {
         let text = "[a]\nsource = 'x'\n[b]\nsource = 'y'\n";
         assert_eq!(toml_section(text, "b").as_deref(), Some("source = 'y'"));
+    }
+
+    // ── the snapshot-pin provider's pure pieces (W5) ──────────────────────
+    //
+    // These are the parts of the pass that can be wrong without any tool
+    // running: the calendar, the ref order and the pin rewrite. A bug in any
+    // of them moves a pin to the wrong commit or leaves one nobody wrote, and
+    // the integration fixture cannot tell a wrong-but-consistent boundary from
+    // a right one (it derives its own dates from the same boundary).
+
+    #[test]
+    fn monday_boundary_is_the_most_recent_monday_midnight_utc() {
+        // Fixed instants with known weekdays. 2026-11-12 is a Thursday, so
+        // the boundary is Monday 2026-11-09. A Monday resolves to THAT day
+        // (the week it closes), never the previous week's — a Monday campaign
+        // must not re-pin to week-old data.
+        let thu_2026_11_12 = 1_794_441_600; // 2026-11-12T00:00:00Z, a Thursday
+        assert_eq!(monday_boundary(thu_2026_11_12), "2026-11-09T00:00:00Z");
+        // The same Monday, at 00:00:00 and at 23:59:59.
+        let mon_2026_11_09 = 1_794_182_400; // 2026-11-09T00:00:00Z
+        assert_eq!(monday_boundary(mon_2026_11_09), "2026-11-09T00:00:00Z");
+        assert_eq!(
+            monday_boundary(mon_2026_11_09 + 86_399),
+            "2026-11-09T00:00:00Z"
+        );
+        // The Sunday before and the Sunday after.
+        assert_eq!(monday_boundary(mon_2026_11_09 - 1), "2026-11-02T00:00:00Z");
+        assert_eq!(
+            monday_boundary(mon_2026_11_09 + 7 * 86_400),
+            "2026-11-16T00:00:00Z"
+        );
+        // The epoch is a Thursday.
+        assert_eq!(monday_boundary(0), "1969-12-29T00:00:00Z");
+    }
+
+    #[test]
+    fn snapshot_ref_candidates_prefer_the_remote_tracking_ref() {
+        // A mirror can carry a TAG named like the branch, and git resolves the
+        // ambiguous bare name to the tag (autofdo-git was pinned to a 2024 tag
+        // this way, and its build died on an unknown target). The qualified
+        // ref must therefore come first, the bare name last.
+        assert_eq!(
+            snapshot_ref_candidates(Some("master")),
+            vec![
+                "refs/remotes/origin/master".to_string(),
+                "refs/heads/master".to_string(),
+                "master".to_string(),
+            ]
+        );
+        // No recorded branch: the mirror's own default.
+        assert_eq!(
+            snapshot_ref_candidates(None),
+            vec!["refs/remotes/origin/HEAD".to_string(), "HEAD".to_string(),]
+        );
+    }
+
+    #[test]
+    fn rewrite_snapshot_pin_moves_a_literal_fragment_by_value() {
+        let text = "source=(\"x::git+https://e.invalid/x#commit=aaaa\")\n";
+        let moved = rewrite_snapshot_pin(text, "aaaa", "bbbb").expect("literal fragment");
+        assert!(moved.contains("#commit=bbbb"), "{moved}");
+        assert!(!moved.contains("#commit=aaaa"), "{moved}");
+        // A sha the text does not carry is NOT a rewrite: reporting a moved
+        // pin nobody wrote is the failure this guards.
+        assert_eq!(rewrite_snapshot_pin(text, "cccc", "dddd"), None);
+    }
+
+    #[test]
+    fn rewrite_snapshot_pin_moves_the_variable_that_holds_the_sha() {
+        // The sha may live in a `_commit=` line instead of the source array,
+        // in either reference spelling — and a trailing comment must not
+        // defeat the comparison (real PKGBUILDs carry `_commit=<sha> # master`).
+        let text = "_commit=aaaa # = master 2023-10-07\nsource=(\"x::git+https://e.invalid/x#commit=$_commit\")\n";
+        let moved = rewrite_snapshot_pin(text, "aaaa", "bbbb").expect("variable fragment");
+        assert!(moved.contains("_commit=bbbb"), "{moved}");
+        assert!(!moved.contains("_commit=aaaa"), "{moved}");
+        // A same-named variable holding another sha is not moved by accident.
+        let other = "_commit=zzzz\nsource=(\"x::git+https://e.invalid/x#commit=$_commit\")\n";
+        assert_eq!(rewrite_snapshot_pin(other, "aaaa", "bbbb"), None);
     }
 }
 
@@ -3063,6 +3997,10 @@ pub enum NoChangeReason {
     LocalPkgrelAhead,
     /// Nothing changed (nvchecker parity).
     MetadataCurrent,
+    /// The recipe's primary source is not a `#commit=` pin, so the snapshot
+    /// pass has nothing to advance (it is not a refusal — most of the set is
+    /// not pinned).
+    NotASnapshot,
 }
 
 impl NoChangeReason {
@@ -3077,6 +4015,7 @@ impl NoChangeReason {
             NoChangeReason::Current => "current",
             NoChangeReason::LocalPkgrelAhead => "local-pkgrel-ahead",
             NoChangeReason::MetadataCurrent => "metadata-current",
+            NoChangeReason::NotASnapshot => "not-a-snapshot",
         }
     }
 }

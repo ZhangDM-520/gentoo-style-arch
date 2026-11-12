@@ -133,6 +133,11 @@ pub struct PassConfig {
     /// caller must print: a silently ignored knob would make skip decisions
     /// unexplainable.
     pub notes: Vec<String>,
+    /// The resolved `SRCDEST` mirror root (`config::resolve_srcdest`), the one
+    /// place the snapshot-pin pass reads a recipe's own bare clone from.
+    /// `None` when the ladder cannot answer: a pinned recipe then defers
+    /// instead of guessing a path.
+    pub srcdest: Option<PathBuf>,
 }
 
 /// Resolve the pass configuration from an invocation; `Err` is a usage-class
@@ -173,7 +178,14 @@ pub fn pass_config(inv: &Invocation) -> Result<PassConfig, String> {
         tolerance: resolution.tolerance,
         no_sync: inv.no_sync,
         notes: resolution.warning.into_iter().collect(),
+        srcdest: gsa_model::config::resolve_srcdest(),
     })
+}
+
+/// The short form of a commit sha for a message (the pass's own `-Sy` render
+/// keeps its 12-character spelling in `gsa_recipe::sync`).
+fn short_sha_text(sha: &str) -> String {
+    sha.chars().take(12).collect()
 }
 
 /// The PATH-resolved backoff sleeper: fixtures cap latency with a `sleep`
@@ -260,10 +272,64 @@ fn nvchecker_provider(
 /// One recipe's version-sync pass (`-Sy` and the pre-build step). The recipe
 /// is left rewritten and UNCOMMITTED on success, byte-identical on every
 /// failure path (rule 18).
-pub fn sync_one(recipe_dir: &Path, root: &Path, idx: usize, graph: &Graph<'_>) -> SyncReport {
+///
+/// The PROVIDER is chosen by the recipe's shape, one dispatch site:
+/// `#commit=`-pinned primary source → the snapshot-pin pass (W5); otherwise the
+/// `version-sync=nvchecker` tag → the nvchecker path; otherwise the Arch repo
+/// provider (which no-ops outside `packages/stable`).
+pub fn sync_one(
+    recipe_dir: &Path,
+    root: &Path,
+    idx: usize,
+    graph: &Graph<'_>,
+    srcdest: Option<&Path>,
+) -> SyncReport {
     let policy = SyncPolicy {
         repo_root: root.to_path_buf(),
     };
+    // The snapshot pass owns a `#commit=` pin EXCEPT under `packages/stable`,
+    // which the Arch provider owns (its placement gate is `sync_arch`'s, and
+    // its pins are release anchors — `#commit=` at a tag — rather than the
+    // weekly snapshots this pass advances). `snapshot_source` answers
+    // `NotASnapshot` for everything else, so the recipe's own source plus
+    // this one placement exclusion is the whole dispatch: no tag, no group
+    // and no name decides it.
+    let stable_staged = recipe_dir.starts_with(root.join("packages").join("stable"));
+    if let Some(snapshot) = (!stable_staged)
+        .then(|| sync::snapshot_source(recipe_dir))
+        .and_then(Result::ok)
+    {
+        let Some(srcdest) = srcdest else {
+            // Absent EVIDENCE, the same arm `mirror-missing` takes: no SRCDEST
+            // means no mirror could be read, which is fetchable state, not a
+            // defective recipe. Folding it into a refusal would abort a
+            // full-set `-Sy` on a host whose ladder answers nothing.
+            let pkg = recipe_dir
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            return SyncReport {
+                pkg: pkg.clone(),
+                outcome: SyncOutcome::Deferred {
+                    reason: sync::DeferReason::SourceUnfetchable,
+                    message: format!(
+                        "{pkg}: snapshot pin {} cannot be advanced — no SRCDEST resolved, so the source mirror is unreachable",
+                        short_sha_text(&snapshot.commit)
+                    ),
+                    restored: sync::RestoreStatus::NothingToRestore,
+                },
+                anchor: None,
+                rows: Vec::new(),
+                log: Vec::new(),
+            };
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let boundary = sync::monday_boundary(now);
+        return sync::sync_snapshot(recipe_dir, root, srcdest, &boundary);
+    }
     let nvchecker = graph.record(idx).tags.contains(&Tag::VersionSyncNvchecker);
     if !nvchecker {
         return sync::sync_arch(recipe_dir, &sync::ArchOfficial, &policy);
@@ -783,7 +849,7 @@ fn prepare_one(
 
     // ── 2. version-sync (unless --no-sync) ─────────────────────────────────
     if !cfg.no_sync {
-        let report = sync_one(recipe_dir, root, idx, graph);
+        let report = sync_one(recipe_dir, root, idx, graph, cfg.srcdest.as_deref());
         let (class, mut notes) = classify_sync(&report, absorb_wait(graph, idx));
         log.append(&mut notes);
         match class {
@@ -1027,6 +1093,7 @@ pub fn sync_phase(
     root: &Path,
     graph: &Graph<'_>,
     selection: &Selection,
+    srcdest: Option<&Path>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> SyncPhase {
@@ -1036,7 +1103,7 @@ pub fn sync_phase(
     for (_, id) in &selection.listed {
         let idx = graph.index_of(id.as_str()).expect("selection ids resolve");
         let recipe_dir = root.join(&graph.record(idx).path);
-        let report = sync_one(&recipe_dir, root, idx, graph);
+        let report = sync_one(&recipe_dir, root, idx, graph, srcdest);
         let (class, notes) = classify_sync(&report, absorb_wait(graph, idx));
         // H4: the per-recipe status line first (the verdict headline), then
         // the loud notes below as its detail.
@@ -1158,7 +1225,8 @@ fn run_sync_pass_inner(
         return Err(exit);
     }
 
-    let phase = sync_phase(&root, &graph, &selection, out, err);
+    let srcdest = gsa_model::config::resolve_srcdest();
+    let phase = sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
     if let Some(class) = phase.refused {
         // A one-shot `-Sy` renders the disposition block only: the contract
         // (§H.1/H.2) owes a run record to build-shaped runs, and `-Sy` is
@@ -1376,6 +1444,7 @@ mod tests {
             tolerance: 1,
             no_sync: true,
             notes: Vec::new(),
+            srcdest: None,
         };
         let mut log = Vec::new();
         let plan = skip_decision(
