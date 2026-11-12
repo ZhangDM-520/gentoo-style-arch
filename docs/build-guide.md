@@ -647,8 +647,17 @@ engine change, and a shipped completion can never disagree with the parser.
   diagnostic into the prompt. That is the one place the
   unreadable-is-not-absent rule does not apply — see contract §D.1.
 - Verifying a host: `gsa --print-completion fish | fish -n` (and the bash/zsh
-  equivalents) after an engine upgrade; re-centre the files if `gsa-pm` was
-  installed before this seam existed.
+  equivalents) after an engine upgrade. That the three files are actually
+  *placed* is the `gsa-pm` packaging's job and is pinned there, not here:
+  `gsa --print-conf` and `--print-completion` ship text, and a recipe that
+  forgets the `install` line leaves the seam correct and `TAB` falling back to
+  filenames. `ls /usr/share/{fish/vendor_completions.d/gsa.fish,bash-completion/completions/gsa,zsh/site-functions/_gsa}`
+  after installing `gsa-pm` is the one-line check.
+- The engine publishes its own list of text-producing seams:
+  `gsa --seam-roster` prints `--print-conf` and `--print-completion`, one per
+  line. `gsa-pm`'s packaging fixture diffs its roster against that, so an
+  engine seam added without a packaging line fails the recipe battery rather
+  than shipping to nobody (engine ADR 0006).
 
 ## Environment surface
 

@@ -613,6 +613,13 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
 
 ### Install, ABI and the record
 
+- **A `--print-*` seam is half a feature; the shipped file is the other half and
+  it lives in the other repository**: `--print-conf`/`--print-completion`
+  print text that `gsa-pm` must package, so a missing `install` line leaves the
+  seam correct, its engine fixture green, and the surface absent on every host
+  (2026-11-11: completion wrappers shipped to nobody; ADR 0006). Enforcement is
+  recipe-side (`tests/gsa-pm-shipped-files.sh` compares the installed bytes
+  with the engine's own output) — an engine fixture cannot see the gap.
 - **A completeness check must not bless the empty set**: `missing.is_empty()`
   over an empty expectation reads as "all covered". Zero archives is always
   `nothing-built` → build.

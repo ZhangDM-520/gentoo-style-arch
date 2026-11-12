@@ -185,10 +185,23 @@ printf 'zlib-fixture\n' >"$ws/config/sets/deskworld"
     ((FIXTURE_RC == 0)) || fail "6: --help exited $FIXTURE_RC"
     [[ $FIXTURE_OUTPUT != *'--complete'* ]] ||
         fail "6: --help names a hidden seam: $FIXTURE_OUTPUT"
-    for seam in '--complete' '--print-completion'; do
-        grep -Fq "\`$seam" "$repo/docs/gsa-contract.md" ||
+    for seam in '--complete' '--print-completion' '--seam-roster'; do
+        grep -Fq -- "\`$seam" "$repo/docs/gsa-contract.md" ||
             fail "6: the contract does not own $seam (§D.1)"
     done
+    # `--seam-roster` publishes TEXT_SEAMS, which gsa-pm's packaging battery
+    # diffs against its own roster (ADR 0006). It must name the live seams and
+    # must not name itself: a `--print-*` name would owe a shipped file.
+    run_engine_user "$ws" --seam-roster
+    ((FIXTURE_RC == 0)) || fail "6: --seam-roster exited $FIXTURE_RC"
+    grep -qx -- '--print-conf' <<<"$FIXTURE_OUTPUT" ||
+        fail "6: --seam-roster omits --print-conf: $FIXTURE_OUTPUT"
+    grep -qx -- '--print-completion' <<<"$FIXTURE_OUTPUT" ||
+        fail "6: --seam-roster omits --print-completion: $FIXTURE_OUTPUT"
+    [[ $FIXTURE_OUTPUT != *'--seam-roster'* ]] ||
+        fail "6: --seam-roster names itself (it would owe a shipped file)"
+    grep -Fq -- '--seam-roster' "$repo/docs/gsa-contract.md" ||
+        fail "6: the contract does not own --seam-roster (§D.1)"
     grep -Fq 'fail-soft' "$repo/docs/gsa-contract.md" ||
         fail "6: the contract does not state the fail-soft exception"
     printf '6: the seam is hidden but contractual\n'

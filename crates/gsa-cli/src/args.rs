@@ -538,6 +538,10 @@ pub enum Hidden {
     /// which the `gsa-pm` recipe installs. Grammar-free by design — it calls
     /// `--complete` rather than restating the grammar in three languages.
     PrintCompletion(String),
+    /// `--seam-roster`: the text-producing seams (`TEXT_SEAMS`) one per line,
+    /// so the recipe battery can prove its packaging roster covers every one.
+    /// Reads nothing, mutates nothing, needs no workspace.
+    SeamRoster,
 }
 
 /// One parsed invocation.
@@ -663,7 +667,7 @@ pub enum Parsed {
     Hidden(Hidden),
 }
 
-const HIDDEN_SEAMS: [&str; 12] = [
+const HIDDEN_SEAMS: [&str; 13] = [
     "--install-decide",
     "--lane-job",
     "--fetch-job",
@@ -676,7 +680,18 @@ const HIDDEN_SEAMS: [&str; 12] = [
     "--print-conf",
     "--complete",
     "--print-completion",
+    "--seam-roster",
 ];
+
+/// Seams whose verb is `--print-*`: they emit a file body that `gsa-pm` must
+/// package (contract §D.1, ADR 0006). `gsa --seam-roster` publishes this list
+/// so the recipe battery can diff its packaging roster against it — an engine
+/// seam added without a `gsa-pm` row then fails that battery by name instead
+/// of shipping to nobody (2026-11-11, the completion wrappers).
+///
+/// Deliberately NOT named `--print-something`: a `--print-*` name would make
+/// the roster seam itself owe a shipped file.
+pub const TEXT_SEAMS: [&str; 2] = ["--print-conf", "--print-completion"];
 
 /// An INDEX range (contract §C.3): `N..M`, `N..`, `..M` — digits only. A
 /// token that merely contains `..` is a path (`../x.pkg.tar.zst`,
@@ -743,6 +758,14 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 "--register-ignorepkg" => Hidden::RegisterIgnorepkg(rest),
                 "--qa-check" => Hidden::QaCheck(rest),
                 "--print-conf" => Hidden::PrintConf(rest),
+                "--seam-roster" => {
+                    if let Some(extra) = rest.first() {
+                        return Err(format!(
+                            "--seam-roster takes no arguments (got '{extra}')"
+                        ));
+                    }
+                    Hidden::SeamRoster
+                }
                 "--complete" => Hidden::Complete(rest),
                 "--print-completion" => match rest.as_slice() {
                     [shell] => Hidden::PrintCompletion(shell.clone()),
@@ -1258,6 +1281,43 @@ mod tests {
             Parsed::Hidden(Hidden::PrintConf(args)) => assert_eq!(args, vec!["clang"]),
             other => panic!("expected the print-conf seam, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn every_print_seam_is_in_the_text_roster() {
+        // The invariant the recipe battery depends on: every `--print-*` seam
+        // in HIDDEN_SEAMS is published by `--seam-roster` (TEXT_SEAMS), so a
+        // new text seam cannot be added without the packaging roster seeing
+        // it. A seam that prints text but ships nothing is the 2026-11-11
+        // completion defect (ADR 0006).
+        for seam in HIDDEN_SEAMS {
+            if seam.starts_with("--print-") {
+                assert!(
+                    TEXT_SEAMS.contains(&seam),
+                    "{seam} prints text but is missing from TEXT_SEAMS, so \
+                     gsa-pm's packaging roster would never see it"
+                );
+            }
+        }
+        // And the reverse: TEXT_SEAMS names only real seams.
+        for seam in TEXT_SEAMS {
+            assert!(
+                HIDDEN_SEAMS.contains(&seam),
+                "TEXT_SEAMS names a dead seam: {seam}"
+            );
+        }
+        // `--seam-roster` must not itself be a text seam, or it would owe a
+        // shipped file and the rule would eat itself.
+        assert!(!TEXT_SEAMS.contains(&"--seam-roster"));
+    }
+
+    #[test]
+    fn seam_roster_takes_no_arguments_and_stays_hidden() {
+        assert!(matches!(
+            parse(&["--seam-roster".to_string()]).unwrap(),
+            Parsed::Hidden(Hidden::SeamRoster)
+        ));
+        assert!(parse_err(&["--seam-roster", "x"]).contains("takes no arguments"));
     }
 
     #[test]

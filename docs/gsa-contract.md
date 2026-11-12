@@ -874,6 +874,14 @@ clause of their own: `--complete` answers rc 0 on every *runtime* failure
 (fail-soft, stated in its row) because a shell must never render a diagnostic
 into a prompt.
 
+**A `--print-*` seam is half a feature; the shipped file is the other half.** A
+seam whose verb is `--print-*` produces text that `gsa-pm` must package — the
+removal of that `install` step leaves the seam correct, its fixtures green and
+its surface absent on every host (2026-11-11: the completion wrappers shipped
+to nobody, engine ADR 0006). Enforcement lives in the recipe repository's
+battery, which runs the real `package()` against the installed engine and
+requires each such file to be byte-identical to the engine's own output.
+
 ### D.1 Hidden seam set (v2)
 
 | Seam | Shape | Contract |
@@ -890,6 +898,7 @@ into a prompt.
 | `--print-conf` | `gsa --print-conf <gcc\|clang>` | prints the built-in per-compiler makepkg body verbatim, which is what the composite embeds. `gsa-pm` writes it to `/etc/gsa/<family>-makepkg.conf` at package time, so the shipped baseline is the binary's own text (no copied flag list to drift). Reads nothing, mutates nothing. rc 0 / 2 missing or unknown family |
 | `--complete` | `gsa --complete <words…>` | shell completion, advisory and **fail-soft**: the words are argv after the program name and the LAST one is the partial token (it may be empty). Prints `value<TAB>description` per candidate, or the single line `#mode files` when the position is a path the shell should complete itself. **Always rc 0**, and silent on every failure — an absent workspace or an unreadable topology answers nothing instead of refusing. That is the one deliberate exception to the unreadable-is-not-an-absent-file rule (rule 71): completion decides nothing, so it may not decide to fail. Reads the topology and the user sets; never writes, never locks, never syncs, never needs root |
 | `--print-completion` | `gsa --print-completion <fish\|bash\|zsh>` | prints the completion wrapper for one shell, which `gsa-pm` installs (`fish/vendor_completions.d/gsa.fish`, `bash-completion/completions/gsa`, `zsh/site-functions/_gsa`). The wrapper carries **no grammar** — it forwards the command line to `--complete` — so a shipped completion cannot drift from the binary, for the same reason `--print-conf` exists. rc 0 / 2 missing or unknown shell |
+| `--seam-roster` | `gsa --seam-roster` | prints the text-producing seams (`TEXT_SEAMS`: `--print-conf`, `--print-completion`) one per line, so `gsa-pm`'s packaging battery can diff its roster against the engine's and fail when an engine seam ships unpackaged. Reads nothing, mutates nothing, needs no workspace. Deliberately not named `--print-*`: that name would make this seam owe a shipped file of its own. rc 0 / 2 arguments given |
 
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
 grammar).* `<flags…>` is the makepkg argument set the lane forwards verbatim

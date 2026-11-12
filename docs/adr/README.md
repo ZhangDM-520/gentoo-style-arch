@@ -12,6 +12,7 @@ disagreement (contract §L.7).
 | [`0003-run-record.md`](0003-run-record.md) | One run record, three renderings, machine block default-on |
 | [`0004-prefetch-advisory.md`](0004-prefetch-advisory.md) | Fetch-ahead is advisory; makepkg stays the build-time gate |
 | [`0005-engine-owned-makepkg-conf.md`](0005-engine-owned-makepkg-conf.md) | The engine owns the makepkg configuration, its per-compiler bodies and the identity digest |
+| [`0006-packaged-seams-owe-a-shipped-file.md`](0006-packaged-seams-owe-a-shipped-file.md) | A text seam is half a feature: the packaging asserts the shipped file equals the engine's output |
 
 **Numbering starts at 0003 in this repository.** `0001-pgo-shared-gate.md` and
 `0002-topology-one-record.md` were written before the 2026-11-09 split, when

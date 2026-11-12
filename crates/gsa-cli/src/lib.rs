@@ -968,6 +968,16 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         Ok(Parsed::Hidden(Hidden::PrintCompletion(shell))) => {
             complete::print_wrapper(&shell, out, err)
         }
+        Ok(Parsed::Hidden(Hidden::SeamRoster)) => {
+            // The text-producing seams, one per line (§D.1, ADR 0006). The
+            // recipe battery diffs its packaging roster against this, so an
+            // engine seam added without a `gsa-pm` row fails that battery
+            // instead of shipping to nobody.
+            for seam in args::TEXT_SEAMS {
+                let _ = writeln!(out, "{seam}");
+            }
+            RC_OK
+        }
         Ok(Parsed::Hidden(Hidden::StaleLockCheck)) => {
             // The production pacman-lock probe without a run (§D.1).
             gsa_sched::lock::pacman_lock_probe(out, err)
