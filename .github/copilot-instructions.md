@@ -28,12 +28,34 @@ cargo test --workspace                   # all 13 crates
 cargo test -p gsa-sched                  # one crate
 cargo test -p gsa-sched budget::tests::budget_formulas_follow_portability_doc
 cargo test --workspace -- --test-threads=1   # deterministic; see flake note
-cargo clippy
+cargo clippy --workspace --all-targets       # must be clean
+tools/fmt.sh                                 # rustfmt check; --write to apply
 ```
 
 `cargo test --workspace` runs two supervisor timing tests that are load-flaky
 under full parallelism. That flake is pre-existing and measured at HEAD — never
 a regression to chase, and `--test-threads=1` is the deterministic run.
+
+**There is no CI: the validation block in `CONTRIBUTING.md` is the gate.** A
+change is validated only when those commands have been run locally and their
+results reported. Formatting uses `tools/fmt.sh`, not `cargo fmt`: `cargo-fmt`
+aborts at startup on the nightly this repository builds with. The binary ships
+as `/usr/bin/gsa` through the `gsa-pm` recipe in the recipe repository.
+
+### Running the dev binary
+
+```sh
+./target/release/gsa --help            # the authoritative command/env roster
+./target/release/gsa -Sl @git          # the set, in build order — read-only
+./target/release/gsa -S --dry-run @git # plan and decision rows, no mutation
+```
+
+The engine needs a recipe workspace: a checkout selected by `gsa.conf`'s
+`project` key, or hermetically by `GSA_CONF`/`GSA_CONF_DIR` and
+`GSA_RECIPE_CHECKOUT`. Inspect with `--dry-run`/`-Sl`; a real `-S` mutates the
+host (root-owned state root, pacman transaction), so it is never an agent's
+first reach. `packages` is excluded from the cargo workspace in `Cargo.toml`,
+so an in-tree recipe build tree cannot break `cargo`.
 
 ### The fixture battery
 
@@ -62,12 +84,27 @@ need the real recipe tree read `GSA_RECIPE_CHECKOUT` and SKIP loudly (rc 0)
 when it is unset, so the battery must be green both with and without one.
 
 Never use a real rebuild as a syntax check, and never run the battery beside a
-live `-S`/`-Ua` run (install preflights read the real `db.lck`).
+live `-S`/`-Ua` run (install preflights read the real `db.lck`). Deployment ends
+with validating what was installed: ship → `sudo gsa -Sy` →
+`sudo gsa -S gsa-pm` → run the battery, which exercises `/usr/bin/gsa`.
+
+A fixture edit is checked in this order: `bash -n tests/<name>.sh`, then the
+fixture standalone, then `bash tests/run-all.sh <name>`, then the whole
+battery. `GSA_TEST_ENGINE=fish` makes `run_engine` drive the frozen fish-era
+oracle in `tests/assets/` for a differential section; leave it unset otherwise.
+
+`tests/lib/rr-v2.bash` provides `run_engine` and the strict `rr2_*` record
+parser; `tests/lib/fixture-lib.bash` retains the fish-era synthesis helpers
+(`make_workspace`, `add_package`, `stub_*`, `run_builder`) during the staged
+migration. `tests/assets/` is the frozen fish-era engine kept as a differential
+oracle — reference material, never a fixture.
 
 ## Architecture
 
-Thirteen crates under `crates/`, one binary, with a strict dependency direction:
-model → loaders → graph/abi → scheduling → effects → CLI.
+Thirteen crates under `crates/`, one binary. Dependencies are one-way:
+`gsa-model` is the base, no crate depends on `gsa-cli`, and `gsa-cli` is the
+composition root that depends on all the others. `tools/` holds the ABI
+pre-transaction checker and its pacman hook, installed by `gsa-pm`.
 
 | Crate | Owns |
 | --- | --- |
@@ -128,15 +165,50 @@ flag by editing the site body, and add package-specific switches by appending
 - **An early exit is a typed `Exit`.** `gsa_cli::exit` owns the exit-code
   mapping; steps return `Err(Exit::Usage(..))` / `Err(Exit::Refuse(..))`, never
   `return 2`.
+- **A new flag lands in three places in one change** (contract §L.1): `gsa
+  --help` (the authoritative roster), the continuation flag-rule table as
+  `mirrored` or `not-mirrored`, and at least one fixture. A flag absent from
+  `--help` does not exist. A row/record grammar change bumps `format` and
+  updates the parser fixture in the same change (§L.2).
+- **Falsify every new check red-first** (contract §L.4): break one input in a
+  scratch copy and watch the check fail naming what broke; a check that cannot
+  fail is deleted, not kept green.
+- **Privilege is pacman-shaped and nothing prompts** (`SECURITY.md`): reads run
+  as any user, mutations require root, `makepkg` and recipe code drop to the
+  build user via `setpriv`, and escalation is `sudo -n` only. Source
+  verification is never weakened — `--skipchecksums`, `--skippgpcheck` and
+  `--skipinteg` are rejected everywhere.
+- **Performance claims owe numbers** (`tools/perf/`, a measurement tool and
+  never a gate): `cargo build --profile profiling`, then
+  `tools/perf/bench.sh --runs 7 -- gsa -Q` (median + IQR noise floor),
+  `tools/perf/probe.sh -- gsa -Q` (syscalls), `tools/perf/matrix.sh`,
+  `tools/perf/stub-run.sh --packages 32`. A delta smaller than the IQR is *not
+  measured*, not faster; quote instruction/syscall counts as the primary
+  evidence on this hybrid-CPU host.
+- **Keep working state in-repo** (`AGENTS.md` protocol): dense output to
+  `.logs/scratchpad.md`, one dense dated line per action in `docs/JOURNAL.md`,
+  detail in `.logs/action-<date>-<task>.md`. Never write memory files in
+  `$HOME`; `.logs/` is git-excluded apart from the scratchpad, so an action
+  export is never staged.
 - **The run record is the assertion surface.** Assert on the `format: 2`
   machine block via `tests/lib/rr-v2.bash`, not on prose. Prose pins live in
   exactly one place (`tests/dashboard.sh`'s rendering section).
+- **Hidden seams are the fixture interface, not prose.** The `--`-prefixed
+  seams (contract §D.1's roster) answer in typed rows or stable keywords:
+  `--install-decide` prints the decision rows, `--qa-check <name>` runs one
+  lint, `--build-identity <gcc|clang>` prints the toolchain marker,
+  `--local-db-check`/`--stale-lock-check` are the production probes without a
+  run. Assert on those rather than scraped messages, and never add a debug
+  knob outside that roster.
 - **Fixtures.** Assertions use `vgrep VALUE ARG…` or `grep … < <(PRODUCER)`,
   never `printf … | grep -q` (pipefail SIGPIPE). Sibling subjects merge into
   one file as `( subshell )` sections. Stub knobs are `GSA_FAKE_*`, read by the
   stub only — never an engine input. `tests/lib/` helpers take `.bash` so
   discovery cannot match them; `run_builder` always returns 0, so assert
   `$FIXTURE_RC`. Privilege assertions belong only in `tests/gsa-privilege.sh`.
+  The loader validates every record, edge and the whole topological sort on
+  every invocation, so `make_workspace` must produce a complete workspace and
+  `add_package`/`set_topology_record` are the only writers for records.
 - **A behavioural change to scheduling, install, state, fetch or signals ships
   with a fixture in the same change**, and retires its dead code and config in
   the same pass.
@@ -148,7 +220,10 @@ flag by editing the site body, and add package-specific switches by appending
   `GIT_CONFIG_COUNT=0`. `rm` is a trash wrapper in fish; use `command rm`.
 - **Never commit or push unprompted.** A green battery is evidence, not
   consent. PR comments go through `gh`, never the GitHub MCP service, and
-  never before CI is green. Trailers:
+  never before the `CONTRIBUTING.md` validation block is green. A PR body
+  follows `.github/pull_request_template.md` and ticks only the commands
+  actually run — each with its result, deviations named as deviations.
+  Trailers:
   `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
 
 ## Where the truth lives
@@ -161,6 +236,9 @@ flag by editing the site body, and add package-specific switches by appending
 | `docs/build-guide.md` | Operations: families, inspect/dry-run/build, installation, environment surface, troubleshooting |
 | `docs/portability.md` | Intensity profiles and formulas, `GSA_*` overrides, CPU/ISA policy |
 | `docs/gsa-fixture-migration.md` | Per-fixture inventory: what each fixture pins |
+| `CONTEXT.md` | Vocabulary: recipe, topology record, build-order edge, lane, run record, decision row |
 | `CONTRIBUTING.md` | Change hygiene, the validation block, the commit policy |
 | `SECURITY.md` | Trust model, privilege boundary, what must never be committed |
+| `docs/adr/` | Decision records: the run record, the prefetch advisory, engine-owned makepkg config |
+| `docs/plans/` | Archive-class design records cited by section — provenance, never specification |
 | `docs/JOURNAL.md` | The chronological log — read the tail, grep by date |
