@@ -262,11 +262,7 @@ fn a_run_without_a_record_is_listed_as_in_progress_then_died() {
     let dir = runs.join("77-7");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("run.open"), "pid=1 epoch=1700\n").unwrap();
-    std::fs::write(
-        dir.join("alpha.started"),
-        "pid=9 epoch=1700 log-offset=0\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join("alpha.started"), "pid=9 epoch=1700 log-offset=0\n").unwrap();
     std::fs::write(runs.join("current"), "77-7\n").unwrap();
 
     // No lock file: the run.open pid is the fallback (pid 1 exists here).
@@ -288,7 +284,11 @@ fn a_run_without_a_record_is_listed_as_in_progress_then_died() {
     drop(lock);
     let rows = history::list_rows(&state).unwrap();
     assert_eq!(rows[1].action, "died");
-    assert!(rows[1].reason.contains("markers=runs/77-7"), "{}", rows[1].reason);
+    assert!(
+        rows[1].reason.contains("markers=runs/77-7"),
+        "{}",
+        rows[1].reason
+    );
 
     // `-Mh --prune` retires a died run's kept evidence, never a live one.
     let keep = history::prune(&state, false).unwrap();
