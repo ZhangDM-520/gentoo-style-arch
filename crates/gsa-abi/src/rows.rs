@@ -115,6 +115,20 @@ pub fn soname_drift(pkgname: &str, shipped: &[String], view: &InstalledView) -> 
     };
     let mut drift = Vec::new();
     for file in &installed.files {
+        // Only a package's OWN payload can move a soname. A dev split ships
+        // `libelf.so.1` as a SYMLINK into the sibling runtime package's real
+        // library (elfutils-git's libelf-git): `read_elf` follows the link and
+        // reports the sibling's SONAME, while `members_with_dynamic` over the
+        // new archive reads symlink entries as link text and finds no ELF — so
+        // an unchanged, correctly shared library looked like a vanished soname
+        // and refused every rebuild (2026-11-13 wall). A symlink ships no
+        // bytes, so it is not part of the shipped-SONAME surface.
+        if std::fs::symlink_metadata(view.probe_path(file))
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let Some(bytes) = view.read_elf(file) else {
             continue;
         };
@@ -435,6 +449,38 @@ mod tests {
         // The same soname still shipped, or nothing installed: no drift.
         assert!(soname_drift("libgreet", &["libgreet.so.1".to_string()], &view).is_empty());
         assert!(soname_drift("notinstalled", &[], &view).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A dev split that ships only SYMLINKS into a sibling package's real
+    /// library has no soname surface of its own: the sibling owns the bytes,
+    /// and the new archive never carried an ELF for the link to point at. The
+    /// gate used to follow the link, read the sibling's SONAME, and refuse an
+    /// unchanged library on every rebuild (2026-11-13 elfutils-git wall).
+    #[test]
+    fn soname_drift_ignores_a_symlink_into_a_sibling_package() {
+        let dir = std::env::temp_dir().join(format!("gsa-abi-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("usr/lib")).unwrap();
+        std::fs::write(
+            dir.join("usr/lib/libelf-0.197.so"),
+            crate::test_support::elf64(Some("libelf.so.1"), &[]),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("libelf-0.197.so", dir.join("usr/lib/libelf.so.1")).unwrap();
+        let view = InstalledView::with_root(
+            dir.clone(),
+            [
+                pkg("elfutils", &[], &[], &["usr/lib/libelf-0.197.so"]),
+                pkg("libelf", &[], &[], &["usr/lib/libelf.so.1"]),
+            ],
+        );
+
+        // The new libelf-git archive ships only the symlink, no ELF of its own.
+        assert!(
+            soname_drift("libelf", &[], &view).is_empty(),
+            "a symlink is not shipped bytes"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
