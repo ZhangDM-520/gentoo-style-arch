@@ -480,6 +480,85 @@ load_ld_cache() {
     ld_cache_loaded=1
 }
 
+# The Tier-2 documented-gap registry the install seam already honours
+# (`AbiExclusions::covers`, gsa-install/src/gates.rs): an id here is a REVIEWED
+# exception to the soname closure rules — a package id, a soname, or its bare
+# stem. The gate never read it, so a documented exception still aborted the
+# transaction: openimagedenoise's lazy-loaded CUDA backend needs libcuda.so.1,
+# which no file on an AMD-only host can resolve BY DESIGN (the registry has
+# carried `libcuda.so` since it was seeded), and every `pacman -Syu` died in
+# this PreTransaction hook from 2026-11-10 until 2026-11-14 — the installed
+# 2.4.1 ships the identical dangling plugin, so the check was refusing a
+# condition it had already accepted once.
+#
+# Searched in the order a hook can actually see: an explicit override
+# (fixtures), the workspace gsa.conf's `project` checkout when that file is
+# root-readable, then the build user's recipe store via `$SUDO_HOME` (pacman
+# runs this hook as root with HOME=/root, so the build user's path needs the
+# sudo variable). Absent everywhere means the empty registry — a host with no
+# recipe workspace keeps the strict behaviour rather than silently exempting
+# anything.
+abi_exclusions_file=${GSA_ABI_NEED_CHECK_EXCLUSIONS:-}
+abi_ids=()
+
+# `project = <workspace>` from a gsa.conf, read with the engine's own rule
+# (a bash `key = value` file, never sourced — sourcing it would run its text).
+gsa_conf_project() {
+    local conf=$1 value
+    [[ -r $conf ]] || return 1
+    value=$(sed -n 's/^[[:space:]]*project[[:space:]]*=[[:space:]]*\(.*[^[:space:]]\).*$/\1/p' "$conf" 2>/dev/null | head -1)
+    [[ -n $value ]] || return 1
+    # `~` expands to the BUILD user's home under sudo; the owner cannot.
+    case $value in
+        '~'/*) value="${SUDO_HOME:-${HOME:-}}/${value#\~/}" ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+load_abi_exclusions() {
+    local path=''
+    if [[ -n $abi_exclusions_file ]]; then
+        path=$abi_exclusions_file
+    else
+        local candidate project
+        for candidate in \
+            "${GSA_STATE_DIR:-/var/lib/gsa}/abi/exclusions.conf" \
+            "${SUDO_HOME:-${HOME:-}}/.local/share/gsa/recipes/config/abi-exclusions.conf"; do
+            [[ -r $candidate ]] && { path=$candidate; break; }
+        done
+        if [[ -z $path ]] && project=$(gsa_conf_project /etc/gsa/gsa.conf); then
+            candidate="$project/config/abi-exclusions.conf"
+            [[ -r $candidate ]] && path=$candidate
+        fi
+    fi
+    [[ -n $path && -r $path ]] || return 0
+    local line id
+    while IFS= read -r line; do
+        line=${line#"${line%%[![:space:]]*}"}
+        [[ -z $line || $line == '#'* ]] && continue
+        [[ $line == *'|'* ]] || continue
+        id=${line%%|*}
+        id=${id%"${id##*[![:space:]]}"}
+        [[ -n $id ]] && abi_ids+=("$id")
+    done <"$path"
+}
+
+# Same matcher as `AbiExclusions::covers`: the full name (a package id or an
+# unversioned soname) first, then the family stem (`libfoo.so.3` -> `libfoo.so`).
+abi_excluded() {
+    local name=$1 id
+    for id in ${abi_ids[@]+"${abi_ids[@]}"}; do
+        [[ $id == "$name" ]] && return 0
+    done
+    local stem=$name
+    while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
+    [[ $stem != "$name" ]] || return 1
+    for id in ${abi_ids[@]+"${abi_ids[@]}"}; do
+        [[ $id == "$stem" ]] && return 0
+    done
+    return 1
+}
+
 # report_owned_providers — name the gsa-managed package behind a missing
 # soname family. Call ABORT PATH ONLY: `missing_stems` is populated in the same
 # block that counts a finding, so gating the call on `findings` keeps a clean
@@ -519,6 +598,7 @@ report_owned_providers() {
 findings=0
 idx=0
 declare -A missing_stems=()
+load_abi_exclusions
 
 for root in "${roots[@]}"; do
     pkg=${pkgnames[$idx]}
@@ -526,6 +606,15 @@ for root in "${roots[@]}"; do
     idx=$((idx + 1))
     pkg_findings=0
     pkg_needed=0
+
+    # A registered package id is exempt wholesale (the registry's own first
+    # field shape: "its outputs are exempt from the closure/provide checks").
+    # Soname-level rows are honoured per miss below.
+    if abi_excluded "$pkg"; then
+        ((quiet)) ||
+            printf 'abi-need-check: %s: skipped (documented ABI exclusion)\n' "$pkg"
+        continue
+    fi
 
     while IFS= read -r line; do
         [[ $line == "file"$US* ]] || continue
@@ -593,6 +682,11 @@ for root in "${roots[@]}"; do
                 covered=1
             fi
 
+            if ((covered == 0)) && abi_excluded "$needed"; then
+                # A registered soname/skid stem is a REVIEWED gap: the rot is
+                # documented and owned, so it is not this gate's abort.
+                continue
+            fi
             if ((covered == 0)); then
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \
                     "$pkg" "${relpath##*/}" "$needed"

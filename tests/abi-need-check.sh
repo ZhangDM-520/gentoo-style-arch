@@ -568,4 +568,46 @@ PATH="$tmp/stubbin32:$PATH" run out err -- --quiet "$tmp/f64only" || status=$?
 [[ $out == *"'consumer64only' needs 'libgonly32.so.1'"* ]] ||
     fail "ELF64 class-mismatch finding lost: $out"
 
+# ── N. the Tier-2 exclusions registry is honoured ────────────────────────
+# The install seam has always honoured `config/abi-exclusions.conf`
+# (`AbiExclusions::covers`); this gate did not, so a documented exception still
+# aborted every transaction — openimagedenoise's CUDA backend needs
+# `libcuda.so.1`, unresolvable BY DESIGN on an AMD-only host, and `pacman -Syu`
+# died in this hook from 2026-11-10 to 2026-11-14 while the INSTALLED version
+# shipped the identical dangling plugin.
+make_bin "$tmp/x/usr/bin" xconsumer libexcluded-fixture.so.9
+make_bin "$tmp/x/usr/bin" xyconsumer libunlisted-fixture.so.9
+make_pkgroot "$tmp/x" pkg-exclusion
+
+# No registry: still fatal (the strict baseline this host had before).
+status=0
+GSA_ABI_NEED_CHECK_EXCLUSIONS=/dev/null run out err -- --quiet "$tmp/x" || status=$?
+[[ $status == 1 ]] || fail "no registry must stay fatal (want 1), got $status: $out"
+
+# A soname STEM row covers the versioned soname; the unlisted one still aborts,
+# so the section cannot pass by exempting everything.
+printf 'libexcluded-fixture.so|documented gap|2027-04-01\n' >"$tmp/exclusions.conf"
+status=0
+GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/exclusions.conf" run out err -- --quiet "$tmp/x" || status=$?
+[[ $status == 1 ]] || fail "an unlisted soname must still abort (want 1), got $status: $out"
+[[ $out == *"'xyconsumer' needs 'libunlisted-fixture.so.9'"* ]] ||
+    fail "unlisted soname lost its finding: $out"
+[[ $out != *'libexcluded-fixture.so.9'* ]] ||
+    fail "a registered soname stem still reported: $out"
+
+# A package-id row exempts that package wholesale, and says so.
+make_bin "$tmp/y/usr/bin" yconsumer libother-fixture.so.9
+make_pkgroot "$tmp/y" pkg-excluded-id
+printf 'pkg-excluded-id|documented gap|2027-04-01\n' >"$tmp/exclusions-id.conf"
+status=0
+GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/exclusions-id.conf" run out err -- "$tmp/y" || status=$?
+[[ $status == 0 ]] || fail "a registered package id was not exempt (want 0), got $status: $out"
+[[ $out == *'pkg-excluded-id: skipped (documented ABI exclusion)'* ]] ||
+    fail "exempt package line drifted: $out"
+
+# An ABSENT registry path is the empty registry, never an error.
+status=0
+GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/does-not-exist.conf" run out err -- --quiet "$tmp/y" || status=$?
+[[ $status == 1 ]] || fail "a missing registry must degrade to empty (want fatal 1), got $status: $out"
+
 printf 'abi-need-check fixture: ok\n'
