@@ -1,6 +1,6 @@
 # Design plans — archive-class design records
 
-Four design records that `crates/` and `docs/gsa-contract.md` cite **by
+Design records that `crates/` and `docs/gsa-contract.md` cite **by
 section** (for example `docs/plans/plan-native-pm.md` §4.3). They are
 provenance, not specification: the authoritative interface is
 [`../gsa-contract.md`](../gsa-contract.md), the operating docs are
@@ -14,6 +14,10 @@ provenance, not specification: the authoritative interface is
 | `plan-native-pm.md` | The native, Portage-class package manager: state layout, install decision seam, ABI view |
 | `plan-gsa-isolation.md` | pacman-class isolation: directories, privilege split, the standalone/distribution unit, the canonical recipe store |
 | `plan-gentoo-qol.md` | Build-QoL mechanisms carried over from Gentoo (march/mtune policy, PGO discipline, trimming) |
+| `2026-11-12-host-critical-abi.md` | Host-critical ABI swaps: classifying a stranded install consumer apart from an inert one, and naming the remedy (companion facts: `2026-11-12-host-critical-abi-research.md`) |
+| `2026-11-12-per-recipe-snapshot-boundary.md` | **QUEUED enhancement.** A per-recipe snapshot cutoff checked as a provider/consumer *relationship* instead of one global Monday instant; companion evidence and the measured boundary table in `2026-11-12-per-recipe-snapshot-boundary-research.md` |
+| `2026-11-13-consumer-expansion-install-aware-research.md` | Whether consumer auto-expansion should skip roster packages that are installed nowhere: `linked_consumers` iterates the installed view only, so the ABI guarantee is vacuous for an absent package — but both such recipes today are terminal leaves, so a shipped filter must be consumer-aware and must run *after* the ABI wave |
+| `2026-11-14-campaign-closeout-runbook.md` | The close-out runbook: finish the roster build, verify built-AND-installed, swap `openssl` and run `pacman -Syu`, settle and push the recipe and engine edits, consolidate the external audit, reconcile the queue. Seven tasks with stopping criteria, nine global constraints, six failure modes |
 
 Rules for these files:
 

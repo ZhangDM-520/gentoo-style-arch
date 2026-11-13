@@ -779,6 +779,108 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
 
 ## 6 · Queued
 
+- **No per-package resource measurement exists (opened 2026-11-13,
+  owner-proposed; SEQUENCE THIS FIRST).** The scheduler plans from three host
+  scalars (`Baselines`, `budget.rs`) divided by lane count, and the tree has
+  **no memory sampling of any kind** (zero hits for `cgroup`, `memory.peak`,
+  `getrusage`, `ru_maxrss`, `VmHWM`). The owner's premise — "compile time
+  varies but peak RAM per package is quite static" — is therefore
+  **unverified: nothing has ever measured it.** Cheapest viable version:
+  the lane child is root before `setpriv` drops `makepkg`, so it can create a
+  per-lane cgroup and write its own pid **as its first instruction** (measured:
+  self-register-then-allocate captures the full peak, moving an allocated
+  process captures 0; record `anon` from `memory.stat`, because `memory.peak`
+  includes page cache); persist `{recipe_id, toolchain_identity, jobs, dur_s,
+  peak_anon_kib}` to a new `metrics/pkg.jsonl`; consume it as a
+  **downward-only** per-package `-j` clamp. Store **bytes-per-job, never peak**
+  — with peak, lowering `-j` lowers the measurement, which raises `-j`, which
+  raises the measurement (guaranteed oscillation); bytes-per-job is invariant
+  under the control. Do NOT merge this with the two items below: land the
+  measurement first, and let them consume it, because they are blocked on
+  exactly the evidence it produces. A shipped baseline dataset is a LATER,
+  tiered (`S/M/L/XL`) artifact, only after a reference run exists.
+  Blocked on: a written plan (multi-sitting) and an owner decision on whether
+  the 50-record `runs/history.jsonl` retention is enough to seed it.
+
+- **Per-lane job count does not adapt to the live ready set (opened
+  2026-11-13, owner-observed).** `Budget::resolve` derives `lanes` from the
+  host and then divides the global budget by that lane count
+  (`auto_jobs = min(threads / lanes, normal_job_budget / lanes)`), so
+  `-j` is fixed per lane when the lane child spawns and never rebalances.
+  Observed on the 2026-11-13 full-roster campaign: the run printed
+  `lanes=6 normal-jobs=3 core-jobs=11`, but dependency order and the
+  core-alone rule kept ONE normal lane active for most of the pass, so a
+  single `-j3` build held ~21 of 24 threads idle. Candidate directions to
+  evaluate (not yet chosen): start a lane with a larger share when the ready
+  set is small; a global job semaphore instead of static per-lane shares;
+  widen the selection so the ready set is broader. Research verdict
+  (2026-11-13): the mechanism is real and exactly as described — `lanes` is
+  computed first and jobs are the residual — but on the measured run it
+  accounted for only ~2% of idle time, because 92% of wall time had a `core`
+  member ready and blocked, and the longest lone lane (`texlive-texmf`,
+  32.5 min) has no `build()` at all. A global semaphore is REJECTED (only
+  GNU make has a jobserver; ninja and cargo implement no compatible
+  protocol). The `-j` is frozen at spawn, so mid-lane rebalancing is
+  infeasible; only spawn-time widening is possible. Keep this item SMALL and
+  do it after the measurement item above, which supplies the evidence.
+  Blocked on: the per-package measurement landing first.
+
+- **`core`-alone is one boolean for a heterogeneous group (opened 2026-11-13,
+  owner-observed).** `machine.rs::can_dispatch` gives a `core` member the
+  machine to itself (`active == 0`) and blocks all other dispatch while it
+  runs (contract §K.2). But `core` is a maintenance grouping in
+  `config/topology.conf`, and 75 of the 147-package 2026-11-13 selection are
+  `core` members — so the rule serialises the majority of any core-heavy
+  selection. The owner reports the group is not homogeneous: some members
+  can safely run concurrently (the host has room for several kernel-sized
+  builds), while others must not be parallelised at all (`gtk4` named as the
+  example), and a bounded allowance of 2 is what he expects. Candidate
+  directions: a per-member concurrency tag (note `crates/gsa-topo`'s strict
+  loader refuses unknown tags, so this is a contract change with a test);
+  derive the allowance from the existing ABI tags (`abi=must`, coupled-batch
+  gate) if those already encode the real hazard; or leave the rule and
+  document why. The plan must first establish what the rule actually
+  protects — ABI coupling, `pacman -U` serialization (§K.3), or shared
+  build-tools — because that decides whether the fix is data or mechanism.
+  Research verdict (2026-11-13): the guard protects the **memory peak**, and
+  `core_jobs` is a machine-wide budget — `supervisor.rs:1327-1331` hands the
+  same number to *every* core lane, so the boolean is today the only division.
+  Flipping it naively (`active < 2`) overcommits 22 jobs × 2.0 GiB = 44 GiB
+  against 22 GiB; a correct division (`min(threads/2, normal_memory/(2×2.0))`
+  = 5) yields two lanes at `-j5`, which is *fewer* total jobs than one lane at
+  `-j11`, so the prize is only idle-thread recovery during serial phases
+  (links, `meson test`, PGO training). Simulation over the 574-package run:
+  blanket pairing is a **+4.8% loss**; it wins (−14% … −17%) only when the
+  heavy members are exempted — which are exactly the ones that must not pair.
+  ABI-disjointness is the WRONG justification (disjoint batches do not reduce
+  concurrent RSS). Also: the engine encodes **nothing** specific about `gtk4`
+  (no `abi=` tag; all 22 consumers are edge-ordered), so that hazard is domain
+  knowledge the model does not represent. Ranked outcome: (1) do nothing and
+  document *why* — rewrite the rationale from "core is unsafe" to "core_jobs is
+  machine-wide and core-solo is its division"; (2) fix the real gap, the item
+  below; (3) only then consider a `core_lanes` scalar; (4) a per-member
+  `lane-cap` tag last, and never first. 75 of 147 were core, but of the 178
+  core members that actually built in the 574-package run the median duration
+  is **17 s** and 144 finish under 60 s, so the rule is a coarse proxy that is
+  wrong for most members.
+  Blocked on: an owner decision — the evidence now favours documentation over
+  mechanism, which is a product call, not an engineering one.
+
+- **A package install can race a concurrent build (found by research
+  2026-11-13, UNGUARDED).** Installs run in the supervisor thread
+  (`supervisor.rs:1589-1619`) while other lanes keep compiling; the state-root
+  mutex serialises `pacman -U` against another `pacman -U` but does **not**
+  quiesce builds. The documented symptom is already in §5: a child spawned
+  during a transaction dies in the loader, or on `/usr/share/makepkg/util.sh:
+  No such file`. This is the hazard `gtk4` actually has (a gtk4 *install*
+  landing under a compiling consumer — its *build* cannot race, every consumer
+  is edge-ordered), and `core`-alone does not prevent it. Fix shape: gate
+  dispatch while a transaction is in flight, or quiesce adjacent lanes around
+  the install. Blast radius is the supervisor loop only — no contract change,
+  no tag vocabulary change, no new store.
+  Blocked on: a written plan + a decision on whether to quiesce builds or
+  merely pause dispatch (the latter cannot protect an already-running link).
+
 - **Snapshot pins in `@core`/`@build-tools` (QUEUED for the owner's weekend
   full rebuild, opened 2026-11-09).**
   136 recipes whose source ref moves (113 floating + 23 `#branch=`-pinned) take
