@@ -53,12 +53,16 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
     let mut out = Findings::default();
     out.wrong_owner = hygiene::ownership_rows(ctx.state.path());
     out.stale = hygiene::stale_artifacts(ctx.state.path(), ctx.root);
-    out.local_db = match gsa_install::LocalDb::load(&gsa_install::localdb::pacman_db_root()) {
+    let loaded_db = match gsa_install::LocalDb::load(&gsa_install::localdb::pacman_db_root()) {
         Ok(db) => {
             out.installed_known = true;
-            format!("ok packages={}", db.packages().len())
+            out.local_db = format!("ok packages={}", db.packages().len());
+            Some(db)
         }
-        Err(error) => format!("unreadable {error}"),
+        Err(error) => {
+            out.local_db = format!("unreadable {error}");
+            None
+        }
     };
 
     // The index is REQUIRED: `unwrap_or(empty)` made an unreadable index
@@ -67,7 +71,7 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
     // rows) is the store's own finding and stays; an I/O failure is not a
     // finding about any package — it is a failed read of the evidence.
     match BinpkgIndex::load(ctx.state) {
-        Ok(index) => index_findings(ctx, &mut out, &index),
+        Ok(index) => index_findings(ctx, &mut out, &index, loaded_db.as_ref()),
         Err(error) => out.index_error = Some(format!("cannot read the binpkg index: {error}")),
     }
     out
@@ -76,30 +80,46 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
 /// The index-derived families: `sha256`+`size` mismatches, orphan rows, and
 /// the two-home orphan-archive scan. Split out because an unreadable index
 /// yields no row about any package at all.
-fn index_findings(ctx: &MaintCtx<'_>, out: &mut Findings, index: &BinpkgIndex) {
+fn index_findings(
+    ctx: &MaintCtx<'_>,
+    out: &mut Findings,
+    index: &BinpkgIndex,
+    local_db: Option<&gsa_install::LocalDb>,
+) {
     for row in &index.rows {
-        if !row.archive.exists() {
+        let verification = verify_row(row);
+        if matches!(
+            (verification.hash, verification.size),
+            (Match::Missing, Match::Missing)
+        ) {
             out.orphan_rows.push(row.clone());
             continue;
         }
-        let verification = verify_row(row);
         if !verification.agrees() {
-            let hash = match verification.hash {
-                Match::Agree => "agree",
-                Match::Disagree => "disagree",
-                Match::Missing => "unrecorded",
+            let detail = if matches!(verification.hash, Match::Unreadable)
+                || matches!(verification.size, Match::Unreadable)
+            {
+                verification
+                    .error
+                    .unwrap_or_else(|| "unreadable archive".to_string())
+            } else {
+                let hash = match verification.hash {
+                    Match::Agree => "agree",
+                    Match::Disagree => "disagree",
+                    Match::Missing => "unrecorded",
+                    Match::Unreadable => "unreadable",
+                };
+                let size = match verification.size {
+                    Match::Agree => "agree",
+                    Match::Disagree => "disagree",
+                    Match::Missing => "unrecorded",
+                    Match::Unreadable => "unreadable",
+                };
+                format!("hash={hash} size={size}")
             };
-            let size = match verification.size {
-                Match::Agree => "agree",
-                Match::Disagree => "disagree",
-                Match::Missing => "unrecorded",
-            };
-            out.mismatch
-                .push((row.clone(), format!("hash={hash} size={size}")));
+            out.mismatch.push((row.clone(), detail));
         }
-        if out.installed_known {
-            let db = gsa_install::LocalDb::load(&gsa_install::localdb::pacman_db_root())
-                .expect("the local DB loaded above");
+        if let Some(db) = local_db {
             let mut counterpart = db.get(&row.pkgbase).is_some();
             for name in &row.pkgnames {
                 counterpart = counterpart || db.get(name).is_some();

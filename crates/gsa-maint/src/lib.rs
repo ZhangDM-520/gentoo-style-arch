@@ -158,6 +158,33 @@ impl MaintCtx<'_> {
     }
 }
 
+/// Shared stale-set / audit version-sync skew detector (`F-MNT-07`): yields
+/// `(recipe_id, built_version, committed_version)` for every record whose
+/// latest recorded index instance disagrees canonically with `.SRCINFO`.
+pub(crate) fn version_skew_rows(
+    ctx: &MaintCtx<'_>,
+) -> Result<Vec<(String, String, String)>, String> {
+    let index = gsa_state::BinpkgIndex::load(ctx.state).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for record in ctx.graph.records() {
+        let id = record.id.as_str();
+        let Some(built) = index.rows_for(id).first().map(|r| r.version.clone()) else {
+            continue;
+        };
+        let Some(committed) = ctx.committed_version(id) else {
+            continue;
+        };
+        // Compare canonicalized on BOTH sides: the index side always carries an
+        // epoch while `committed` spells epoch 0 bare.
+        if gsa_recipe::pkginfo::canonical_version(&built)
+            != gsa_recipe::pkginfo::canonical_version(&committed)
+        {
+            out.push((id.to_string(), built, committed));
+        }
+    }
+    Ok(out)
+}
+
 /// Rule 11's truth filter for a shared-home archive entry: which recipe
 /// does this archive belong to? The index row's `recipe_id` first
 /// (authoritative — rows record archive paths wherever they live), else
@@ -213,7 +240,8 @@ pub fn hold_run_lock(state: &Path) -> Result<gsa_sched::lock::RunLock, String> {
     match gsa_sched::lock::try_acquire_run_lock(state) {
         Ok(lock) => Ok(lock),
         Err(gsa_sched::lock::RunLockError::Permission(_)) => {
-            let cfg = gsa_model::config::load().unwrap_or_default();
+            let cfg = gsa_model::config::load()
+                .map_err(|e| format!("cannot resolve the build-user fallback run lock: {e}"))?;
             let fallback = gsa_model::config::build_root(&cfg)
                 .map_err(|e| format!("cannot resolve the build-user fallback run lock: {e}"))?
                 .join("run.lock");

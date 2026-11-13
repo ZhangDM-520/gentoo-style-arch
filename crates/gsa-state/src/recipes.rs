@@ -71,14 +71,20 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 fn touch_stamp(state_dir: &Path) -> Result<(), String> {
     // The state root may not exist yet on a first `-Sy` (a fresh
-    // `--state-dir`): create it the way the clone path does, so the refresh
-    // does not die with a raw ENOENT on an internal stamp file the operator
-    // never named (blind-review 2026-11-11, airgapped-admin).
-    if !state_dir.exists() {
-        create_owned_levels(state_dir)?;
+    // `--state-dir`): create it root-owned (when privileged) via
+    // `create_dir_all`, never handing the state root to the build user, and
+    // open `recipes.last-fetch` through `ownership_gate` (rule 19 / §J.5).
+    std::fs::create_dir_all(state_dir)
+        .map_err(|e| format!("cannot create {}: {e}", state_dir.display()))?;
+    let stamp = stamp_path(state_dir);
+    let mut err = Vec::new();
+    let file = crate::ownership_gate(&stamp, &mut err)
+        .map_err(|e| format!("cannot gate {}: {e}", stamp.display()))?;
+    if !err.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&err));
     }
-    std::fs::write(stamp_path(state_dir), b"")
-        .map_err(|e| format!("cannot write {}: {e}", stamp_path(state_dir).display()))
+    file.set_modified(std::time::SystemTime::now())
+        .map_err(|e| format!("cannot timestamp {}: {e}", stamp.display()))
 }
 
 /// Resolve the store, moving a legacy `<state>/recipes` into place when the
@@ -223,7 +229,10 @@ pub fn fetch(state_dir: &Path, recipe_url: &str) -> Result<(PathBuf, String), St
 /// `None` when the store's origin already answers `recipe_url`.
 pub fn refresh(state_dir: &Path, recipe_url: &str) -> Result<(String, Option<String>), String> {
     let (store, _note) = ensure_store(state_dir)?;
-    let note = retarget_origin(&store, recipe_url)?;
+    let note = match retarget_origin(&store, recipe_url) {
+        Ok(note) => note,
+        Err(error) => Some(format!("warning: cannot retarget origin: {error}")),
+    };
     git(&store, &["fetch", "--depth", "1", "origin", "HEAD"])?;
     git(&store, &["reset", "--hard", "FETCH_HEAD"])?;
     // The reset writes as the engine (root under a privileged run): the
@@ -280,5 +289,115 @@ fn origin_url(store: &Path) -> Result<Option<String>, String> {
             "git config --get remote.origin.url failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("gsa-state-recipes-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn touch_stamp_refuses_symlink_at_stamp_path() {
+        let dir = scratch("touch-symlink");
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&victim, stamp_path(&state)).unwrap();
+
+        let err = touch_stamp(&state).expect_err("symlinked recipes.last-fetch must be refused");
+        assert!(
+            err.contains("gate") || err.contains("symlink") || err.contains("Too many"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_warns_on_retarget_failure_and_continues_fetch() {
+        let dir = scratch("retarget-warn");
+        let upstream = dir.join("upstream.git");
+        let seed = dir.join("seed");
+        let state = dir.join("state");
+        let store_target = dir.join("store");
+        std::fs::create_dir_all(&upstream).unwrap();
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+
+        let prev_recipes_dir = std::env::var_os("GSA_RECIPES_DIR");
+        std::env::set_var("GSA_RECIPES_DIR", &store_target);
+        struct EnvGuard(Option<std::ffi::OsString>);
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("GSA_RECIPES_DIR", v),
+                    None => std::env::remove_var("GSA_RECIPES_DIR"),
+                }
+            }
+        }
+        let _guard = EnvGuard(prev_recipes_dir);
+
+        let run_git = |cwd: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_CONFIG_COUNT", "0")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+
+        run_git(&upstream, &["init", "--bare", "--initial-branch=main"]);
+        run_git(&seed, &["init", "--initial-branch=main"]);
+        std::fs::write(seed.join("f"), "v1\n").unwrap();
+        run_git(&seed, &["add", "f"]);
+        run_git(&seed, &["commit", "-m", "c1"]);
+        run_git(
+            &seed,
+            &["remote", "add", "origin", &upstream.display().to_string()],
+        );
+        run_git(&seed, &["push", "-u", "origin", "main"]);
+        run_git(&upstream, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+        // Seed store at c1.
+        let (store, c1) = fetch(&state, &upstream.display().to_string()).unwrap();
+        assert_eq!(store, store_target);
+
+        // Advance upstream to c2.
+        std::fs::write(seed.join("f"), "v2\n").unwrap();
+        run_git(&seed, &["commit", "-am", "c2"]);
+        run_git(&seed, &["push", "origin", "main"]);
+
+        // Place a git config lock so `remote set-url` fails when a different URL
+        // is requested, while `origin` in `.git/config` still fetches from `upstream`.
+        std::fs::write(store.join(".git/config.lock"), b"").unwrap();
+        let bogus_url = format!("{}/other.git", dir.display());
+        let (head, note) =
+            refresh(&state, &bogus_url).expect("retarget failure must warn and continue fetch");
+        let note = note.expect("retarget warning expected");
+        assert!(note.contains("warning"), "{note}");
+        assert_ne!(head, c1, "fetch still advanced HEAD");
+        let _ = std::fs::remove_file(store.join(".git/config.lock"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

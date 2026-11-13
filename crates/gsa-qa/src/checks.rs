@@ -673,9 +673,9 @@ pub fn stale_ignorepkg(input: &QaInput<'_>) -> CheckResult {
         if !input.wanted(&archive.recipe_id) {
             continue;
         }
-        // Rule 25(h): an unreadable `.PKGINFO` is the discovery gate's class
-        // (`skip unreadable-pkginfo` / `refuse discover-failed`), never
-        // probed here.
+        // Rule 25(h) + Rule 71: an unreadable `.PKGINFO` is the discovery
+        // gate's refusal class (`refuse unreadable-pkginfo` / `refuse
+        // discover-failed`), never probed here.
         let Some(info) = &archive.pkginfo else {
             continue;
         };

@@ -51,11 +51,20 @@ fn run_fetch_only_inner(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
     };
     let mut selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
         .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
+    // ── privilege gate (contract §B.10; after every usage preflight) ─────
+    if let Some(exit) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Fetch),
+        true,
+        err,
+    ) {
+        return Err(exit);
+    }
     // ── missing build-order prerequisites (contract §C.3) ────────────────
     // Fetch is the "before you disconnect" verb: a build run expands to the
     // prerequisites the system lacks and then needs THEIR sources, so fetching
@@ -67,17 +76,10 @@ fn run_fetch_only_inner(
     {
         // An unreadable installed DB cannot answer "what is missing", and
         // guessing would fetch a set the build will not reproduce.
-        let _ = writeln!(err, "gsa: {message}");
-        return Err(Exit::Refuse(Refusal::silent(RefusalClass::StartupRefused)));
-    }
-    // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(exit) = crate::privilege_gate(
-        &inv.spelling(),
-        crate::invocation_privilege(inv, &crate::Command::Fetch),
-        true,
-        err,
-    ) {
-        return Err(exit);
+        return Err(Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {message}")],
+        )));
     }
 
     // ── plan rows: `fetch` for candidates, `skip <reason>` for the rest ──

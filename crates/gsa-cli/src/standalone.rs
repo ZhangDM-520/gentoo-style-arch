@@ -135,7 +135,7 @@ pub(crate) fn apply(
     let ws_root = crate::resolve_root(false, inv.state_dir.as_deref()).ok();
     // I5: a kv user set is a workspace answer too (@name resolves over
     // kv user-sets ∪ config/sets/).
-    let user_sets = crate::select::load_user_sets(inv);
+    let user_sets = crate::select::load_user_sets(inv)?;
     let answered = workspace_answers(&candidates, ws_root.as_deref(), &user_sets);
     for (token, kind) in inv.targets.iter().zip(&kinds) {
         match kind {

@@ -206,21 +206,23 @@ pub fn subscriptions_for_install(
     resolve: &dyn Fn(&crate::view::InstalledPkg) -> Option<(String, String)>,
 ) -> Result<Vec<Subscription>, String> {
     use crate::provides::base_lib_ok;
+    use crate::view::path_class;
     let members = gsa_recipe::pkginfo::members_with_needed(consumer_archive)?;
-    let mut needed: Vec<String> = Vec::new();
-    for (_, names) in members {
+    let mut needed: Vec<(String, gsa_model::abi::ElfClass)> = Vec::new();
+    for (member, names) in members {
+        let class = path_class(&member);
         for name in names {
-            if !base_lib_ok(&name) && !needed.contains(&name) {
-                needed.push(name);
+            if !base_lib_ok(&name) && !needed.contains(&(name.clone(), class)) {
+                needed.push((name, class));
             }
         }
     }
     let mut rows = Vec::new();
-    for name in needed {
+    for (name, class) in needed {
         let provider = view
-            .providers_of(&name)
+            .providers_of_as(&name, class)
             .into_iter()
-            .chain(view.file_owners(&name))
+            .chain(view.file_owners_as(&name, class))
             .next();
         let Some(provider) = provider else {
             continue; // nothing to subscribe to (an unresolved need is the

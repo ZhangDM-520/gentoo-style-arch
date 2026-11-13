@@ -287,7 +287,8 @@ pub fn clean_targets_in(
         recipe_dir.join("build"),
     ];
     // The W4 half: live trees plus name-truth shared-PKGDEST artifacts.
-    let pkgbase = crate::freshness::recipe_pkgbase(recipe_dir);
+    let pkgbase = crate::freshness::recipe_pkgbase_checked(recipe_dir)
+        .map_err(|e| io::Error::other(e.to_string()))?;
     if let Some(layout) = layout {
         if let Some(base) = &pkgbase {
             trees.push(layout.builddir.join(base));

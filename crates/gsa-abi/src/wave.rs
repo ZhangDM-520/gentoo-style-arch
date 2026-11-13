@@ -87,10 +87,12 @@ pub struct WaveMember {
     pub basis: MemberBasis,
 }
 
-/// One provider's rebuild wave.
+/// One provider's rebuild wave (or merged set of overlapping waves).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wave {
     pub provider: String,
+    /// Every provider whose move merged into this wave (primary first).
+    pub providers: Vec<String>,
     /// Seeds ∪ transitive consumers of seeds, canonical build order.
     pub members: Vec<WaveMember>,
     /// `abi=should` batch members noted but not forced (plan §4.3).
@@ -257,6 +259,9 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         // world is unknown (`installed: None`), fail closed and keep the
         // refusal.
         for row in subs.for_provider(provider) {
+            if !row.has_token() {
+                continue;
+            }
             let consumer = canon(recipe_of_name, &row.consumer);
             if direct_consumers
                 .iter()
@@ -386,6 +391,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         }
         let wave = Wave {
             provider: provider.to_string(),
+            providers: vec![provider.to_string()],
             members: known,
             coupled_noted: noted,
             fallback,
@@ -415,34 +421,56 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
     plan
 }
 
-/// Waves sharing a member are ONE wave (one pass, one transaction): merge
-/// them provider-wise so no archive can land in two transactions.
+/// Waves sharing a member or provider are ONE wave (one pass, one
+/// transaction): merge them to a transitive fixpoint and retain every
+/// merged provider so [`stage_swap`] lands all archives together.
 fn merge_overlapping(waves: &mut Vec<Wave>) {
-    let mut merged: Vec<Wave> = Vec::new();
-    for wave in waves.drain(..) {
-        let members: BTreeSet<&str> = wave.members.iter().map(|m| m.id.as_str()).collect();
-        let Some(target) = merged.iter_mut().find(|w| {
-            w.members.iter().any(|m| members.contains(m.id.as_str())) || w.provider == wave.provider
-        }) else {
-            merged.push(wave);
-            continue;
-        };
-        let mut seen: BTreeSet<String> = target.members.iter().map(|m| m.id.clone()).collect();
-        for member in wave.members {
-            if seen.insert(member.id.clone()) {
-                target.members.push(member);
-            }
+    for w in waves.iter_mut() {
+        if w.providers.is_empty() {
+            w.providers.push(w.provider.clone());
         }
-        for noted in wave.coupled_noted {
-            if !target.coupled_noted.contains(&noted) {
-                target.coupled_noted.push(noted);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut merged: Vec<Wave> = Vec::new();
+        for mut wave in waves.drain(..) {
+            let members: BTreeSet<&str> = wave.members.iter().map(|m| m.id.as_str()).collect();
+            let target = merged.iter_mut().find(|w| {
+                w.members.iter().any(|m| members.contains(m.id.as_str()))
+                    || w.providers.iter().any(|p| wave.providers.contains(p))
+                    || w.provider == wave.provider
+            });
+            let Some(target) = target else {
+                merged.push(wave);
+                continue;
+            };
+            for p in wave.providers.drain(..) {
+                if !target.providers.contains(&p) {
+                    target.providers.push(p);
+                }
             }
+            if !target.providers.contains(&wave.provider) {
+                target.providers.push(wave.provider);
+            }
+            let mut seen: BTreeSet<String> = target.members.iter().map(|m| m.id.clone()).collect();
+            for member in wave.members {
+                if seen.insert(member.id.clone()) {
+                    target.members.push(member);
+                }
+            }
+            for noted in wave.coupled_noted {
+                if !target.coupled_noted.contains(&noted) {
+                    target.coupled_noted.push(noted);
+                }
+            }
+            target.fallback = target.fallback || wave.fallback;
+            changed = true;
         }
-        target.fallback = target.fallback || wave.fallback;
+        *waves = merged;
     }
     // Canonical build order is lost by merging; keep members in wave order
     // (the caller re-sorts against the graph when it matters).
-    *waves = merged;
 }
 
 /// The staged-swap transaction plan (docs/plans/plan-native-pm.md §4.5): one
@@ -466,6 +494,18 @@ pub fn stage_swap(waves: &[Wave], archive_of: &dyn Fn(&str) -> Option<PathBuf>) 
     for wave in waves {
         let mut group: Vec<PathBuf> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
+        let providers: Vec<&str> = if wave.providers.is_empty() {
+            vec![wave.provider.as_str()]
+        } else {
+            wave.providers.iter().map(String::as_str).collect()
+        };
+        for provider in &providers {
+            if let Some(archive) = archive_of(provider) {
+                if !group.contains(&archive) {
+                    group.push(archive);
+                }
+            }
+        }
         for member in &wave.members {
             match archive_of(&member.id) {
                 Some(archive) => {
@@ -476,18 +516,12 @@ pub fn stage_swap(waves: &[Wave], archive_of: &dyn Fn(&str) -> Option<PathBuf>) 
                 None => missing.push(member.id.clone()),
             }
         }
-        // The provider itself rides its own wave when it has an archive.
-        if let Some(archive) = archive_of(&wave.provider) {
-            if !group.contains(&archive) {
-                group.insert(0, archive);
-            }
-        }
         if !missing.is_empty() {
             for member in &missing {
                 plan.refusals.push(DecisionRow {
                     subject: member.clone(),
                     decision: Decision::Refuse,
-                    reason: format!("abi-consumer-uncovered {}", wave.provider),
+                    reason: format!("abi-consumer-uncovered {}", providers.join(",")),
                 });
             }
             continue;
@@ -901,6 +935,7 @@ mod tests {
         use std::path::PathBuf;
         let wave = Wave {
             provider: "p".to_string(),
+            providers: vec!["p".to_string()],
             members: vec![
                 WaveMember {
                     id: "c1".to_string(),
@@ -940,6 +975,117 @@ mod tests {
         assert_eq!(
             plan.refusals[0].render(),
             "c2 refuse abi-consumer-uncovered p"
+        );
+    }
+
+    #[test]
+    fn plan_waves_ignores_placeholder_tokens_for_ungraphed_subscribers() {
+        use crate::{InstalledPkg, Subscription};
+        let records = [record("p", &[], &[]), record("direct", &["p"], &[])];
+        let graph = gsa_graph::Graph::build(&records).unwrap();
+        let mut subs = Subscriptions::empty();
+        // Direct consumer carries a current token; ungraphed subscriber carries '-' placeholder.
+        subs.upsert(Subscription {
+            consumer: "direct".to_string(),
+            version: "1".to_string(),
+            provider: "p".to_string(),
+            token: "tok-new".to_string(),
+        });
+        subs.upsert(Subscription {
+            consumer: "orphan-sub".to_string(),
+            version: "1".to_string(),
+            provider: "p".to_string(),
+            token: crate::records::NO_TOKEN.to_string(),
+        });
+        let movement = TokenMove {
+            provider: "p".to_string(),
+            old: None,
+            current: BTreeSet::from(["tok-new".to_string()]),
+            changed_provides: Vec::new(),
+        };
+        let installed = InstalledView::new([InstalledPkg {
+            name: "orphan-sub".to_string(),
+            version: "1".to_string(),
+            provides: Vec::new(),
+            depends: Vec::new(),
+            files: Vec::new(),
+        }]);
+        let plan = plan_waves(&WaveInputs {
+            graph: &graph,
+            subs: &subs,
+            moves: &[movement],
+            installed: Some(&installed),
+            planned: &BTreeSet::new(),
+            recipe_of_name: &BTreeMap::new(),
+        });
+        assert!(
+            plan.waves.is_empty() && plan.uncovered.is_empty(),
+            "NO_TOKEN placeholder row must never read as a token move: waves={:?} uncovered={:?}",
+            plan.waves,
+            plan.uncovered
+        );
+    }
+
+    #[test]
+    fn merge_overlapping_reaches_transitive_fixpoint() {
+        let mut waves = vec![
+            Wave {
+                provider: "p1".to_string(),
+                providers: vec!["p1".to_string()],
+                members: vec![WaveMember {
+                    id: "c1".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                provider: "p3".to_string(),
+                providers: vec!["p3".to_string()],
+                members: vec![WaveMember {
+                    id: "c2".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                provider: "p2".to_string(),
+                providers: vec!["p2".to_string()],
+                members: vec![
+                    WaveMember {
+                        id: "c1".to_string(),
+                        basis: MemberBasis::Recorded,
+                    },
+                    WaveMember {
+                        id: "c2".to_string(),
+                        basis: MemberBasis::Recorded,
+                    },
+                ],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+        ];
+        merge_overlapping(&mut waves);
+        assert_eq!(
+            waves.len(),
+            1,
+            "overlapping chain [p1(c1), p3(c2), p2(c1,c2)] must merge to fixpoint: {waves:?}"
+        );
+        assert_eq!(waves[0].providers, vec!["p1", "p2", "p3"]);
+        let archives = BTreeMap::from([
+            ("p1".to_string(), PathBuf::from("/a/p1.pkg.tar.zst")),
+            ("p2".to_string(), PathBuf::from("/a/p2.pkg.tar.zst")),
+            ("p3".to_string(), PathBuf::from("/a/p3.pkg.tar.zst")),
+            ("c1".to_string(), PathBuf::from("/a/c1.pkg.tar.zst")),
+            ("c2".to_string(), PathBuf::from("/a/c2.pkg.tar.zst")),
+        ]);
+        let swap = stage_swap(&waves, &|id| archives.get(id).cloned());
+        assert_eq!(swap.transactions.len(), 1);
+        assert_eq!(
+            swap.transactions[0].len(),
+            5,
+            "all merged providers + members must land together"
         );
     }
 }

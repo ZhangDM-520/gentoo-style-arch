@@ -103,9 +103,17 @@ pub struct Srcinfo {
     pub source: Vec<String>,
     pub validpgpkeys: Vec<String>,
     pub other: BTreeMap<String, Vec<String>>,
+    pub other_order: Vec<String>,
 }
 
 impl Srcinfo {
+    fn push_other(&mut self, key: &str, value: String) {
+        if !self.other.contains_key(key) {
+            self.other_order.push(key.to_string());
+        }
+        self.other.entry(key.to_string()).or_default().push(value);
+    }
+
     fn set_single(&mut self, key: &str, value: String) {
         let slot = match key {
             "pkgbase" => &mut self.pkgbase,
@@ -115,7 +123,7 @@ impl Srcinfo {
             "epoch" => &mut self.epoch,
             "url" => &mut self.url,
             _ => {
-                self.other.entry(key.to_string()).or_default().push(value);
+                self.push_other(key, value);
                 return;
             }
         };
@@ -140,23 +148,28 @@ impl Srcinfo {
             "source" => &mut self.source,
             "validpgpkeys" => &mut self.validpgpkeys,
             _ => {
-                self.other.entry(key.to_string()).or_default().push(value);
+                self.push_other(key, value);
                 return;
             }
         };
         slot.push(value);
     }
 
-    /// `[epoch:]pkgver-pkgrel`, the pacman full version.
+    /// `[epoch:]pkgver-pkgrel`, the pacman full version (omitting `0:` when epoch is 0).
     pub fn full_version(&self) -> Option<String> {
         let pkgver = self.pkgver.as_deref()?;
         let pkgrel = self.pkgrel.as_deref()?;
-        let epoch = self.epoch.as_deref().unwrap_or("");
-        if epoch.is_empty() {
-            Some(format!("{pkgver}-{pkgrel}"))
-        } else {
-            Some(format!("{epoch}:{pkgver}-{pkgrel}"))
-        }
+        Some(format!(
+            "{}-{pkgrel}",
+            format_epoch_pkgver(self.epoch.as_deref(), pkgver)
+        ))
+    }
+}
+
+pub(crate) fn format_epoch_pkgver(epoch: Option<&str>, pkgver: &str) -> String {
+    match epoch {
+        Some(e) if !e.is_empty() && e != "0" => format!("{e}:{pkgver}"),
+        _ => pkgver.to_string(),
     }
 }
 
@@ -364,10 +377,45 @@ pub struct PkgbuildScan {
     pub vars: BTreeMap<String, ScanValue>,
     pub dynamic: BTreeSet<String>,
     pub functions: BTreeSet<String>,
+    pub sum_order: Vec<String>,
 }
 
 fn shell_dynamic(value: &str) -> bool {
     value.contains('$') || value.contains('`')
+}
+
+fn strip_unquoted_comment(line: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut prev_ws = true;
+    for (idx, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            prev_ws = false;
+            continue;
+        }
+        if ch == '\\' && !in_single {
+            escaped = true;
+            prev_ws = false;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            prev_ws = false;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            prev_ws = false;
+            continue;
+        }
+        if ch == '#' && !in_single && !in_double && prev_ws {
+            return line[..idx].trim_end();
+        }
+        prev_ws = ch.is_whitespace();
+    }
+    line
 }
 
 fn strip_quotes(value: &str) -> &str {
@@ -381,6 +429,36 @@ fn strip_quotes(value: &str) -> &str {
         }
     }
     v
+}
+
+fn scan_array_words(scan: &mut PkgbuildScan, key: &str, body: &str) {
+    let mut values = Vec::new();
+    for word in body.split_whitespace() {
+        let word = strip_quotes(word);
+        if word.is_empty() {
+            continue;
+        }
+        if shell_dynamic(word) {
+            scan.dynamic.insert(key.to_string());
+        } else {
+            values.push(word.to_string());
+        }
+    }
+    if scan.dynamic.contains(key) {
+        scan.vars.remove(key);
+        return;
+    }
+    if !scan.sum_order.iter().any(|k| k == key) {
+        scan.sum_order.push(key.to_string());
+    }
+    scan.vars
+        .entry(key.to_string())
+        .and_modify(|v| {
+            if let ScanValue::Array(items) = v {
+                items.extend(values.iter().cloned());
+            }
+        })
+        .or_insert(ScanValue::Array(values));
 }
 
 /// Scan `PKGBUILD` content read-only. Never evaluates shell, never panics:
@@ -397,29 +475,10 @@ pub fn scan_pkgbuild(content: &str) -> PkgbuildScan {
         let trimmed = line.trim_start();
 
         if let Some(key) = pending_array.take() {
-            // Continuation of a multi-line array until its closing paren.
-            let end = trimmed.contains(')');
-            let body = trimmed.trim_end_matches(')');
-            let mut values = Vec::new();
-            for word in body.split_whitespace() {
-                let word = strip_quotes(word);
-                if word.is_empty() {
-                    continue;
-                }
-                if shell_dynamic(word) {
-                    scan.dynamic.insert(key.clone());
-                } else {
-                    values.push(word.to_string());
-                }
-            }
-            scan.vars
-                .entry(key.clone())
-                .and_modify(|v| {
-                    if let ScanValue::Array(items) = v {
-                        items.extend(values.iter().cloned());
-                    }
-                })
-                .or_insert(ScanValue::Array(values));
+            let clean = strip_unquoted_comment(trimmed);
+            let end = clean.contains(')');
+            let body = clean.trim_end_matches(')');
+            scan_array_words(&mut scan, &key, body);
             if !end {
                 pending_array = Some(key);
             }
@@ -460,7 +519,8 @@ pub fn scan_pkgbuild(content: &str) -> PkgbuildScan {
         if raw_line.starts_with(' ') || raw_line.starts_with('\t') {
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else {
+        let clean_line = strip_unquoted_comment(line);
+        let Some((key, value)) = clean_line.split_once('=') else {
             continue;
         };
         let key = key.trim();
@@ -471,19 +531,9 @@ pub fn scan_pkgbuild(content: &str) -> PkgbuildScan {
         if let Some(rest) = value.strip_prefix('(') {
             let end = rest.contains(')');
             let body = rest.trim_end_matches(')');
-            let mut values = Vec::new();
-            for word in body.split_whitespace() {
-                let word = strip_quotes(word);
-                if word.is_empty() {
-                    continue;
-                }
-                if shell_dynamic(word) {
-                    scan.dynamic.insert(key.to_string());
-                } else {
-                    values.push(word.to_string());
-                }
-            }
-            scan.vars.insert(key.to_string(), ScanValue::Array(values));
+            scan.dynamic.remove(key);
+            scan.vars.remove(key);
+            scan_array_words(&mut scan, key, body);
             if !end {
                 pending_array = Some(key.to_string());
             }
@@ -491,6 +541,7 @@ pub fn scan_pkgbuild(content: &str) -> PkgbuildScan {
             let value = strip_quotes(value);
             if shell_dynamic(value) {
                 scan.dynamic.insert(key.to_string());
+                scan.vars.remove(key);
             } else {
                 scan.vars
                     .insert(key.to_string(), ScanValue::Scalar(value.to_string()));
@@ -639,12 +690,39 @@ impl RecipeMeta {
         };
         let pkgver = fact("pkgver")?;
         let pkgrel = fact("pkgrel")?;
-        let epoch = fact("epoch").unwrap_or_default();
-        if epoch.is_empty() {
-            Ok(format!("{pkgver}-{pkgrel}"))
-        } else {
-            Ok(format!("{epoch}:{pkgver}-{pkgrel}"))
+        let epoch = fact("epoch").ok();
+        Ok(format!(
+            "{}-{pkgrel}",
+            format_epoch_pkgver(epoch.as_deref(), &pkgver)
+        ))
+    }
+
+    pub fn pkgnames_checked(&self) -> Result<Vec<String>, RecipeError> {
+        if let Some(info) = &self.srcinfo {
+            if !info.pkgnames.is_empty() {
+                return Ok(info.pkgnames.clone());
+            }
         }
+        if let Some(scan) = &self.scanned {
+            if scan.dynamic.contains("pkgname") {
+                return Err(RecipeError::missing_fact(self.id.as_str(), "pkgname"));
+            }
+        }
+        Ok(self.pkgnames())
+    }
+
+    pub fn sources_checked(&self) -> Result<Vec<ClassifiedSource>, RecipeError> {
+        if let Some(info) = &self.srcinfo {
+            if !info.source.is_empty() {
+                return Ok(info.source.iter().map(|s| classify_source(s)).collect());
+            }
+        }
+        if let Some(scan) = &self.scanned {
+            if scan.dynamic.contains("source") {
+                return Err(RecipeError::missing_fact(self.id.as_str(), "source"));
+            }
+        }
+        Ok(self.sources())
     }
 
     pub fn pkgdesc(&self) -> Result<Option<&str>, RecipeError> {
@@ -684,14 +762,8 @@ impl RecipeMeta {
         self.sources()
             .into_iter()
             .filter(|source| source.kind == SourceKind::Local)
-            .filter(|source| {
-                let name = source
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| source.location.clone());
-                !recipe_dir.join(name).exists()
-            })
-            .map(|source| source.name.unwrap_or(source.location))
+            .filter(|source| !recipe_dir.join(&source.location).exists())
+            .map(|source| source.location)
             .collect()
     }
 
@@ -701,10 +773,7 @@ impl RecipeMeta {
     /// ref, not a sum, is the anchor.
     ///
     /// The sum lists are consumed the way makepkg consumes them: the first
-    /// sum family present, indexed by source position. An ABSENT list or a
-    /// length mismatch is makepkg's own fail-closed refusal ("Integrity
-    /// checks are missing"), so this helper stays silent there — only an
-    /// explicit `SKIP` entry is a disclosure this engine owes.
+    /// sum family present in declaration order, indexed by source position.
     pub fn unverified_remote_sums(&self) -> Vec<String> {
         let sources = self.sources();
         const SUM_KEYS: [&str; 5] = ["sha256sums", "sha512sums", "b2sums", "sha1sums", "md5sums"];
@@ -724,16 +793,34 @@ impl RecipeMeta {
             .srcinfo
             .as_ref()
             .and_then(|info| {
-                SUM_KEYS
+                let first_declared = info
+                    .other_order
                     .iter()
-                    .find_map(|key| info.other.get(*key).cloned())
+                    .find(|k| SUM_KEYS.contains(&k.as_str()))
+                    .and_then(|k| info.other.get(k).cloned());
+                first_declared.or_else(|| {
+                    SUM_KEYS
+                        .iter()
+                        .find_map(|key| info.other.get(*key).cloned())
+                })
             })
             .or_else(|| {
                 let scan = self.scanned.as_ref()?;
-                SUM_KEYS.iter().find_map(|key| match scan.vars.get(*key) {
-                    Some(ScanValue::Array(items)) => Some(items.clone()),
-                    Some(ScanValue::Scalar(value)) => Some(vec![value.clone()]),
-                    None => None,
+                let first_declared = scan
+                    .sum_order
+                    .iter()
+                    .find(|k| SUM_KEYS.contains(&k.as_str()))
+                    .and_then(|k| match scan.vars.get(k) {
+                        Some(ScanValue::Array(items)) => Some(items.clone()),
+                        Some(ScanValue::Scalar(value)) => Some(vec![value.clone()]),
+                        None => None,
+                    });
+                first_declared.or_else(|| {
+                    SUM_KEYS.iter().find_map(|key| match scan.vars.get(*key) {
+                        Some(ScanValue::Array(items)) => Some(items.clone()),
+                        Some(ScanValue::Scalar(value)) => Some(vec![value.clone()]),
+                        None => None,
+                    })
                 })
             });
         let mut out = Vec::new();
@@ -1086,5 +1173,82 @@ pkgname = zen-browser
                 let _ = meta.scan_fact(fact);
             }
         }
+    }
+
+    #[test]
+    fn epoch_zero_is_omitted_from_full_version() {
+        let info = parse_srcinfo(
+            "pkgbase = a\n\tpkgver = 1.0\n\tpkgrel = 2\n\tepoch = 0\n",
+            ".SRCINFO",
+        )
+        .unwrap();
+        assert_eq!(info.full_version().as_deref(), Some("1.0-2"));
+        let meta = RecipeMeta {
+            id: RecipeId::new("a").unwrap(),
+            path: "packages/stable/a".to_string(),
+            srcinfo: None,
+            scanned: Some(scan_pkgbuild("pkgver=1.0\npkgrel=2\nepoch=0\n")),
+            source: MetaSource::Scan,
+        };
+        assert_eq!(meta.full_version().unwrap(), "1.0-2");
+    }
+
+    #[test]
+    fn missing_local_sources_checks_location_and_scan_strips_comments() {
+        let dir = std::env::temp_dir().join(format!("gsa-rec-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("real.patch"), "diff\n").unwrap();
+
+        let scan = scan_pkgbuild(
+            "pkgname=a\nsource=(alias::real.patch) # comment\ndepends=(glibc $extra) # partial\n",
+        );
+        assert!(scan.dynamic.contains("depends"));
+        assert!(!scan.vars.contains_key("depends"));
+
+        let meta = RecipeMeta {
+            id: RecipeId::new("a").unwrap(),
+            path: "packages/stable/a".to_string(),
+            srcinfo: None,
+            scanned: Some(scan),
+            source: MetaSource::Scan,
+        };
+        assert!(
+            meta.missing_local_sources(&dir).is_empty(),
+            "expected no missing local sources, got {:?}",
+            meta.missing_local_sources(&dir)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unverified_remote_sums_follows_srcinfo_declaration_order() {
+        let info = parse_srcinfo(
+            "pkgbase = a\n\tpkgver = 1.0\n\tpkgrel = 1\n\tsource = https://example.com/a.tar.gz\n\tmd5sums = SKIP\n\tsha256sums = deadbeef\n",
+            ".SRCINFO",
+        )
+        .unwrap();
+        let meta = RecipeMeta {
+            id: RecipeId::new("a").unwrap(),
+            path: "packages/stable/a".to_string(),
+            srcinfo: Some(info),
+            scanned: None,
+            source: MetaSource::Srcinfo,
+        };
+        assert_eq!(
+            meta.unverified_remote_sums(),
+            vec!["https://example.com/a.tar.gz"]
+        );
+        assert!(meta.pkgnames_checked().is_ok());
+
+        let dyn_meta = RecipeMeta {
+            id: RecipeId::new("a").unwrap(),
+            path: "packages/stable/a".to_string(),
+            srcinfo: None,
+            scanned: Some(scan_pkgbuild("pkgname=(a $extra)\nsource=(x $y)\n")),
+            source: MetaSource::Scan,
+        };
+        assert!(dyn_meta.pkgnames_checked().is_err());
+        assert!(dyn_meta.sources_checked().is_err());
     }
 }

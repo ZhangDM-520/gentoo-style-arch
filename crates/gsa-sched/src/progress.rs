@@ -83,6 +83,8 @@ impl Progress {
     pub fn observe(&mut self, event: &SupEvent) {
         match event {
             SupEvent::Started { index, .. } => self.started(*index),
+            SupEvent::Activated { index } => self.insert_latent(*index),
+            SupEvent::Reopened { index } => self.reopen(*index),
             SupEvent::Finished { row, .. } => self.settled(row.clone()),
             SupEvent::Parked { index, reason } => {
                 if let Some(id) = self.plan.get(*index).cloned() {
@@ -148,7 +150,14 @@ impl Progress {
         let Some(id) = self.plan.get(index).cloned() else {
             return;
         };
-        self.dispatched.insert(id.clone());
+        self.dispatched.insert(id);
+        self.insert_latent(index);
+    }
+
+    fn insert_latent(&mut self, index: usize) {
+        let Some(id) = self.plan.get(index).cloned() else {
+            return;
+        };
         if self.latents.contains(&id) && !self.order.contains(&id) {
             // §H `order` semantics: an activated latent joins the run at its
             // plan slot (the latents are carried after the selection, so
@@ -159,6 +168,12 @@ impl Progress {
                 .position(|other| self.slot_of(other) > self.slot_of(&id))
                 .unwrap_or(self.order.len());
             self.order.insert(pos, id);
+        }
+    }
+
+    fn reopen(&mut self, index: usize) {
+        if let Some(id) = self.plan.get(index) {
+            self.rows.retain(|r| r.pkg != *id);
         }
     }
 
@@ -425,5 +440,62 @@ mod tests {
             .drift(&progress.rows().to_vec(), &swapped)
             .expect("order drift");
         assert!(drift.starts_with("order drift"), "{drift}");
+    }
+
+    #[test]
+    fn activated_and_reopened_machine_nodes_that_halt_before_dispatch_do_not_drift() {
+        use crate::machine::{Machine, Node, Policy, Recorded};
+        use gsa_model::LaneOutcome;
+
+        let ids = vec![id("p1"), id("p2")];
+        let nodes = vec![
+            Node {
+                id: id("p1"),
+                prereqs: Vec::new(),
+                consumers: Vec::new(),
+                core: true,
+                build_tools: false,
+                batch: None,
+                latent: false,
+            },
+            Node {
+                id: id("p2"),
+                prereqs: Vec::new(),
+                consumers: Vec::new(),
+                core: true,
+                build_tools: false,
+                batch: None,
+                latent: true,
+            },
+        ];
+        let mut machine = Machine::new(nodes, Vec::new(), Policy::ConeStop, 1);
+        let mut progress = Progress::new(ids.clone(), vec![id("p2")]);
+
+        // p1 dispatches and succeeds; then remediation queues both p2 (activate)
+        // and p1 (force_rebuild), then halts before dispatching them.
+        assert_eq!(machine.pick(), vec![0]);
+        machine.dispatch(0);
+        progress.observe(&started(0));
+        let ok_row = row("p1", RowStatus::Succeeded, "ok");
+        progress.observe(&finished(0, ok_row));
+        machine.record(
+            0,
+            Recorded {
+                code: LaneOutcome::Ok,
+                dur: Some(1),
+                reason: "ok".to_string(),
+            },
+        );
+
+        machine.activate(1);
+        progress.observe(&SupEvent::Activated { index: 1 });
+        machine.force_rebuild(0);
+        progress.observe(&SupEvent::Reopened { index: 0 });
+        machine.finalize_never_ready();
+        assert_eq!(
+            progress.drift(&machine.rows(), &machine.order()),
+            None,
+            "activated/reopened nodes halted before dispatch must stay in sync with record"
+        );
     }
 }

@@ -370,6 +370,14 @@ fn shell_single_quote(value: &str) -> String {
 /// Write the composite for one toolchain under `root` via temp + rename and
 /// return its path. Idempotent: concurrent lanes write identical bytes.
 pub fn install(root: &std::path::Path, toolchain: Toolchain) -> Result<std::path::PathBuf, String> {
+    install_with_owner(root, toolchain, crate::privilege::own_to_build_user)
+}
+
+fn install_with_owner(
+    root: &std::path::Path,
+    toolchain: Toolchain,
+    own: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<std::path::PathBuf, String> {
     let (_, sources) = crate::config::makepkg_conf_sources(toolchain)?;
     let flags = crate::config::extra_build_flags()?;
     let body = render_with(toolchain, &sources, &flags);
@@ -384,6 +392,7 @@ pub fn install(root: &std::path::Path, toolchain: Toolchain) -> Result<std::path
         std::process::id()
     ));
     std::fs::write(&tmp, body).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    own(&tmp)?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("cannot install {}: {e}", path.display()))?;
     Ok(path)
 }
@@ -518,5 +527,21 @@ mod render_tests {
         // --build`/`meson compile` read it from the environment, and makepkg
         // exports only its buildenv list (blind review, 2026-11-11).
         assert!(body.ends_with("export RUSTFLAGS NINJAFLAGS\n"), "{body}");
+    }
+
+    #[test]
+    fn install_runs_ownership_handoff_before_rename() {
+        let dir = std::env::temp_dir().join(format!("gsa-mkconf-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut owned_path = None;
+        let path = install_with_owner(&dir, Toolchain::Gcc, |tmp| {
+            assert!(tmp.exists(), "temp file must exist when chown runs");
+            owned_path = Some(tmp.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(owned_path.as_ref().is_some_and(|p| p != &path));
+        assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

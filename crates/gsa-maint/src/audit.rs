@@ -37,7 +37,7 @@
 //! `<family> <subject> <detail…>` findings.
 
 use gsa_install::localdb::pacman_db_root;
-use gsa_qa::input::{collect_archives, load_workspace, QaInput, QaInstalled};
+use gsa_qa::input::{collect_archives_checked, load_workspace, QaInput, QaInstalled};
 
 use crate::{hygiene, MaintCtx, Row};
 
@@ -169,8 +169,15 @@ fn toolchain_edges(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
         if id == "rust-git" {
             continue;
         }
-        let text = std::fs::read_to_string(ctx.root.join(&record.path).join("PKGBUILD"))
-            .unwrap_or_default();
+        let pkgbuild = ctx.root.join(&record.path).join("PKGBUILD");
+        let text = match gsa_model::read::optional(&pkgbuild) {
+            Ok(Some(text)) => text,
+            Ok(None) => continue,
+            Err(error) => {
+                out.push((id.to_string(), format!("unreadable PKGBUILD: {error}")));
+                continue;
+            }
+        };
         let invokes = text.lines().any(|line| {
             let trimmed = line.trim_start();
             if trimmed.starts_with('#') {
@@ -202,11 +209,17 @@ fn installed_pgo(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
         Ok(db) => db,
         Err(_) => return vec![("(local-db)".to_string(), "unreadable".to_string())],
     };
+    let declared = ctx.declared_names();
     for (id, dir) in ctx.recipe_dirs() {
-        if !gsa_install::gates::pgo_instrumented_recipe(Some(&dir)) {
-            continue;
+        match gsa_install::gates::pgo_instrumented_recipe(Some(&dir)) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                out.push((id.clone(), format!("unreadable PKGBUILD: {error}")));
+                continue;
+            }
         }
-        let names = ctx.declared_names().get(&id).cloned().unwrap_or_default();
+        let names = declared.get(&id).cloned().unwrap_or_default();
         for name in names {
             let Some(pkg) = db.get(&name) else {
                 continue;
@@ -253,37 +266,56 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     // The recipe-contract lints (the QA registry's report checks).
     let qa: Vec<(String, String)> = match load_workspace(ctx.root) {
         Ok(workspace) => {
-            let archives = collect_archives(&workspace.recipes, &[]);
-            let installed: Vec<QaInstalled> = gsa_install::LocalDb::load(&pacman_db_root())
-                .map(|db| {
-                    db.packages()
-                        .into_iter()
-                        .map(|pkg| QaInstalled {
-                            name: pkg.name.clone(),
-                            version: pkg.version.clone(),
-                            provides: pkg.provides.clone(),
-                            depends: pkg.depends.clone(),
-                            files: pkg.files.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let input = QaInput {
-                recipes: &workspace.recipes,
-                targets: &[],
-                archives: &archives,
-                installed: &installed,
-                exclusions: &workspace.exclusions,
-            };
-            let mut rows: Vec<(String, String)> = gsa_qa::report::report_findings(&input)
-                .iter()
-                .map(|finding| {
-                    (
-                        format!("{}: {}", finding.check, finding.subject),
-                        finding.detail.clone(),
-                    )
-                })
-                .collect();
+            let mut archive_warn = Vec::new();
+            let mut rows = Vec::new();
+            match collect_archives_checked(&workspace.recipes, &[], &mut archive_warn) {
+                Ok(archives) => {
+                    if !archive_warn.is_empty() {
+                        for line in String::from_utf8_lossy(&archive_warn).lines() {
+                            if !line.trim().is_empty() {
+                                rows.push(("archive-scan".to_string(), line.to_string()));
+                            }
+                        }
+                    }
+                    match gsa_install::LocalDb::load(&pacman_db_root()) {
+                        Ok(db) => {
+                            let installed: Vec<QaInstalled> = db
+                                .packages()
+                                .into_iter()
+                                .map(|pkg| QaInstalled {
+                                    name: pkg.name.clone(),
+                                    version: pkg.version.clone(),
+                                    provides: pkg.provides.clone(),
+                                    depends: pkg.depends.clone(),
+                                    files: pkg.files.clone(),
+                                })
+                                .collect();
+                            let input = QaInput {
+                                recipes: &workspace.recipes,
+                                targets: &[],
+                                archives: &archives,
+                                installed: &installed,
+                                exclusions: &workspace.exclusions,
+                            };
+                            for finding in gsa_qa::report::report_findings(&input) {
+                                rows.push((
+                                    format!("{}: {}", finding.check, finding.subject),
+                                    finding.detail.clone(),
+                                ));
+                            }
+                        }
+                        Err(error) => {
+                            rows.push((
+                                "(local-db)".to_string(),
+                                format!("local DB unreadable: {error}"),
+                            ));
+                        }
+                    }
+                }
+                Err(error) => {
+                    rows.push(("(archives)".to_string(), error));
+                }
+            }
             // A recipe the lints could not read is NOT a clean recipe.
             for (id, reason) in &workspace.unlintable {
                 rows.push((format!("unlintable: {id}"), reason.clone()));
@@ -296,33 +328,12 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
 
     // The stale-set skew lint (docs/plans/plan-gentoo-qol.md shortlist 6), scoped to
     // what the side-car records know.
-    let skew: Vec<(String, String)> = match gsa_state::BinpkgIndex::load(ctx.state) {
-        Ok(index) => {
-            let mut out = Vec::new();
-            for record in ctx.graph.records() {
-                let id = record.id.as_str();
-                let Some(built) = index.rows_for(id).first().map(|r| r.version.clone()) else {
-                    continue;
-                };
-                let Some(committed) = ctx.committed_version(id) else {
-                    continue;
-                };
-                // Compare canonicalized on BOTH sides (2026-11-01): the
-                // index side always carries an epoch while `committed`
-                // spells epoch 0 bare — a raw compare flagged every
-                // epoch-0 rebuild as a false skew ("built=0:X committed=X").
-                if gsa_recipe::pkginfo::canonical_version(&built)
-                    != gsa_recipe::pkginfo::canonical_version(&committed)
-                {
-                    out.push((
-                        id.to_string(),
-                        format!("built={built} committed={committed}"),
-                    ));
-                }
-            }
-            out
-        }
-        Err(error) => vec![("(index)".to_string(), error.to_string())],
+    let skew: Vec<(String, String)> = match crate::version_skew_rows(ctx) {
+        Ok(items) => items
+            .into_iter()
+            .map(|(id, built, committed)| (id, format!("built={built} committed={committed}")))
+            .collect(),
+        Err(error) => vec![("(index)".to_string(), error)],
     };
     push_family(&mut rows, "version-sync-skew", skew);
     rows.push(Row::new(

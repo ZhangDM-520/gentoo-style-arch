@@ -194,7 +194,11 @@ fn await_db_lock(db_root: &Path) -> Result<(), String> {
     // exists, and proceeding produced pacman's own lock error with retry
     // advice that could never terminate (blind-review 2026-11-11,
     // data-center-ops).
-    crate::register::wait_for_db_lock(db_root, crate::register::StalePolicy::Refuse)
+    crate::register::wait_for_db_lock_for(
+        db_root,
+        crate::register::StalePolicy::Refuse,
+        "install-transaction",
+    )
 }
 
 /// Run the ONE `pacman -U` transaction for this call, serialized through the

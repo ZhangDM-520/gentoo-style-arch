@@ -1,107 +1,12 @@
 //! The ABI name vocabulary the checks share (fish `abi_*` / `_*_lint_*`
-//! helpers in `build-all.fish` + `lib/audit.fish`).
-//!
-//! These are small, pure functions with one semantics each. `gsa-install`
-//! carries its own copies for the install gates (`localdb.rs`, `gates.rs`);
-//! the duplication is deliberate — `gsa-install` depends on `gsa-qa` (the
-//! decision hook), so `gsa-qa` cannot depend back on it without a cycle, and
-//! lifting the vocabulary into `gsa-model` is a later cleanup. Both copies
-//! are unit-tested against the same documented semantics.
+//! helpers in `build-all.fish` + `lib/audit.fish`). Re-exported from
+//! [`gsa_model::abi`] so `gsa-abi`, `gsa-install`, and `gsa-qa` share one
+//! definition without duplicating helper logic (`F-QA-03`).
 
-/// The name half of a provide/depend entry (`libfoo.so=1-64` → `libfoo.so`,
-/// `meson>=1.8` → `meson`) — fish `abi_provide_name` (version suffix
-/// `[=<>].*$` stripped).
-pub fn provide_name(entry: &str) -> &str {
-    entry.split(['=', '<', '>']).next().unwrap_or("").trim()
-}
-
-/// The bare soname stem of a name (`libfoo.so` → `libfoo.so`,
-/// `libfoo.so.1.2` → `libfoo.so`); `None` when the name is not
-/// soname-shaped — fish `_lint_soname_stem`.
-pub fn soname_stem(name: &str) -> Option<&str> {
-    if name.ends_with(".so") {
-        return Some(name);
-    }
-    let idx = name.find(".so.")?;
-    Some(&name[..idx + 3])
-}
-
-/// Does one provide entry cover a dependency string? Bare soname provides
-/// (`libfoo.so`, makepkg-auto-versioned to `libfoo.so=<ver>`) cover the
-/// `libfoo.so.N` soname family; the auto-versioned form covers only its own
-/// generation (`libfoo.so=1-64` covers `libfoo.so.1`, not `libfoo.so.2`).
-/// A versioned NAME provide covers the name itself. Fish
-/// `abi_provide_covers`; the same matcher `gsa-install::localdb::provide_covers`
-/// documents as "the ONE matcher every resolution source shares".
-pub fn provide_covers(provide: &str, dep: &str) -> bool {
-    let (name, ver) = match provide.split_once('=') {
-        Some((n, v)) => (n.trim(), Some(v.trim())),
-        None => (provide.trim(), None),
-    };
-    if name.is_empty() || dep.is_empty() {
-        return false;
-    }
-    if name == dep {
-        return true;
-    }
-    if soname_stem(dep) == Some(name) {
-        let Some(ver) = ver else {
-            return true;
-        };
-        if ver.is_empty() {
-            return true;
-        }
-        // `1-64` → `1`: makepkg's auto-version is `<generation>-<pkgrel-ish>`.
-        let generation = match ver.rfind('-') {
-            Some(idx) => &ver[..idx],
-            None => ver,
-        };
-        return dep == format!("{name}.{generation}");
-    }
-    false
-}
-
-/// The Stock→house counterpart name (fish `abi_stock_name`): the VCS suffix
-/// stripped, else the name unchanged.
-pub fn stock_name(name: &str) -> String {
-    for suffix in ["-git", "-svn", "-hg", "-snapshot"] {
-        if let Some(stem) = name.strip_suffix(suffix) {
-            return stem.to_string();
-        }
-    }
-    name.to_string()
-}
-
-/// Expected base-system sonames — the glibc + gcc-libs runtime every Arch
-/// system carries (fish `abi_base_lib_ok`'s list, byte-identical to
-/// `gsa-install::gates::BASE_LIBS`). Any other non-workspace soname must
-/// resolve through a provide, shipped bytes, an owned file, or the
-/// exclusions registry.
-pub const BASE_LIBS: &[&str] = &[
-    "libc.so.6",
-    "libm.so.6",
-    "libmvec.so.1",
-    "libdl.so.2",
-    "libpthread.so.0",
-    "librt.so.1",
-    "libresolv.so.2",
-    "libutil.so.1",
-    "libnsl.so.1",
-    "libthread_db.so.1",
-    "ld-linux-x86-64.so.2",
-    "ld-linux.so.2",
-    "ld64.so.2",
-    "libgcc_s.so.1",
-    "libstdc++.so.6",
-    "libgomp.so.1",
-    "libatomic.so.1",
-    "libquadmath.so.0",
-];
-
-/// Is this soname covered by the expected base-system runtime?
-pub fn base_lib_ok(soname: &str) -> bool {
-    BASE_LIBS.contains(&soname)
-}
+pub use gsa_model::abi::{
+    base_lib_ok, provide_covers, provide_covers_as, provide_name, soname_stem, stock_name,
+    ElfClass, BASE_LIBS,
+};
 
 /// Does the exclusions registry (`config/abi-exclusions.conf` ids) cover
 /// this name (a package id, a soname, or its bare stem)? — fish

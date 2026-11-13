@@ -1453,3 +1453,229 @@ fn discovery_without_vercmp_keeps_the_mtime_order() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn lib32_installed_provide_does_not_cover_64bit_consumer_needed() {
+    let dir = scratch("elfclass-provide");
+    let c = dir.join("c64-1.0-1-x86_64.pkg.tar.zst");
+    let elf = elf64_with_needed("libcross.so.1");
+    write_archive(
+        &c,
+        &[
+            (".PKGINFO", &pkginfo_body("c64", "1.0-1", &[])),
+            ("usr/lib/libc64.so", &elf),
+        ],
+    );
+    let db = LocalDb::from_packages(vec![InstalledPackage {
+        name: "lib32-cross".to_string(),
+        version: "0:1.0-1".to_string(),
+        base: None,
+        desc: None,
+        provides: vec!["libcross.so=1-32".to_string()],
+        depends: Vec::new(),
+        files: vec!["usr/lib32/libcross.so.1".to_string()],
+        install_date: None,
+    }]);
+    let rows = decide(&[candidate(&c, None)], &checked_ctx(), &db).unwrap();
+    assert!(
+        rows.iter().any(|r| r.decision == Decision::Refuse
+            && r.reason.contains("needed")
+            && r.reason.contains("libcross.so.1")),
+        "lib32 provide libcross.so=1-32 must NOT satisfy 64-bit usr/lib/libc64.so: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dropping_all_sonames_still_engages_unreadable_localdb_fence() {
+    let dir = scratch("drop-soname-unreadable");
+    let db_root = dir.join("var/lib/pacman");
+    let local = db_root.join("local");
+    std::fs::create_dir_all(local.join("prov-1.0-1")).unwrap();
+    std::fs::write(
+        local.join("prov-1.0-1/desc"),
+        "%NAME%\nprov\n%VERSION%\n1.0-1\n%PROVIDES%\nlibvanish.so=1-64\n",
+    )
+    .unwrap();
+    std::fs::write(local.join("prov-1.0-1/files"), "%FILES%\n").unwrap();
+    // Corrupt/unreadable second DB entry.
+    std::fs::create_dir_all(local.join("broken-1.0-1")).unwrap();
+    std::fs::write(local.join("broken-1.0-1/desc"), "%NAME%\n\n").unwrap();
+    let db = LocalDb::load(&db_root).unwrap();
+    assert!(!db.unreadable.is_empty());
+
+    let p = dir.join("prov-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&p, &[(".PKGINFO", &pkginfo_body("prov", "2.0-1", &[]))]);
+    let rows = decide(&[candidate(&p, None)], &checked_ctx(), &db).unwrap();
+    assert!(
+        rows.iter().any(|r| r.decision == Decision::Refuse
+            && r.reason.contains("abi-installed-view-unreadable")),
+        "dropping all sonames from installed provider must trigger unreadable-db fence: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn untrusted_candidate_does_not_read_neighbor_srcinfo() {
+    let dir = scratch("untrusted-srcinfo");
+    let recipe = dir.join("untrusted");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "this is invalid srcinfo\n").unwrap();
+    let arc = recipe.join("pkg-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&arc, &[(".PKGINFO", &pkginfo_body("pkg", "1.0-1", &[]))]);
+    let cand = Candidate {
+        archive: arc,
+        recipe_dir: Some(recipe),
+        recipe_trusted: false,
+    };
+    let rows = decide(&[cand], &checked_ctx(), &LocalDb::default()).unwrap();
+    assert!(
+        rows.iter().all(|r| r.decision == Decision::Install),
+        "untrusted candidate must not read neighbor .SRCINFO: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn parked_candidate_does_not_satisfy_tx_names() {
+    let dir = scratch("parked-tx-names");
+    let p_arc = dir.join("prov-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &p_arc,
+        &[(
+            ".PKGINFO",
+            &pkginfo_body("prov", "2.0-1", &["libprov.so=2-64"]),
+        )],
+    );
+    let c_arc = dir.join("cons-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(&c_arc, &[(".PKGINFO", &pkginfo_body("cons", "2.0-1", &[]))]);
+    let c_elf = dir.join("libcons.so.1");
+    std::fs::write(&c_elf, elf64_with_needed("libprov.so.1")).unwrap();
+
+    let db = LocalDb::from_packages(vec![
+        InstalledPackage {
+            name: "prov".to_string(),
+            version: "0:1.0-1".to_string(),
+            base: None,
+            desc: None,
+            provides: vec!["libprov.so=1-64".to_string()],
+            depends: Vec::new(),
+            files: Vec::new(),
+            install_date: None,
+        },
+        InstalledPackage {
+            name: "cons".to_string(),
+            version: "0:1.0-1".to_string(),
+            base: None,
+            desc: None,
+            provides: Vec::new(),
+            depends: vec!["prov".to_string()],
+            files: vec![c_elf.display().to_string()],
+            install_date: None,
+        },
+    ]);
+    let mut ctx = checked_ctx();
+    ctx.parks
+        .push(("cons".to_string(), "waits-on-failed".to_string()));
+    let rows = decide(
+        &[candidate(&p_arc, None), candidate(&c_arc, None)],
+        &ctx,
+        &db,
+    )
+    .unwrap();
+    assert!(
+        rows.iter().any(|r| r.subject == "prov"
+            && r.decision == Decision::Refuse
+            && r.reason.contains("abi-consumer")),
+        "parked consumer cons must not count as in_tx coverage for prov: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn install_built_package_force_mode_refuses_unreadable_pkginfo() {
+    let dir = scratch("force-unreadable-pkginfo");
+    let recipe = dir.join("foo");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let conf = dir.join("pacman.conf");
+    std::fs::create_dir_all(dir.join("db/local")).unwrap();
+    std::fs::write(
+        &conf,
+        format!("[options]\nDBPath = {}\n", dir.join("db").display()),
+    )
+    .unwrap();
+    // Corrupt gzip/zstd archive named after our expected package.
+    std::fs::write(recipe.join("foo-1.0-1-x86_64.pkg.tar.zst"), b"not-zstd").unwrap();
+    let run = InstallRun {
+        mode: DecideMode::Force,
+        state_dir: dir.join("state"),
+        conf: Some(conf),
+        pacman_args: Vec::new(),
+        register_ignorepkg: false,
+        later_installs: Vec::new(),
+        recipe_of_name: Default::default(),
+        workspace_names: Vec::new(),
+    };
+    let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
+    assert!(outcome.is_none(), "must refuse before pacman");
+    assert!(
+        rows.iter().any(|r| r.decision == Decision::Refuse),
+        "Force mode must refuse unreadable .pkg.tar.zst instead of noop empty-list: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn unreadable_pkgbuild_fails_discovery_and_pgo_check() {
+    use std::os::unix::fs::PermissionsExt;
+    if gsa_model::state_gate::current_uid() == 0 {
+        return;
+    }
+    let dir = scratch("unreadable-pkgbuild");
+    let recipe = dir.join("pgo-hidden");
+    std::fs::create_dir_all(&recipe).unwrap();
+    let pkgbuild = recipe.join("PKGBUILD");
+    std::fs::write(&pkgbuild, "pkgname=pgo-hidden\npkgver=1\n").unwrap();
+    std::fs::set_permissions(&pkgbuild, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // Missing .SRCINFO -> discover_recipe must error reading chmod-000 PKGBUILD.
+    let err = discover_recipe(&recipe).unwrap_err();
+    assert!(
+        err.contains("PKGBUILD")
+            || err.contains("Permission denied")
+            || err.contains("cannot read"),
+        "expected read error for unreadable PKGBUILD: {err}"
+    );
+
+    // With .SRCINFO present -> decide must refuse when PKGBUILD is unreadable.
+    std::fs::write(
+        recipe.join(".SRCINFO"),
+        "pkgbase = pgo-hidden\npkgname = pgo-hidden\n",
+    )
+    .unwrap();
+    let arc = recipe.join("pgo-hidden-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &arc,
+        &[(".PKGINFO", &pkginfo_body("pgo-hidden", "1.0-1", &[]))],
+    );
+    let rows = decide(
+        &[candidate(&arc, Some(&recipe))],
+        &checked_ctx(),
+        &LocalDb::default(),
+    )
+    .unwrap();
+    assert!(
+        rows.iter().any(|r| r.decision == Decision::Refuse),
+        "unreadable PKGBUILD must refuse PGO check instead of silently passing: {:?}",
+        rendered(&rows)
+    );
+
+    std::fs::set_permissions(&pkgbuild, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

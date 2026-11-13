@@ -11,7 +11,7 @@
 //! still declares (pkgbase/pkgname of the committed metadata) or some
 //! installed package owns/ships is in use and never leaves the closure.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use gsa_install::register::{prune_ignorepkg, read_ignorepkg, register_ignorepkg};
@@ -88,28 +88,30 @@ pub fn installed_names(conf: Option<&Path>) -> (Option<BTreeSet<String>>, String
 }
 
 /// Which recipe declares a wanted name (for the `in-use` detail).
-fn declared_by(ctx: &MaintCtx<'_>, name: &str) -> Option<String> {
-    ctx.declared_names()
-        .into_iter()
+fn declared_by<'a>(declared: &'a BTreeMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
+    declared
+        .iter()
         .find(|(_, names)| names.iter().any(|n| n == name))
-        .map(|(id, _)| id)
+        .map(|(id, _)| id.as_str())
 }
 
 /// The classification of one closure entry: `in-use` (keep) or `stale`
 /// (prunable), with its reason.
 fn classify(
-    ctx: &MaintCtx<'_>,
+    declared: &BTreeMap<String, Vec<String>>,
     name: &str,
     installed: Option<&BTreeSet<String>>,
     shipped: &BTreeSet<String>,
 ) -> (&'static str, String) {
-    if let Some(id) = declared_by(ctx, name) {
+    if let Some(id) = declared_by(declared, name) {
         return ("in-use", format!("in-use declared-by {id}"));
     }
     if let Some(installed) = installed {
         if installed.contains(name) {
             return ("in-use", "in-use installed".to_string());
         }
+    } else {
+        return ("in-use", "in-use installed-db-unavailable".to_string());
     }
     if shipped.contains(name) {
         (
@@ -127,17 +129,21 @@ fn classify(
 /// Report-only: rc stays 0 (§E.4) and nothing is written.
 pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
+    let declared = ctx.declared_names();
     let wanted = wanted_names(ctx);
     let shipped = shipped_names(ctx)?;
     let (installed, note) = installed_names(Some(conf));
+    let Some(installed_set) = installed else {
+        return Err(note);
+    };
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     for name in &closure.names {
-        let (class, reason) = classify(ctx, name, installed.as_ref(), &shipped);
+        let (class, reason) = classify(&declared, name, Some(&installed_set), &shipped);
         rows.push(Row::new(name, class, reason));
     }
     for name in &wanted {
         if !closure.names.contains(name) {
-            let id = declared_by(ctx, name).unwrap_or_default();
+            let id = declared_by(&declared, name).unwrap_or_default();
             rows.push(Row::new(name, "missing", format!("declared-by {id}")));
         }
     }
@@ -211,12 +217,16 @@ pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>
 /// false` is the dry-run plan (no write).
 pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
+    let declared = ctx.declared_names();
     let shipped = shipped_names(ctx)?;
     let (installed, note) = installed_names(Some(conf));
+    let Some(installed_set) = installed else {
+        return Err(note);
+    };
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     let mut remove: Vec<String> = Vec::new();
     for name in &closure.names {
-        let (class, reason) = classify(ctx, name, installed.as_ref(), &shipped);
+        let (class, reason) = classify(&declared, name, Some(&installed_set), &shipped);
         if class == "in-use" {
             rows.push(crate::protect::keep_row(name, &reason));
         } else {

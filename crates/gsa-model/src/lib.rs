@@ -13,12 +13,14 @@
 //! two host-surface modules the engine shares: `privilege` (the W1 drop) and
 //! `config` (the W2 `gsa.conf` layers).
 
+pub mod abi;
 pub mod config;
 pub mod guard;
 pub mod makepkg_conf;
 pub mod privilege;
 pub mod proc;
 pub mod read;
+pub mod state_gate;
 pub mod toolchain;
 
 use std::fmt;
@@ -592,7 +594,7 @@ pub fn epoch_now() -> i64 {
 fn scalar(value: &str) -> String {
     value
         .chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
         .replace("--- ", "-- ")
 }
@@ -1015,5 +1017,14 @@ mod tests {
         assert_eq!((out.outcome, out.rc), ("interrupted", 130));
         let out = RunOutcome::compute(&[signalled], true, false, true);
         assert_eq!((out.outcome, out.rc), ("interrupted", 130));
+    }
+
+    #[test]
+    fn scalar_strips_all_control_characters() {
+        let cleaned = scalar("a\x1b[31m\t\0b\r\nc");
+        assert!(
+            !cleaned.chars().any(|c| c.is_control()),
+            "control characters leaked: {cleaned:?}"
+        );
     }
 }

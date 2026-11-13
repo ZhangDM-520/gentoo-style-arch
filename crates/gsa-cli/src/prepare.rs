@@ -779,7 +779,17 @@ fn prepare_one(
 
     // ── 1. compiler toolchain drift gate (docs/build-guide.md "Skip and
     //       resume"; the identity folds in the engine's config bytes, rule 6) ─
-    let toolchain = selected_toolchain(id.as_str(), graph.record(idx), recipe_dir);
+    let toolchain = match selected_toolchain(id.as_str(), graph.record(idx), recipe_dir) {
+        Ok(toolchain) => toolchain,
+        Err(error) => {
+            return PackagePrep {
+                plan: NodePlan::Refuse {
+                    reason: "toolchain-identity".to_string(),
+                },
+                log: vec![format!("{name}: {error}")],
+            };
+        }
+    };
     let identity = match toolchain::build_identity(toolchain) {
         Ok(identity) => identity,
         Err(error) => {
@@ -1156,12 +1166,22 @@ pub fn run_sync_pass(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write)
     exit::render(run_sync_pass_inner(inv, out, err), err)
 }
 
-fn run_sync_pass_inner(
-    inv: &Invocation,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<i32, Exit> {
-    let root = crate::resolve_workspace(inv, err)?;
+fn sync_pass_selection(root: &Path, inv: &Invocation) -> Result<Selection, Exit> {
+    let project = load_project(root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db = gsa_recipe::RecipeDb::load(root, graph.records())
+        .map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+    };
+    pass_selection(&ctx, inv).map_err(Exit::Usage)
+}
+
+fn refresh_recipe_store(root: &Path, inv: &Invocation, err: &mut dyn Write) -> Result<bool, Exit> {
     // W3 store semantics: `-Sy` refreshes the canonical store alongside the
     // version-sync pass. A `project` override (dev checkout) supersedes the
     // store and is never refreshed; a cwd workspace is the deprecated path
@@ -1172,6 +1192,7 @@ fn run_sync_pass_inner(
                 err,
                 "gsa: note: project override active — the recipe store is not refreshed"
             );
+            Ok(false)
         }
         Ok(cfg) => {
             let state = gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
@@ -1190,30 +1211,37 @@ fn run_sync_pass_inner(
                     let _ = writeln!(err, "gsa: {note}");
                 }
                 let _ = writeln!(err, "gsa: recipe store refreshed: {head}");
+                Ok(true)
             } else {
                 let _ = writeln!(
                     err,
                     "gsa: note: workspace is not the recipe store — nothing to refresh"
                 );
+                Ok(false)
             }
         }
-        Err(message) => return Err(Exit::Usage(message)),
+        Err(message) => Err(Exit::Usage(message)),
     }
-    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db = gsa_recipe::RecipeDb::load(&root, graph.records())
-        .map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv),
+}
+
+fn run_sync_pass_inner(
+    inv: &Invocation,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<i32, Exit> {
+    // Usage validation runs BEFORE the privilege gate when a workspace already
+    // exists, and the store is never refreshed or mutated before both pass.
+    // When no workspace exists yet, the privilege gate answers first (rc 3)
+    // instead of creating state/store as an unprivileged caller.
+    let preflight = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    // A selection is optional here (§B.4 spells `gsa -Sy` with no targets):
-    // no selection = every recipe, in canonical build order.
-    let selection = pass_selection(&ctx, inv).map_err(Exit::Usage)?;
-    crate::write_notes(err, &selection.notes);
+    let mut selection = match &preflight {
+        Ok(root) => Some(sync_pass_selection(root, inv)?),
+        Err(crate::RootFailure::Usage(msg)) => return Err(Exit::Usage(msg.clone())),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => None,
+    };
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
@@ -1224,6 +1252,18 @@ fn run_sync_pass_inner(
     ) {
         return Err(exit);
     }
+
+    let root = crate::resolve_workspace(inv, err)?;
+    let refreshed = refresh_recipe_store(&root, inv, err)?;
+    let selection = match selection.take() {
+        Some(sel) if !refreshed => sel,
+        _ => sync_pass_selection(&root, inv)?,
+    };
+    crate::write_notes(err, &selection.notes);
+
+    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
 
     let srcdest = gsa_model::config::resolve_srcdest();
     let phase = sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
@@ -1335,6 +1375,34 @@ pub fn stale_set(
         }
     }
     stale
+}
+
+/// The recipe's compiler family at planning time (§B.11): the run's
+/// `--toolchain`, else the record's tag, else the PKGBUILD scan, else the
+/// default — the same ladder the lane child walks, so the identity the
+/// planner compares is the one the build will produce. An ambiguous recipe
+/// resolves to the default here; the LANE refuses it with the named message,
+/// which is the surface that can stop a build.
+pub(crate) fn selected_toolchain(
+    pkg: &str,
+    record: &gsa_model::TopologyRecord,
+    recipe_dir: &Path,
+) -> Result<gsa_model::toolchain::Toolchain, String> {
+    let pkgbuild = recipe_dir.join("PKGBUILD");
+    let source = std::fs::read_to_string(&pkgbuild)
+        .map_err(|e| format!("cannot read {}: {e}", pkgbuild.display()))?;
+    Ok(gsa_recipe::toolchain::select(
+        pkg,
+        gsa_model::toolchain::override_value(),
+        record.toolchain(),
+        &source,
+    )
+    .map(|selected| selected.toolchain)
+    .unwrap_or_else(|_| {
+        gsa_model::toolchain::override_value()
+            .or_else(|| record.toolchain())
+            .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT)
+    }))
 }
 
 #[cfg(test)]
@@ -1464,32 +1532,22 @@ mod tests {
             },
             "a recipe-id-keyed pending marker outranks every freshness claim: {log:?}"
         );
+        assert!(
+            selected_toolchain(
+                "missing-pkg",
+                &TopologyRecord {
+                    id: RecipeId::new("missing-pkg").unwrap(),
+                    path: "packages/missing-pkg".to_string(),
+                    groups: Vec::new(),
+                    edges: Vec::new(),
+                    tags: Vec::new(),
+                    source_line: 1,
+                },
+                &dir,
+            )
+            .is_err(),
+            "missing/unreadable PKGBUILD must not silently collapse to gcc"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-/// The recipe's compiler family at planning time (§B.11): the run's
-/// `--toolchain`, else the record's tag, else the PKGBUILD scan, else the
-/// default — the same ladder the lane child walks, so the identity the
-/// planner compares is the one the build will produce. An ambiguous recipe
-/// resolves to the default here; the LANE refuses it with the named message,
-/// which is the surface that can stop a build.
-pub(crate) fn selected_toolchain(
-    pkg: &str,
-    record: &gsa_model::TopologyRecord,
-    recipe_dir: &Path,
-) -> gsa_model::toolchain::Toolchain {
-    let source = std::fs::read_to_string(recipe_dir.join("PKGBUILD")).unwrap_or_default();
-    gsa_recipe::toolchain::select(
-        pkg,
-        gsa_model::toolchain::override_value(),
-        record.toolchain(),
-        &source,
-    )
-    .map(|selected| selected.toolchain)
-    .unwrap_or_else(|_| {
-        gsa_model::toolchain::override_value()
-            .or_else(|| record.toolchain())
-            .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT)
-    })
 }

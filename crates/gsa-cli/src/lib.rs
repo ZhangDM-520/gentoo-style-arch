@@ -149,6 +149,9 @@ pub(crate) fn resolve_root_readonly() -> Option<PathBuf> {
 pub(crate) enum RootFailure {
     /// A usage-class failure the caller renders as rc 2.
     Usage(String),
+    /// No workspace exists yet (`config/topology.conf` missing): standalone `-U`
+    /// treats this as an empty workspace universe.
+    NotFound(String),
     /// Reaching the store means CREATING the state root, and that is root's
     /// work. A first run used to die here with a raw
     /// `cannot create /var/lib/gsa: Permission denied` (rc 2) BEFORE the
@@ -162,7 +165,7 @@ impl RootFailure {
     /// simply has no store yet — the hint, never an EACCES.
     fn message(self) -> String {
         match self {
-            RootFailure::Usage(message) => message,
+            RootFailure::Usage(message) | RootFailure::NotFound(message) => message,
             RootFailure::NeedsRoot => format!(
                 "cannot find a recipe workspace: {} (missing config/topology.conf)",
                 gsa_model::config::WORKSPACE_HINT
@@ -218,7 +221,7 @@ pub(crate) fn resolve_root(fetch: bool, state_flag: Option<&str>) -> Result<Path
         eprintln!("gsa: recipe store fetched: {} at {head}", store.display());
         return Ok(store);
     }
-    Err(RootFailure::Usage(format!(
+    Err(RootFailure::NotFound(format!(
         "cannot find a recipe workspace: {} (missing config/topology.conf)",
         gsa_model::config::WORKSPACE_HINT
     )))
@@ -248,7 +251,9 @@ pub(crate) fn resolve_workspace(inv: &Invocation, err: &mut dyn Write) -> Result
     };
     match resolved {
         Ok(root) => Ok(root),
-        Err(RootFailure::Usage(message)) => Err(Exit::Usage(message)),
+        Err(RootFailure::Usage(message) | RootFailure::NotFound(message)) => {
+            Err(Exit::Usage(message))
+        }
         // The first mutating act is creating the state root; ask the ONE
         // privilege seam for its wording and rc (`-S` unprivileged must be
         // the documented rc 3 refusal, not a raw EACCES). A read-only
@@ -683,7 +688,7 @@ fn execute(
             project: &project,
             graph: &graph,
             db: &RecipeDb::load(&root, &[]).map_err(|e| cmd_error(e.to_string()))?,
-            user_sets: select::load_user_sets(inv),
+            user_sets: select::load_user_sets(inv).map_err(cmd_error)?,
         };
         let _ = write!(out, "{}", render::render_topology_channel(&ctx));
         return Ok(RC_OK);
@@ -694,7 +699,7 @@ fn execute(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(cmd_error)?,
     };
 
     match command {

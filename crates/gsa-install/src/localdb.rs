@@ -261,6 +261,22 @@ impl LocalDb {
             .any(|pkg| pkg.name == name || pkg.provides.iter().any(|p| provide_covers(p, name)))
     }
 
+    /// Class-scoped [`Self::provides_cover`]: auto-versioned `-32`/`-64`
+    /// soname provides only match a consumer member in the same [`ElfClass`].
+    pub fn provides_cover_as(&self, dep: &str, class: ElfClass) -> bool {
+        let name = provide_name(dep);
+        if name.is_empty() {
+            return false;
+        }
+        self.packages.values().any(|pkg| {
+            pkg.name == name
+                || pkg
+                    .provides
+                    .iter()
+                    .any(|p| provide_covers_as(p, name, class))
+        })
+    }
+
     /// Where owned files are probed (empty root = production `/`).
     fn probe_root(&self) -> &Path {
         if self.root.as_os_str().is_empty() {
@@ -295,8 +311,9 @@ impl LocalDb {
 // The provide/soname semantics are SHARED with the ABI subsystem — the
 // ONE matcher lives in `gsa-abi::provides` (rule 25(a)/(b)); these
 // re-exports keep the local-DB surface stable without forking the logic.
-pub use gsa_abi::view::{path_class, ElfClass};
-pub use gsa_abi::{provide_covers, provide_name, soname_stem};
+pub use gsa_model::abi::{
+    path_class, provide_covers, provide_covers_as, provide_name, soname_stem, ElfClass,
+};
 
 /// The host's pacman DB root (`pacman-conf DBPath`, falling back to
 /// `/var/lib/pacman`). `pacman-conf` is a read-only configuration reader,

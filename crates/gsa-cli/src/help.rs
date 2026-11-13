@@ -93,7 +93,7 @@ and a root shell without a build user is refused with guidance.",
             ("gsa -Qg [name…]", "groups/sets and their members (all with counts by default)"),
             ("gsa -Ql <ref…>", "list owned files (pacman -Ql — delegated verbatim)"),
             ("gsa -Qo <path…>", "file owner (pacman -Qo — delegated verbatim)"),
-            ("gsa -Qu", "stale set: recipes whose tracked version moved past their newest built instance"),
+            ("gsa -Qu", "stale set: recipes whose tracked version moved past what is installed (or newest built instance if uninstalled)"),
             ("gsa -Qb [ref…]", "binpkg index rows: the retained built instances the side-car DB records (hash-bound, §J.4)"),
             ("gsa -Qp <archive…>", "archive probe: the archive's .PKGINFO matched against its index row, hash/size agreement reported"),
             ("gsa -Qa <ref…>", "ABI report: derived token, abi-rev= override if any, subscriptions recorded against it"),
@@ -111,7 +111,7 @@ and a root shell without a build user is refused with guidance.",
             ("gsa -Sl [targets…] [ranges…]", "ordered selection listing with range indices (-Bl same; nothing is built or installed)"),
             ("gsa -Sw <targets…> [ranges…]", "fetch and verify the selection's sources through makepkg --verifysource — no build, no install; verdict rows are advisory (§D)"),
             ("gsa -Sy [targets…] [ranges…]", "version-sync pass only: provider queries, transactional recipe rewrites left UNCOMMITTED (review with 'git diff', then commit), and the run-level disposition block (rule 18 anchoring)"),
-            ("gsa -Su [targets…] [ranges…]", "update the stale set (recipes whose tracked version moved past their newest built instance) with NO sync pass — the committed versions build as-is (pacman -Su semantics)"),
+            ("gsa -Su [targets…] [ranges…]", "update the stale set (tracked version past installed, or newest built instance if uninstalled) with NO sync pass — the committed versions build as-is (pacman -Su semantics)"),
             ("gsa -Syu [targets…] [ranges…]", "sync first (-Sy), then build+install the stale set"),
         ],
     },
@@ -140,7 +140,7 @@ and a root shell without a build user is refused with guidance.",
             ("gsa -Ml [--tail <ref>] [--keep N]", "per-package log browse/tail; --keep N is the log-retention prune"),
             ("gsa -Mm", "shared-source mirrors: dedupe VCS clones into canonical mirrors (asks first: prints its targets and stops rc 3 without --noconfirm)"),
             ("gsa -Mc <targets…>", "prune strength 1: src/pkg/build trees and archives of the selection"),
-            ("gsa -Mcc", "prune strength 2: every built archive in the workspace plus its VCS-revision sidecar (symlinks are never deleted or followed)"),
+            ("gsa -Mcc", "prune strength 2: every built archive in the workspace plus its VCS-revision sidecar (symlinks are never deleted or followed; prints its target list and stops rc 3 without --noconfirm)"),
             ("gsa -Mccc", "prune strength 3: additionally pulled sources (prints its target list and stops rc 3 without --noconfirm)"),
             ("gsa -Ms [name…] [--add|--remove <ref…>]", "named sets: list sets and members; user sets are managed in the kv store against config/sets/ (computed sets are not editable)"),
             ("gsa -Mw [--add|--remove <ref…>]", "world: the explicitly wanted set"),
@@ -204,7 +204,7 @@ An install run (-S/-U) additionally accepts:",
         ],
     },
     Section {
-        head: "A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune, --backfill, --tail <ref>, --keep N, --show <run-id>, --add, --remove, --noconfirm (the engine's own confirmations — -Mm/-Mccc — never a pacman question), and (-Mi) --config PATH; --dry-run renders a mutating verb's plan and rows without touching anything.
+        head: "A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune, --backfill, --tail <ref>, --keep N, --show <run-id>, --add, --remove, --noconfirm (the engine's own confirmations — -Mcc/-Mccc/-Mm — never a pacman question), and (-Mi) --config PATH; --dry-run renders a mutating verb's plan and rows without touching anything.
 
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
@@ -478,5 +478,18 @@ mod tests {
         assert!(pos("gsa -Syu") > build_install && pos("gsa -Syu") < build_only);
         assert!(pos("gsa -B --dry-run") > build_only && pos("gsa -B --dry-run") < archives);
         assert!(pos("gsa -Ua") > archives && pos("gsa -Ua") < maintain);
+    }
+
+    #[test]
+    fn help_matches_contract_for_stale_and_confirmations() {
+        let rendered = render_at(CAPTURE_WIDTH);
+        assert!(
+            rendered.contains("-Mcc/-Mccc/-Mm"),
+            "confirmations summary missing -Mcc:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("installed") && rendered.contains("-Qu"),
+            "-Qu must describe installed-first stale semantics"
+        );
     }
 }

@@ -49,7 +49,7 @@ pub fn delete_allowed(root: &Path, target: &Path) -> bool {
     // prune, a half-finished tree), and an intermediate link is still a move.
     let mut probe = anchor;
     loop {
-        if probe.exists() {
+        if std::fs::symlink_metadata(probe).is_ok() {
             break;
         }
         match probe.parent() {
@@ -60,7 +60,7 @@ pub fn delete_allowed(root: &Path, target: &Path) -> bool {
     let Ok(probe_real) = probe.canonicalize() else {
         return false;
     };
-    probe_real != root_real && probe_real.starts_with(&root_real)
+    probe_real.starts_with(&root_real) && (probe_real != root_real || probe == root)
 }
 
 #[cfg(test)]
@@ -121,6 +121,24 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("pkg/src")).unwrap();
         assert!(delete_allowed(&root, &root.join("pkg/src")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn direct_child_symlinks_and_absent_direct_children_are_deletable() {
+        let dir = scratch("direct-child");
+        let root = dir.join("build");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("child-link")).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), root.join("dangling-child")).unwrap();
+        assert!(delete_allowed(&root, &root.join("child-link")));
+        assert!(delete_allowed(&root, &root.join("dangling-child")));
+        assert!(delete_allowed(&root, &root.join("absent-child")));
+
+        std::os::unix::fs::symlink(dir.join("missing"), root.join("dangling-ancestor")).unwrap();
+        assert!(!delete_allowed(&root, &root.join("dangling-ancestor/sub")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -159,24 +159,43 @@ pub fn paint(role: Role, text: &str) -> Cow<'_, str> {
 /// `CR` rewound the line — one line becoming two for every line-oriented
 /// reader — and the same bytes reached `--machine`, the channel that must
 /// never carry colour (blind review, 2026-11-11).
+/// Byte length inside `after_esc` consumed by the escape sequence right after `\x1b`.
+fn escape_sequence_len(after_esc: &str) -> usize {
+    let mut chars = after_esc.char_indices();
+    match chars.next() {
+        Some((_, '[')) => {
+            for (idx, ch) in chars {
+                if ('\x40'..='\x7e').contains(&ch) {
+                    return idx + ch.len_utf8();
+                }
+            }
+            after_esc.len()
+        }
+        Some((idx, '(' | ')' | '*' | '+')) => {
+            if let Some((idx2, ch2)) = chars.next() {
+                idx2 + ch2.len_utf8()
+            } else {
+                idx + 1
+            }
+        }
+        Some((idx, ch)) => idx + ch.len_utf8(),
+        None => 0,
+    }
+}
+
 pub fn sanitize_data(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last_space = false;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
+    let mut i = 0;
+    while i < text.len() {
+        let ch = text[i..].chars().next().expect("valid utf-8 boundary");
         match ch {
             // A whole escape SEQUENCE goes, not just the ESC byte: leaving
-            // `[31m` behind is residue that reads as data.
-            '\x1b' => match chars.next() {
-                Some('[') => {
-                    for next in chars.by_ref() {
-                        if ('\x40'..='\x7e').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                Some(_) | None => {}
-            },
+            // `[31m` or charset designations behind is residue that reads as data.
+            '\x1b' => {
+                i += 1 + escape_sequence_len(&text[i + 1..]);
+                continue;
+            }
             '\t' | '\r' | '\n' => {
                 if !last_space {
                     out.push(' ');
@@ -189,6 +208,7 @@ pub fn sanitize_data(text: &str) -> String {
                 last_space = c == ' ';
             }
         }
+        i += ch.len_utf8();
     }
     out.trim_end().to_string()
 }
@@ -290,33 +310,20 @@ fn cell_width(ch: char) -> usize {
     1
 }
 
-/// Visible columns: escape sequences (CSI, and the two-byte `ESC x` forms a
-/// terminal may echo) consume no width, and a wide glyph takes its real two
-/// cells (see [`cell_width`]).
+/// Visible columns: escape sequences (CSI, charset designations, and 2-byte
+/// `ESC x` forms a terminal may echo) consume no width, and a wide glyph takes
+/// its real two cells (see [`cell_width`]).
 pub fn visible_width(text: &str) -> usize {
     let mut width = 0;
-    let mut chars = text.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\x1b' {
-            width += cell_width(ch);
+    let mut i = 0;
+    while i < text.len() {
+        let ch = text[i..].chars().next().expect("valid utf-8 boundary");
+        if ch == '\x1b' {
+            i += 1 + escape_sequence_len(&text[i + 1..]);
             continue;
         }
-        match chars.next() {
-            Some('[') => {
-                // CSI: parameters/intermediates, then one final byte.
-                for next in chars.by_ref() {
-                    if ('\x40'..='\x7e').contains(&next) {
-                        break;
-                    }
-                }
-            }
-            // `ESC (` / `ESC )` take one more byte; any other is a two-byte
-            // sequence. Either way it carries no visible column.
-            Some('(') | Some(')') | Some('*') | Some('+') => {
-                let _ = chars.next();
-            }
-            _ => {}
-        }
+        width += cell_width(ch);
+        i += ch.len_utf8();
     }
     width
 }
@@ -348,22 +355,38 @@ pub fn pad(text: &str, width: usize) -> String {
     out
 }
 
+/// `(start_byte, end_byte, display_cells)` per base glyph (attaching trailing
+/// zero-width combining marks so cuts never orphan a diacritic).
+fn display_clusters(text: &str) -> Vec<(usize, usize, usize)> {
+    let mut clusters: Vec<(usize, usize, usize)> = Vec::new();
+    for (idx, ch) in text.char_indices() {
+        let end = idx + ch.len_utf8();
+        let w = cell_width(ch);
+        if w == 0 && !clusters.is_empty() {
+            let last = clusters.last_mut().expect("non-empty checked above");
+            last.1 = end;
+        } else {
+            clusters.push((idx, end, w));
+        }
+    }
+    clusters
+}
+
 /// Truncate in the MIDDLE with `…`: the head and the tail both survive,
 /// because a package id's ends are what a reader recognises
 /// (`qemu-hw-display-virtio-gpu-…-rutabaga`). A string that already fits is
 /// returned unchanged.
 ///
-/// PLAIN text only: this counts characters, so paint the result, never the
+/// PLAIN text only: this counts display cells, so paint the result, never the
 /// input (a caller with a painted string would spend width on escapes).
 pub fn truncate_middle(text: &str, width: usize) -> String {
     debug_assert!(
         !text.contains('\x1b'),
         "truncate_middle takes plain text; paint after truncating"
     );
-    let chars: Vec<char> = text.chars().collect();
     // A string that already fits is unchanged — the cap counts the ellipsis
     // only for a string that must be cut.
-    if chars.len() <= width {
+    if visible_width(text) <= width {
         return text.to_string();
     }
     let Some(inner) = width.checked_sub(1) else {
@@ -372,11 +395,42 @@ pub fn truncate_middle(text: &str, width: usize) -> String {
     if inner == 0 {
         return "…".to_string();
     }
-    let head = inner.div_ceil(2);
-    let tail = inner - head;
-    let mut out: String = chars[..head].iter().collect();
+    let clusters = display_clusters(text);
+    let head_budget = inner.div_ceil(2);
+    let tail_budget = inner - head_budget;
+    let mut head_used = 0;
+    let mut head_count = 0;
+    for &(_, _, w) in &clusters {
+        if head_used + w > head_budget {
+            break;
+        }
+        head_used += w;
+        head_count += 1;
+    }
+    let mut tail_used = 0;
+    let mut tail_idx = clusters.len();
+    for i in (head_count..clusters.len()).rev() {
+        let w = clusters[i].2;
+        if tail_used + w > tail_budget {
+            break;
+        }
+        tail_used += w;
+        tail_idx = i;
+    }
+    let head_end = if head_count == 0 {
+        0
+    } else {
+        clusters[head_count - 1].1
+    };
+    let tail_start = if tail_idx < clusters.len() {
+        clusters[tail_idx].0
+    } else {
+        text.len()
+    };
+    let mut out = String::with_capacity(head_end + 3 + (text.len() - tail_start));
+    out.push_str(&text[..head_end]);
     out.push('…');
-    out.extend(&chars[chars.len() - tail..]);
+    out.push_str(&text[tail_start..]);
     out
 }
 
@@ -388,14 +442,24 @@ pub fn truncate_end(text: &str, width: usize) -> String {
         !text.contains('\x1b'),
         "truncate_end takes plain text; paint after truncating"
     );
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
+    if visible_width(text) <= width {
         return text.to_string();
     }
     let Some(inner) = width.checked_sub(1) else {
         return String::new();
     };
-    let mut out: String = chars[..inner].iter().collect();
+    let clusters = display_clusters(text);
+    let mut used = 0;
+    let mut cut_end = 0;
+    for &(_, end, w) in &clusters {
+        if used + w > inner {
+            break;
+        }
+        used += w;
+        cut_end = end;
+    }
+    let mut out = String::with_capacity(cut_end + 3);
+    out.push_str(&text[..cut_end]);
     out.push('…');
     out
 }
@@ -411,76 +475,46 @@ pub fn pad_left(text: &str, width: usize) -> String {
     out
 }
 
-/// Split `text` after `budget` VISIBLE characters, escapes kept in the half
+/// Split `text` after `budget` VISIBLE columns, escapes kept in the half
 /// they belong to and never split. `("", text)` when the budget is zero.
 pub fn split_visible(text: &str, budget: usize) -> (String, String) {
     let mut head = String::with_capacity(text.len());
     let mut visible = 0;
-    let mut chars = text.char_indices();
-    while let Some((offset, ch)) = chars.next() {
+    let mut i = 0;
+    while i < text.len() {
+        let ch = text[i..].chars().next().expect("valid utf-8 boundary");
         if ch == '\x1b' {
-            // Copy the whole sequence into the head, then keep scanning.
-            head.push(ch);
-            let mut next = chars.next();
-            let mut escaped = String::new();
-            if let Some((_, '[')) = next {
-                escaped.push('[');
-                for (_, byte) in chars.by_ref() {
-                    escaped.push(byte);
-                    if ('\x40'..='\x7e').contains(&byte) {
-                        break;
-                    }
-                }
-                head.push_str(&escaped);
-                continue;
-            }
-            if let Some((_, byte)) = next.take() {
-                head.push(byte);
-                // `ESC (` / `ESC )` / `ESC *` / `ESC +` take one more byte,
-                // exactly as `visible_width` counts them.
-                if matches!(byte, '(' | ')' | '*' | '+') {
-                    if let Some((_, extra)) = chars.next() {
-                        head.push(extra);
-                    }
-                }
-            }
+            let end = i + 1 + escape_sequence_len(&text[i + 1..]);
+            head.push_str(&text[i..end]);
+            i = end;
             continue;
         }
         // A wide glyph that does not fit whole goes to the tail: half a
         // glyph is not a cell budget the terminal honours.
         if visible + cell_width(ch) > budget {
-            return (head, text[offset..].to_string());
+            return (head, text[i..].to_string());
         }
         head.push(ch);
         visible += cell_width(ch);
+        i += ch.len_utf8();
     }
     (head, String::new())
 }
 
-/// Copy `budget` visible characters, escapes included verbatim, then `tail`;
+/// Copy `budget` visible columns, escapes included verbatim, then `tail`;
 /// append a reset when any escape was emitted (the colour is cut).
 fn truncate_visible(text: &str, budget: usize, tail: &str) -> String {
     let mut out = String::with_capacity(text.len().min(budget + 8));
     let mut visible = 0;
     let mut saw_escape = false;
-    let mut chars = text.chars();
-    while let Some(ch) = chars.next() {
+    let mut i = 0;
+    while i < text.len() {
+        let ch = text[i..].chars().next().expect("valid utf-8 boundary");
         if ch == '\x1b' {
             saw_escape = true;
-            out.push(ch);
-            match chars.next() {
-                Some('[') => {
-                    out.push('[');
-                    for next in chars.by_ref() {
-                        out.push(next);
-                        if ('\x40'..='\x7e').contains(&next) {
-                            break;
-                        }
-                    }
-                }
-                Some(next) => out.push(next),
-                None => break,
-            }
+            let end = i + 1 + escape_sequence_len(&text[i + 1..]);
+            out.push_str(&text[i..end]);
+            i = end;
             continue;
         }
         if visible + cell_width(ch) > budget {
@@ -488,6 +522,7 @@ fn truncate_visible(text: &str, budget: usize, tail: &str) -> String {
         }
         out.push(ch);
         visible += cell_width(ch);
+        i += ch.len_utf8();
     }
     out.push_str(tail);
     if saw_escape {
@@ -610,5 +645,20 @@ mod tests {
             assert!(open.starts_with("\x1b["), "{role:?} is not an SGR sequence");
             assert!(open.ends_with('m'));
         }
+    }
+
+    #[test]
+    fn sanitize_and_truncate_strip_three_byte_charset_escapes() {
+        assert_eq!(sanitize_data("a\x1b(Bb\x1b)0c\x1b*Bd\x1b+Be"), "abcde");
+        let cut = truncate_visible("ab\x1b(Bcdef", 4, "");
+        assert_eq!(cut, "ab\x1b(Bcd\x1b[0m", "{cut:?}");
+    }
+
+    #[test]
+    fn truncators_measure_display_cells_for_wide_glyphs() {
+        assert_eq!(truncate_middle("あいうえお", 5), "あ…お");
+        assert!(visible_width(&truncate_middle("あいうえお", 5)) <= 5);
+        assert_eq!(truncate_end("あいうえお", 5), "あい…");
+        assert!(visible_width(&truncate_end("あいうえお", 5)) <= 5);
     }
 }

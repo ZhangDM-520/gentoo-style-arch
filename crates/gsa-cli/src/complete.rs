@@ -139,7 +139,10 @@ fn value_answer(name: &str, partial: &str) -> Answer {
 fn clusters(family: Family) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = ACTIONS
         .iter()
-        .filter(|action| action.family == family)
+        .filter(|action| {
+            action.family == family
+                && !(action.family == Family::S && matches!(action.letter, 'i' | 's' | 'g'))
+        })
         .map(|action| {
             (
                 format!("{}{}", family.as_str(), action.letter),
@@ -291,7 +294,7 @@ fn load_names() -> Names {
             names.sets.push(set.name.clone());
         }
     }
-    for (name, _) in crate::select::load_user_sets_at(None) {
+    for (name, _) in crate::select::load_user_sets_at(None).unwrap_or_default() {
         names.sets.push(name);
     }
     names.ids.sort();
@@ -579,6 +582,17 @@ mod tests {
             assert!(
                 !wrapper.contains("--dry-run") && !wrapper.contains("@core"),
                 "a wrapper restates the grammar: {wrapper}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_omits_retired_s_query_clusters() {
+        let spellings = offered(answer(&words(&["-S", "-"]), no_names));
+        for retired in ["-Si", "-Ss", "-Sg"] {
+            assert!(
+                !spellings.contains(&retired.to_string()),
+                "retired cluster {retired} leaked into completion: {spellings:?}"
             );
         }
     }

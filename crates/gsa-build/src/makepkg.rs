@@ -10,7 +10,7 @@
 //! `MAKEFLAGS`/`NINJAFLAGS` without discarding the caller's other flags
 //! (§K.1): each `-jN` / `-j N` is stripped and the rest is preserved.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gsa_model::toolchain::Toolchain;
 
@@ -21,9 +21,7 @@ pub const MAKEPKG_BASE_ARGS: [&str; 2] = ["-sf", "--noconfirm"];
 /// cwd (§K.1), so a relative path resolves against the recipe directory —
 /// a relative `PACMAN` shim then does not exist there and makepkg's
 /// dependency handling dies with a bare "An unknown error has occurred".
-pub(crate) fn absolute_for_child(path: &Path) -> PathBuf {
-    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
-}
+pub(crate) use gsa_model::config::absolute_for_child;
 
 /// Verification-bypass tokens that must never appear anywhere in `gsa`
 /// (contract §A.3.4 / §L.8): a lane argv carrying one is a usage error, not a
@@ -199,14 +197,27 @@ pub fn makepkg_command_in(
     cmd.env("GSA_LANE_BUILDDIR", absolute_for_child(&layout.builddir));
     cmd.env("GSA_LANE_PKGDIR", absolute_for_child(&layout.pkgdir));
     cmd.env("GSA_LANE_PKGDEST", absolute_for_child(&layout.pkgdest));
-    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
-        // makepkg creates SRCDEST on demand; only an existing parent can be
-        // handed to the build user here, so the mirrored path itself is left
-        // to makepkg (the fetch path has always worked this way).
-        cmd.env("GSA_LANE_SRCDEST", absolute_for_child(&srcdest));
+    match gsa_model::config::resolve_srcdest_checked()?.0 {
+        Some(srcdest) => {
+            // makepkg creates SRCDEST on demand; only an existing parent can be
+            // handed to the build user here, so the mirrored path itself is
+            // left to makepkg. Pin both SRCDEST and GSA_LANE_SRCDEST so an
+            // inherited SRCDEST env cannot bypass the composite (§B.11/§K.1).
+            let abs = absolute_for_child(&srcdest);
+            cmd.env("SRCDEST", &abs);
+            cmd.env("GSA_LANE_SRCDEST", abs);
+        }
+        None => {
+            cmd.env_remove("SRCDEST");
+            cmd.env_remove("GSA_LANE_SRCDEST");
+        }
     }
     let shim = crate::shim::shim_path(state_dir);
-    if shim.is_file() {
+    if shim
+        .symlink_metadata()
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+    {
         cmd.env("PACMAN", absolute_for_child(&shim));
     }
     // §B.11: the engine owns the makepkg configuration. The generated
@@ -458,6 +469,94 @@ mod tests {
         assert!(
             error.contains("GSA_BUILD_DIR"),
             "the remedy must be named: {error}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn srcdest_is_absolutized_and_overrides_inherited_env() {
+        struct EnvGuard {
+            vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for (k, v) in self.vars.drain(..) {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("gsa-makepkg-srcdest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let conf = dir.join("gsa.conf");
+        std::fs::write(&conf, "srcdest = rel-src-cache\n").unwrap();
+
+        let layout = gsa_model::config::BuildLayout {
+            builddir: dir.join("build"),
+            pkgdir: dir.join("pkg"),
+            pkgdest: dir.join("pkgs"),
+            root: dir.clone(),
+        };
+
+        let _guard = EnvGuard {
+            vars: vec![
+                ("GSA_CONF", std::env::var_os("GSA_CONF")),
+                ("HOME", std::env::var_os("HOME")),
+                ("SRCDEST", std::env::var_os("SRCDEST")),
+            ],
+        };
+        std::env::set_var("HOME", &home);
+        std::env::set_var("GSA_CONF", &conf);
+        std::env::set_var("SRCDEST", "/tmp/inherited-leak");
+
+        let cmd_set = makepkg_command_in(
+            Path::new("/recipes/pkg"),
+            2,
+            &[],
+            Path::new("/state"),
+            &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
+        )
+        .expect("resolved layout");
+
+        std::fs::write(&conf, "# empty\n").unwrap();
+        let cmd_home_default = makepkg_command_in(
+            Path::new("/recipes/pkg"),
+            2,
+            &[],
+            Path::new("/state"),
+            &layout,
+            gsa_model::toolchain::Toolchain::Gcc,
+        )
+        .expect("resolved layout");
+
+        drop(_guard);
+
+        let src_val = cmd_set
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("SRCDEST"))
+            .and_then(|(_, v)| v.map(std::path::PathBuf::from));
+        let lane_src_val = cmd_set
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("GSA_LANE_SRCDEST"))
+            .and_then(|(_, v)| v.map(std::path::PathBuf::from));
+        let expected_abs = std::path::absolute("rel-src-cache").unwrap();
+        assert_eq!(src_val.as_ref(), Some(&expected_abs));
+        assert_eq!(lane_src_val.as_ref(), Some(&expected_abs));
+
+        let default_src = cmd_home_default
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("SRCDEST"))
+            .and_then(|(_, v)| v.map(std::path::PathBuf::from));
+        assert_eq!(
+            default_src.as_ref(),
+            Some(&std::path::absolute(home.join(".gsa-src")).unwrap())
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

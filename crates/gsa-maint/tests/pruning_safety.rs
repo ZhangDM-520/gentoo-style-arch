@@ -414,3 +414,71 @@ fn shipped_names_sees_the_pkgdest_home_too() {
         );
     });
 }
+
+#[test]
+fn ignorepkg_prune_refuses_when_config_db_fails() {
+    let mut fx = Fixture::new("ignorepkg-bad-conf");
+    fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo("gsatest-alpha", &["gsatest-alpha"], "1.0", "1", &[]),
+    );
+    // Test an unreadable local DB dir (symlink loop DBPath):
+    let loop_a = fx.root.join("db-a");
+    let loop_b = fx.root.join("db-b");
+    std::os::unix::fs::symlink(&loop_b, &loop_a).unwrap();
+    std::os::unix::fs::symlink(&loop_a, &loop_b).unwrap();
+    let conf = fx.root.join("pacman.conf");
+    std::fs::write(
+        &conf,
+        format!(
+            "[options]\nDBPath = {}\nIgnorePkg = installed-keep\n",
+            loop_a.display()
+        ),
+    )
+    .unwrap();
+    fx.with_ctx(|ctx| {
+        let err = ignorepkg::prune(ctx, &conf, false)
+            .expect_err("prune must refuse when local DB under --config is unreadable");
+        assert!(
+            err.contains("unreadable")
+                || err.contains("unavailable")
+                || err.contains("cannot read"),
+            "{err}"
+        );
+    });
+}
+
+#[test]
+fn strength3_cleans_unbuilt_live_staging_without_srcinfo_metadata() {
+    let mut fx = Fixture::new("prune-s3-no-meta");
+    fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo("alpha", &["alpha"], "1.0", "1", &[]),
+    );
+    // Add topology entry WITHOUT writing .SRCINFO (so ctx.db.get("nometa") is None).
+    let dir = fx.root.join("packages/misc/nometa");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("PKGBUILD"), "pkgname=nometa\npkgver=1\npkgrel=1\n").unwrap();
+    let topo_path = fx.root.join("config/topology.conf");
+    let mut topo = std::fs::read_to_string(&topo_path).unwrap();
+    topo.push_str("nometa|packages/misc/nometa|misc||\n");
+    std::fs::write(&topo_path, topo).unwrap();
+
+    let live_src = fx.root.join(common::CACHE_DIR).join("build/nometa");
+    std::fs::create_dir_all(&live_src).unwrap();
+
+    // Reopen MaintCtx so it sees the added topology record.
+    fx.with_ctx(|ctx| {
+        let rows = gsa_maint::prune::strength3(ctx, true);
+        assert!(
+            rows.iter().any(|r| r.subject.contains("build/nometa")),
+            "strength3 must clean live staging <builddir>/<id> even without .SRCINFO: {rows:?}"
+        );
+    });
+}

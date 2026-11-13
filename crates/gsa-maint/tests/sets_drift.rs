@@ -222,3 +222,22 @@ fn sets_referenced_answers_run_membership() {
     assert!(sets::referenced(&state, "alpha"));
     assert!(!sets::referenced(&state, "beta"));
 }
+
+#[test]
+fn set_rows_propagates_unreadable_kv_error() {
+    let fx = sets_fixture("sets-unreadable-kv");
+    let dir = fx.root.join("bad-kv-state");
+    let bad_state = gsa_state::StateRoot::open_readonly(&dir);
+    std::fs::create_dir_all(bad_state.kv_path()).unwrap(); // EISDIR on File::open
+    fx.with_ctx(|ctx| {
+        let err = sets::set_rows(ctx, &bad_state, &[])
+            .expect_err("unreadable kv.jsonl must propagate error in set_rows");
+        assert!(
+            err.contains("kv")
+                || err.contains("directory")
+                || err.contains("Is a directory")
+                || err.contains("cannot read"),
+            "{err}"
+        );
+    });
+}

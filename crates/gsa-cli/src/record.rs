@@ -340,7 +340,7 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
         out.push_str(" --skip-built");
     }
     if let Some(tolerance) = &inv.vcs_skip_tolerance {
-        out.push_str(&format!(" --vcs-skip-tolerance {tolerance}"));
+        out.push_str(&format!(" --vcs-skip-tolerance {}", shell_quote(tolerance)));
     }
     if inv.no_sync {
         out.push_str(" --no-sync");
@@ -353,17 +353,13 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     // toolchain identity — while claiming to be the same run (blind review,
     // 2026-11-11; this function's own doc already listed it as mirrored).
     if let Some(toolchain) = &inv.toolchain {
-        out.push_str(&format!(" --toolchain {toolchain}"));
+        out.push_str(&format!(" --toolchain {}", shell_quote(toolchain)));
     }
     if inv.fail_fast {
         out.push_str(" --fail-fast");
     }
     out.push_str(&argv_seams(inv));
-    if inv
-        .deferred_flags
-        .iter()
-        .any(|f| f == "--no-register-ignorepkg")
-    {
+    if inv.no_register_ignorepkg {
         out.push_str(" --no-register-ignorepkg");
     }
     // Prefetch knobs (owner decision 1): non-default values only — a
@@ -372,7 +368,7 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
         out.push_str(" --no-prefetch");
     }
     if let Some(ahead) = &inv.prefetch_ahead {
-        out.push_str(&format!(" --prefetch-ahead {ahead}"));
+        out.push_str(&format!(" --prefetch-ahead {}", shell_quote(ahead)));
     }
     if let Some(budget) = budget {
         out.push_str(&format!(" --lanes {}", budget.lanes));
@@ -1006,6 +1002,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -1078,6 +1075,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -1131,6 +1129,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -1267,6 +1266,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -1538,6 +1538,7 @@ mod tests {
         let mut inv = inv_for(Family::S);
         inv.fail_fast = true;
         inv.config = Some("/etc/pacman.conf".to_string());
+        inv.no_register_ignorepkg = true;
         inv.deferred_flags = vec![
             "--no-register-ignorepkg".to_string(),
             "--register-ignorepkg".to_string(),
@@ -1864,5 +1865,20 @@ mod tests {
         // 2026-11-11). The full spelling still withholds nothing.
         assert_eq!(record.continuation.command, "");
         assert!(record.continuation.not_mirrored.is_empty());
+    }
+
+    #[test]
+    fn mirrored_value_flags_are_shell_quoted() {
+        let mut inv = inv_for(Family::B);
+        inv.toolchain = Some("my clang".to_string());
+        inv.vcs_skip_tolerance = Some("2;rm".to_string());
+        inv.prefetch_ahead = Some("3 x".to_string());
+        let mirrored = mirror_flags(&inv, None);
+        assert!(mirrored.contains("--toolchain 'my clang'"), "{mirrored}");
+        assert!(
+            mirrored.contains("--vcs-skip-tolerance '2;rm'"),
+            "{mirrored}"
+        );
+        assert!(mirrored.contains("--prefetch-ahead '3 x'"), "{mirrored}");
     }
 }

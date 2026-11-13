@@ -202,9 +202,10 @@ pub fn revdep_report(view: &InstalledView, preserved: &[PreservedEntry]) -> Revd
                     continue;
                 }
                 needed_by.push((pkg.name.clone(), file.clone(), soname.clone()));
-                // File truth resolves in the CONSUMER member's ELF class:
-                // a lib32 member's need is satisfied by lib32-owned files.
-                if view.provides_cover(&soname) || view.owns_file_as(&soname, path_class(file)) {
+                // File truth and auto-versioned soname provides resolve in
+                // the CONSUMER member's ELF class (`usr/lib32/*` vs 64-bit).
+                let class = path_class(file);
+                if view.provides_cover_as(&soname, class) || view.owns_file_as(&soname, class) {
                     continue;
                 }
                 report.unresolved.push(UnresolvedNeed {
@@ -218,9 +219,10 @@ pub fn revdep_report(view: &InstalledView, preserved: &[PreservedEntry]) -> Revd
     for entry in preserved {
         let mut consumers: Vec<String> = needed_by
             .iter()
-            .filter(|(_, _, soname)| {
+            .filter(|(_, file, soname)| {
                 soname == &entry.soname
-                    || (soname.starts_with(entry.soname.as_str()) && !view.provides_cover(soname))
+                    || (soname.starts_with(entry.soname.as_str())
+                        && !view.provides_cover_as(soname, path_class(file)))
             })
             .map(|(consumer, _, _)| consumer.clone())
             .collect();

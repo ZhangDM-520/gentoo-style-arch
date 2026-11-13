@@ -30,26 +30,24 @@ pub struct Ctx<'a> {
 /// The kv user sets of the run's state root (the `-Ms` write side): one
 /// `(name, members)` per `set:<name>` key. I5's second half of `@name`
 /// resolution — a set named only in kv was invisible to selections before.
-/// A kv read that fails resolves to the empty half (config sets still
-/// resolve) and never fails a selection.
-pub fn load_user_sets(inv: &crate::args::Invocation) -> Vec<(String, Vec<String>)> {
+/// Missing state returns empty; unreadable or corrupt kv refuses cleanly.
+pub fn load_user_sets(inv: &crate::args::Invocation) -> Result<Vec<(String, Vec<String>)>, String> {
     load_user_sets_at(inv.state_dir.as_deref())
 }
 
 /// `load_user_sets` for a caller with no parsed invocation (completion):
 /// `state_dir` is the `--state-dir` value, `None` for the resolution ladder.
-pub fn load_user_sets_at(state_dir: Option<&str>) -> Vec<(String, Vec<String>)> {
-    let Ok(state) = gsa_model::config::resolve_state_dir(state_dir) else {
-        return Vec::new();
-    };
+pub fn load_user_sets_at(state_dir: Option<&str>) -> Result<Vec<(String, Vec<String>)>, String> {
+    let state = gsa_model::config::resolve_state_dir(state_dir)?;
     // Read-only handle: loading user sets is a pure read (§D.1 "touches
     // nothing else") — a dry or refused run must never create `index/`,
     // `runs/`, `kv/` just to learn a set is empty.
     let root = gsa_state::StateRoot::open_readonly(&state);
-    let Ok((pairs, _corrupt)) = gsa_state::Kv::list(&root) else {
-        return Vec::new();
-    };
-    pairs
+    let (pairs, corrupt) = gsa_state::Kv::list(&root).map_err(|e| e.to_string())?;
+    if let Some(refusal) = gsa_state::CorruptLine::refusal(&corrupt, "the key-value store") {
+        return Err(refusal);
+    }
+    Ok(pairs
         .into_iter()
         .filter_map(|(key, value)| {
             let name = key.strip_prefix("set:")?.to_string();
@@ -59,7 +57,7 @@ pub fn load_user_sets_at(state_dir: Option<&str>) -> Vec<(String, Vec<String>)> 
                 .collect();
             Some((name, members))
         })
-        .collect()
+        .collect())
 }
 
 /// A selection refusal (usage class, contract §G.1).
@@ -818,5 +816,22 @@ mod tests {
         let err = ensure_selection_nonempty(&[]).unwrap_err();
         assert_eq!(err.to_string(), "selection resolved to no packages");
         assert!(ensure_selection_nonempty(&[(1, RecipeId::new("zstd-git").unwrap())]).is_ok());
+    }
+
+    #[test]
+    fn load_user_sets_refuses_corrupt_kv_store() {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-cli-kv-corrupt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("kv")).unwrap();
+        std::fs::write(dir.join("kv/kv.jsonl"), "{corrupt\n").unwrap();
+        let err = load_user_sets_at(Some(dir.to_str().unwrap())).unwrap_err();
+        assert!(err.contains("key-value store"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

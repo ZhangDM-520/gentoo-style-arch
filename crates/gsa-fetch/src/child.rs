@@ -55,10 +55,8 @@ pub fn spawn(
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)?;
+    let log = gsa_model::state_gate::open_state_append(log_path, &mut std::io::stderr())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
     let log_err = log.try_clone()?;
 
     let mut cmd = if on_path("nice") {
@@ -113,5 +111,26 @@ mod tests {
         let path = fetch_result_path(Path::new("/state/runs/r1"), "mesa-git");
         assert_eq!(path, PathBuf::from("/state/runs/r1/mesa-git.fetch.result"));
         assert!(path.to_string_lossy().ends_with(".fetch.result"));
+    }
+
+    #[test]
+    fn spawn_refuses_symlink_at_prefetch_log() {
+        let dir = std::env::temp_dir().join(format!("gsa-fetch-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim");
+        let log = dir.join("prefetch.log");
+        std::os::unix::fs::symlink(&victim, &log).unwrap();
+
+        let res = spawn(
+            Path::new("/bin/true"),
+            &dir,
+            "pkg",
+            &dir.join("pkg.fetch.result"),
+            &log,
+        );
+        assert!(res.is_err(), "spawn must refuse symlinked prefetch.log");
+        assert!(!victim.exists(), "symlink target must never be created");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

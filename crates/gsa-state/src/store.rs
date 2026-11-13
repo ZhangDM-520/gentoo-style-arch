@@ -135,6 +135,51 @@ pub(crate) fn append_line(path: &Path, line: &str, err: &mut dyn Write) -> Resul
     })
 }
 
+/// Atomically replace a store file through `ownership_gate` (§J.5):
+/// validates/quarantines/refuses symlinks on `path`, stages a fresh file via
+/// `O_CREAT | O_EXCL` (`create_new`), syncs, and renames over `path`.
+pub(crate) fn replace_lines(
+    path: &Path,
+    lines: &[String],
+    err: &mut dyn Write,
+) -> Result<(), StateError> {
+    drop(ownership_gate(path, err)?);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let base = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "state".to_string());
+    let tmp = path.with_file_name(format!("{base}.tmp.{}.{stamp}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&tmp)
+        .map_err(|e| StateError::Io(format!("cannot stage {}: {e}", tmp.display())))?;
+    let mut body = String::new();
+    for line in lines {
+        body.push_str(line);
+        body.push('\n');
+    }
+    if let Err(e) = file
+        .write_all(body.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(StateError::Io(format!(
+            "cannot stage {}: {e}",
+            tmp.display()
+        )));
+    }
+    drop(file);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        StateError::Io(format!("cannot publish {}: {e}", path.display()))
+    })
+}
+
 /// The decoded result of one store read: usable rows plus every line that
 /// could not be used (skipped, never fatal — corruption-tolerant reads).
 pub struct StoreRead<T> {

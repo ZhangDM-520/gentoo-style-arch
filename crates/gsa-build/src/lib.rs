@@ -14,8 +14,6 @@ pub mod lane;
 pub mod makepkg;
 pub mod shim;
 
-use std::path::{Path, PathBuf};
-
 /// Per-package build log location under the state root (contract §J.1: logs
 /// live under the state root; §K.1 writes them through the ownership gate).
 /// The path layout itself lives in `gsa-model` (one home — the supervisor's
@@ -24,14 +22,4 @@ pub use gsa_model::log_path;
 
 /// Find the recipe repository: walk up from `start` until `config/topology.conf`
 /// exists (the strict loader's home).
-pub fn find_root(start: &Path) -> Option<PathBuf> {
-    let mut dir = start.to_path_buf();
-    loop {
-        if dir.join("config").join("topology.conf").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
+pub use gsa_model::config::find_root;

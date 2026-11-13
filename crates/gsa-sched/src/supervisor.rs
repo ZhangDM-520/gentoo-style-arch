@@ -9,10 +9,10 @@
 //! There is no poll cycle (docs/plans/plan-native-pm.md §8: "the poll cycle dies by
 //! construction").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
@@ -75,6 +75,7 @@ pub enum PreSettle {
 /// FORCE-BUILDS the at-risk chain instead of refusing while remediation is
 /// possible. Everything topological comes from the CLI's one graph view —
 /// this seam never re-parses topology.
+#[derive(Clone, Debug)]
 pub struct RemediationSetup {
     /// Probe scratch base ([`gsa_recipe::toolchain::resolve_probe_scratch`]).
     pub scratch_base: PathBuf,
@@ -209,6 +210,16 @@ pub enum SupEvent {
     /// Never a message — both vocabularies render it empty (render.rs), and
     /// it never reaches the run record.
     Tick,
+    /// A remediation latent node entered the active plan (`Machine::activate`)
+    /// before its lane actually spawned (progress projection parity, rule 72).
+    Activated {
+        index: usize,
+    },
+    /// A settled node was reopened for force-rebuild (`Machine::force_rebuild`)
+    /// so `Progress::rows` clears the stale settlement before re-dispatch.
+    Reopened {
+        index: usize,
+    },
 }
 
 pub struct SupOutcome {
@@ -269,7 +280,12 @@ impl Remediation {
     /// semantics): already-queued ids keep their position; a settled node is
     /// re-dispatched, a latent one activated, an in-flight/ready one keeps
     /// building. Returns the indices that were appended, in chain order.
-    fn queue(&mut self, machine: &mut Machine, chain: &[usize]) -> Vec<usize> {
+    fn queue(
+        &mut self,
+        machine: &mut Machine,
+        chain: &[usize],
+        events: &mut dyn FnMut(&SupEvent),
+    ) -> Vec<usize> {
         let mut appended = Vec::new();
         for &index in chain {
             if self.owns(index) {
@@ -279,8 +295,10 @@ impl Remediation {
             appended.push(index);
             if machine.is_latent(index) {
                 machine.activate(index);
+                events(&SupEvent::Activated { index });
             } else if machine.is_settled(index) {
                 machine.force_rebuild(index);
+                events(&SupEvent::Reopened { index });
             }
         }
         appended
@@ -489,11 +507,8 @@ impl Prefetcher {
     /// silently swallowed `writeln` — but never fatal: the log is advisory
     /// surface and the run continues.
     fn note(&self, line: &str, err: &mut dyn Write) {
-        use std::io::Write as _;
-        let written = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)
+        let written = crate::lock::open_state_append(&self.log_path, err)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))
             .and_then(|mut log| writeln!(log, "gsa: {line}"));
         if let Err(error) = written {
             let _ = writeln!(
@@ -562,18 +577,36 @@ fn park_marker_path(setup: &RunSetup, index: usize) -> PathBuf {
 /// refused (an unchanged log keeps the previous run's bytes in front).
 /// Written at spawn, before the `Started` event renders. The caller samples
 /// [`log_start_offset`] BEFORE spawning: once the child exists it appends.
-fn write_started(setup: &RunSetup, index: usize, pid: u32, log_offset: u64) -> Result<(), String> {
+/// Write one state-root file through the write-time `O_NOFOLLOW` + `fstat`
+/// ownership gate (rule 19, §J.5).
+fn write_state_file_gated(path: &Path, contents: &str, err: &mut dyn Write) -> Result<(), String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).write(true).truncate(true);
+    let mut file =
+        crate::lock::open_state_file_with_uid(path, &mut opts, crate::signals::current_uid(), err)
+            .map_err(|e| e.to_string())?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+fn write_started(
+    setup: &RunSetup,
+    index: usize,
+    pid: u32,
+    log_offset: u64,
+    err: &mut dyn Write,
+) -> Result<(), String> {
     let pkg = setup.nodes[index].id.as_str();
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let path = run_dir(setup).join(format!("{pkg}.started"));
-    std::fs::write(
+    write_state_file_gated(
         &path,
-        format!("pid={pid} epoch={epoch} log-offset={log_offset}\n"),
+        &format!("pid={pid} epoch={epoch} log-offset={log_offset}\n"),
+        err,
     )
-    .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
 /// Rotate `logs/<pkg>.log` to `.log.1` at lane start (contract §J.1 log
@@ -610,18 +643,19 @@ fn log_start_offset(setup: &RunSetup, index: usize) -> u64 {
 /// `run.closed` appears only when the run reached its record. A SIGKILLed
 /// run leaves `run.open` alone — that is the evidence `sweep_orphans`
 /// preserves and `gsa -Mh` reports as a died run.
-fn write_run_stamp(setup: &RunSetup, closed: bool) -> std::io::Result<()> {
+fn write_run_stamp(setup: &RunSetup, closed: bool, err: &mut dyn Write) -> Result<(), String> {
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let dir = run_dir(setup);
     if closed {
-        return std::fs::write(dir.join("run.closed"), format!("epoch={epoch}\n"));
+        return write_state_file_gated(&dir.join("run.closed"), &format!("epoch={epoch}\n"), err);
     }
-    std::fs::write(
-        dir.join("run.open"),
-        format!("pid={} epoch={epoch}\n", std::process::id()),
+    write_state_file_gated(
+        &dir.join("run.open"),
+        &format!("pid={} epoch={epoch}\n", std::process::id()),
+        err,
     )
 }
 
@@ -629,11 +663,10 @@ fn write_run_stamp(setup: &RunSetup, closed: bool) -> std::io::Result<()> {
 /// a detached reader (the dashboard's tails) reaches this run's
 /// `<pkg>.started` markers without knowing the id. Replaced atomically at
 /// run start; it keeps naming the LAST run afterwards (the post-run view).
-fn write_current_pointer(setup: &RunSetup) -> Result<(), String> {
+fn write_current_pointer(setup: &RunSetup, err: &mut dyn Write) -> Result<(), String> {
     let runs = setup.state_dir.join("runs");
     let tmp = runs.join(format!(".current-{}", setup.run_id));
-    std::fs::write(&tmp, format!("{}\n", setup.run_id))
-        .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    write_state_file_gated(&tmp, &format!("{}\n", setup.run_id), err)?;
     std::fs::rename(&tmp, runs.join("current"))
         .map_err(|e| format!("cannot point current at {}: {e}", setup.run_id))
 }
@@ -728,437 +761,440 @@ const PARK_MARKER_UNWRITABLE: &str = "park-marker-unwritable";
 /// anomaly the settlement already records. The file handshake itself stays
 /// the normal path; a kill-based stand-down for every park is a separate
 /// redesign.
-#[allow(clippy::too_many_arguments)]
-fn write_park_markers(
-    setup: &mut RunSetup,
-    machine: &mut Machine,
-    requests: Vec<ParkRequest>,
-    active: &HashMap<usize, ActiveLane>,
-    remediation: &mut Option<Remediation>,
-    events: &mut dyn FnMut(&SupEvent),
-    err: &mut dyn Write,
-    refused: &mut bool,
-    dispatch_halted: &mut bool,
-) {
-    let mut queue = requests;
-    let mut handled: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-    while let Some(request) = queue.pop() {
-        if !handled.insert(request.index) || machine.is_settled(request.index) {
-            continue;
+fn id_text(machine: &Machine, indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(|&i| machine.node(i).id.as_str().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Shared mutable state for one supervisor event loop (`run`), eliminating
+/// long parameter lists across `write_park_markers`, `settle_skip`, and
+/// `remediation_settle`.
+struct SupCtx<'a> {
+    setup: &'a mut RunSetup,
+    machine: &'a mut Machine,
+    active: &'a mut HashMap<usize, ActiveLane>,
+    remediation: &'a mut Option<Remediation>,
+    prefetch: &'a mut Option<Prefetcher>,
+    events: &'a mut dyn FnMut(&SupEvent),
+    err: &'a mut dyn Write,
+    refused: bool,
+    dispatch_halted: bool,
+    interrupted: Option<i32>,
+    grace_started: bool,
+}
+
+impl<'a> SupCtx<'a> {
+    fn emit(&mut self, event: &SupEvent) {
+        (self.events)(event);
+    }
+
+    fn apply_install_halt(&mut self, reason: &str, stop_dispatch: bool) {
+        if is_install_refusal(reason) {
+            self.refused = true;
         }
-        let path = park_marker_path(setup, request.index);
-        match std::fs::write(&path, format!("{}\n", request.reason)) {
-            Ok(()) => {
-                events(&SupEvent::Parked {
-                    index: request.index,
-                    reason: request.reason.clone(),
+        if stop_dispatch {
+            self.machine.stop_dispatch();
+            self.dispatch_halted = true;
+            self.emit(&SupEvent::Diagnostic(format!(
+                "install halted dispatch: {reason}"
+            )));
+        }
+    }
+
+    fn drain_signals(
+        &mut self,
+        rx: &Receiver<Event>,
+        _tx: &Sender<Event>,
+        buffered: &mut VecDeque<Event>,
+    ) {
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                Event::Signal(sig) => self.on_signal(sig, _tx),
+                other => buffered.push_back(other),
+            }
+        }
+    }
+
+    fn on_signal(&mut self, sig: i32, tx: &Sender<Event>) {
+        if self.interrupted.is_none() {
+            self.interrupted = Some(sig);
+            self.machine.stop_dispatch();
+            self.dispatch_halted = true;
+            self.emit(&SupEvent::Teardown(
+                "signal received — stopping active lanes",
+            ));
+            for lane in self.active.values_mut() {
+                if !lane.term_sent {
+                    signal_group(lane.pid, signals::SIGTERM);
+                    lane.term_sent = true;
+                }
+            }
+            if let Some(pf) = self.prefetch.as_mut() {
+                pf.terminate();
+            }
+            if !self.grace_started {
+                self.grace_started = true;
+                let timer_tx = tx.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    let _ = timer_tx.send(Event::GraceExpired);
                 });
             }
-            Err(error) => {
-                // The kill lands before the settlement so the rogue lane
-                // stops as early as possible; `signal_group` ignores ESRCH
-                // (a lane that already exited is its own reap), and the
-                // later `LaneDone` is skipped by `is_settled` below.
-                if let Some(lane) = active.get(&request.index) {
-                    signal_group(lane.pid, SIGKILL);
-                }
-                let pkg = machine.node(request.index).id.clone();
-                let message = format!(
-                    "gsa: park marker {} cannot be written ({error}) — {pkg} cannot stand down; settling it as lost (125)",
-                    path.display()
-                );
-                let _ = writeln!(err, "{message}");
-                events(&SupEvent::Diagnostic(message));
-                events(&SupEvent::Finished {
-                    index: request.index,
-                    row: OutcomeRow {
-                        pkg: pkg.clone(),
-                        status: RowStatus::Failed,
-                        rc: Some(125),
-                        dur: None,
-                        reason: PARK_MARKER_UNWRITABLE.to_string(),
-                    },
-                });
-                let more = machine.record(
-                    request.index,
-                    Recorded {
-                        code: gsa_model::LaneOutcome::Lost,
-                        dur: None,
-                        reason: PARK_MARKER_UNWRITABLE.to_string(),
-                    },
-                );
-                remediation_settle(
-                    remediation,
-                    setup.remediation.as_ref(),
-                    &mut setup.nodes,
-                    machine,
-                    request.index,
-                    gsa_model::LaneOutcome::Lost,
-                    setup.install.is_some(),
-                    events,
-                    err,
-                    refused,
-                    dispatch_halted,
-                );
-                queue.extend(more);
+        } else if !self.active.is_empty()
+            || self
+                .prefetch
+                .as_ref()
+                .map(|p| p.pid().is_some())
+                .unwrap_or(false)
+        {
+            self.emit(&SupEvent::Teardown("second signal — SIGKILL sweep"));
+            for lane in self.active.values() {
+                signal_group(lane.pid, SIGKILL);
+            }
+            if let Some(pf) = self.prefetch.as_mut() {
+                pf.kill();
             }
         }
     }
-}
 
-/// One `--skip` claim settling at readiness (contract §B.8): no lane runs,
-/// but the registration + install hooks do — a claimed set still installs
-/// (and registers, and takes the acceptance-time IgnorePkg registration)
-/// before its consumers compile. The row keeps the CLAIM reason
-/// (`succeeded - - <reason>`); a hook that halts settles it as a failure.
-#[allow(clippy::too_many_arguments)]
-fn settle_skip(
-    setup: &mut RunSetup,
-    machine: &mut Machine,
-    index: usize,
-    active: &HashMap<usize, ActiveLane>,
-    remediation: &mut Option<Remediation>,
-    events: &mut dyn FnMut(&SupEvent),
-    err: &mut dyn Write,
-    refused: &mut bool,
-    dispatch_halted: &mut bool,
-) {
-    let Some(PreSettle::Skip { reason, .. }) = setup.nodes[index].pre.clone() else {
-        return;
-    };
-    let pkg = machine.node(index).id.as_str().to_string();
-    let recipe_dir = setup.nodes[index].recipe_dir.clone();
-    if let Some(hook) = setup.register.as_mut() {
-        let in_flight: std::collections::BTreeSet<String> = (0..setup.nodes.len())
-            .filter(|&j| machine.node_phase(j) == NodePhase::Dispatched)
-            .map(|j| setup.nodes[j].id.as_str().to_string())
-            .collect();
-        for note in hook(&pkg, &recipe_dir, &in_flight, false) {
-            events(&SupEvent::Diagnostic(note));
-        }
-    }
-    let mut status = RowStatus::Succeeded;
-    let mut rc = None;
-    let mut row_reason = reason;
-    if let Some(hook) = setup.install.as_mut() {
-        match hook(&pkg, &recipe_dir, false) {
-            InstallStep::Done(_) => {}
-            InstallStep::Halt {
-                reason: halt_reason,
-                stop_dispatch,
-            } => {
-                status = RowStatus::Failed;
-                rc = Some(1);
-                row_reason = halt_reason;
-                if is_install_refusal(&row_reason) {
-                    *refused = true;
-                }
-                if stop_dispatch {
-                    machine.stop_dispatch();
-                    *dispatch_halted = true;
-                    events(&SupEvent::Diagnostic(format!(
-                        "install halted dispatch: {row_reason}"
-                    )));
-                }
+    /// Deliver the stand-down markers for a batch of park requests (contract
+    /// §F.1's spawn-to-build race). A marker that cannot be written is a BROKEN
+    /// stand-down: the spawned lane cannot be told to stand down and would
+    /// build and install anyway — the ABI half-wave the park exists to prevent.
+    /// That node is therefore settled LOUDLY as lost (125,
+    /// `park-marker-unwritable`) through the machine's own outcome vocabulary
+    /// (`LaneOutcome::Lost`), its cone and batch mates re-park through the
+    /// normal policy, and its late lane result is never authoritative (the
+    /// `LaneDone` handler skips a node that settled under it). The rogue lane is
+    /// ALSO killed: its process group gets SIGKILL right here, because a lane
+    /// that cannot be told to stand down must not keep building (wasted work,
+    /// shared SRCDEST/build caches). SIGKILL, never SIGTERM — a TERM death is
+    /// attributable (143) or swallowed by the lane's receipt handlers and would
+    /// corrupt the row semantics, while a SIGKILL death is the `lost 125` reap
+    /// anomaly the settlement already records. The file handshake itself stays
+    /// the normal path; a kill-based stand-down for every park is a separate
+    /// redesign.
+    fn write_park_markers(&mut self, requests: Vec<ParkRequest>) {
+        let mut queue = requests;
+        let mut handled: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        while let Some(request) = queue.pop() {
+            if !handled.insert(request.index) || self.machine.is_settled(request.index) {
+                continue;
             }
-        }
-    }
-    let row = OutcomeRow {
-        pkg: machine.node(index).id.clone(),
-        status,
-        rc,
-        dur: None,
-        reason: row_reason.clone(),
-    };
-    events(&SupEvent::Finished { index, row });
-    let requests = machine.record_pre(index, status, rc, &row_reason);
-    write_park_markers(
-        setup,
-        machine,
-        requests,
-        active,
-        remediation,
-        events,
-        err,
-        refused,
-        dispatch_halted,
-    );
-}
-
-/// The remediation refusal latch (fish `probe_stopped` + `stop_starting`):
-/// the named refusal, the one probe-refusal prose, and dispatch halted
-/// exactly once. Every refusal end of the remediation machine funnels here.
-#[allow(clippy::too_many_arguments)]
-fn remediation_refuse(
-    remediation: &mut Remediation,
-    machine: &mut Machine,
-    message: String,
-    events: &mut dyn FnMut(&SupEvent),
-    err: &mut dyn Write,
-    refused: &mut bool,
-    dispatch_halted: &mut bool,
-) {
-    let _ = writeln!(err, "gsa: {message}");
-    let _ = writeln!(err, "{}", gsa_recipe::toolchain::remediation_refusal_text());
-    remediation.probe_stopped = true;
-    machine.stop_dispatch();
-    *dispatch_halted = true;
-    *refused = true;
-    events(&SupEvent::Diagnostic(message));
-}
-
-/// The mid-run toolchain-remediation bookkeeping (fish 6960-7130 /
-/// 7180-7345, owner rule 2026-10-02), run after every settled lane. A
-/// settled chain member decides the remediation; a successful install of a
-/// trigger package re-probes and, on failure, FORCE-BUILDS the at-risk
-/// chain (narrow `rust-git` first, the whole `core` group on escalation)
-/// instead of refusing while remediation is possible.
-#[allow(clippy::too_many_arguments)]
-fn remediation_settle(
-    remediation: &mut Option<Remediation>,
-    cfg: Option<&RemediationSetup>,
-    setup_nodes: &mut [SupNode],
-    machine: &mut Machine,
-    index: usize,
-    code: gsa_model::LaneOutcome,
-    install_run: bool,
-    events: &mut dyn FnMut(&SupEvent),
-    err: &mut dyn Write,
-    refused: &mut bool,
-    dispatch_halted: &mut bool,
-) {
-    let (Some(rem), Some(cfg)) = (remediation.as_mut(), cfg) else {
-        return;
-    };
-    let pkg = machine.node(index).id.as_str().to_string();
-    let id_text = |machine: &Machine, indices: &[usize]| -> String {
-        indices
-            .iter()
-            .map(|&i| machine.node(i).id.as_str().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
-    if rem.owns(index) {
-        // A chain member settled: its outcome decides the remediation.
-        rem.settle(index);
-        match code {
-            gsa_model::LaneOutcome::Ok => {
-                if !rem.landed() || rem.probe_stopped {
-                    return;
+            let path = park_marker_path(self.setup, request.index);
+            let contents = format!("{}\n", request.reason);
+            match write_state_file_gated(&path, &contents, self.err) {
+                Ok(()) => {
+                    self.emit(&SupEvent::Parked {
+                        index: request.index,
+                        reason: request.reason.clone(),
+                    });
                 }
-                match gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base) {
-                    gsa_recipe::toolchain::ProbeStatus::Ok
-                    | gsa_recipe::toolchain::ProbeStatus::Skipped { .. } => {
-                        let _ = writeln!(
-                            err,
-                            "gsa: toolchain remediation reconciled the at-risk chain (rebuilt {}) — rustc sanity probe passes, resuming dispatch",
-                            id_text(machine, &rem.attempted)
-                        );
-                        machine.set_restrict(None);
-                        rem.started = false;
-                        rem.attempted.clear();
-                        rem.phase = RemediationPhase::Narrow;
+                Err(error) => {
+                    // The kill lands before the settlement so the rogue lane
+                    // stops as early as possible; `signal_group` ignores ESRCH
+                    // (a lane that already exited is its own reap), and the
+                    // later `LaneDone` is skipped by `is_settled` below.
+                    if let Some(lane) = self.active.get(&request.index) {
+                        signal_group(lane.pid, SIGKILL);
                     }
-                    gsa_recipe::toolchain::ProbeStatus::Failed { detail } => {
-                        let _ = writeln!(err, "gsa: {detail}");
-                        match rem.phase {
-                            RemediationPhase::Narrow => {
-                                let _ = writeln!(
-                                    err,
-                                    "gsa: remediation by {} was insufficient — the tool-clang/llvm consumer chain is still broken",
-                                    id_text(machine, &rem.attempted)
-                                );
-                                let _ = writeln!(
-                                    err,
-                                    "  Escalating to a full core-group force-build (owner rule 2026-10-02)."
-                                );
-                                rem.phase = RemediationPhase::Core;
-                                let attempted_ids: Vec<String> = rem
-                                    .attempted
-                                    .iter()
-                                    .map(|&i| machine.node(i).id.as_str().to_string())
-                                    .collect();
-                                let chain: Vec<usize> = cfg
-                                    .core_members
-                                    .iter()
-                                    .filter(|id| !attempted_ids.contains(id))
-                                    .filter_map(|id| {
-                                        (0..setup_nodes.len())
-                                            .find(|&i| setup_nodes[i].id.as_str() == id.as_str())
-                                    })
-                                    .collect();
-                                if chain.is_empty() {
-                                    remediation_refuse(
-                                        rem,
-                                        machine,
-                                        "core-group remediation has nothing left to force-build — refusing to continue".to_string(),
-                                        events,
-                                        err,
-                                        refused,
-                                        dispatch_halted,
+                    let pkg = self.machine.node(request.index).id.clone();
+                    let message = format!(
+                        "gsa: park marker {} cannot be written ({error}) — {pkg} cannot stand down; settling it as lost (125)",
+                        path.display()
+                    );
+                    let _ = writeln!(self.err, "{message}");
+                    self.emit(&SupEvent::Diagnostic(message));
+                    self.emit(&SupEvent::Finished {
+                        index: request.index,
+                        row: OutcomeRow {
+                            pkg: pkg.clone(),
+                            status: RowStatus::Failed,
+                            rc: Some(125),
+                            dur: None,
+                            reason: PARK_MARKER_UNWRITABLE.to_string(),
+                        },
+                    });
+                    let more = self.machine.record(
+                        request.index,
+                        Recorded {
+                            code: gsa_model::LaneOutcome::Lost,
+                            dur: None,
+                            reason: PARK_MARKER_UNWRITABLE.to_string(),
+                        },
+                    );
+                    self.remediation_settle(request.index, gsa_model::LaneOutcome::Lost);
+                    queue.extend(more);
+                }
+            }
+        }
+    }
+
+    /// One `--skip` claim settling at readiness (contract §B.8): no lane runs,
+    /// but the registration + install hooks do — a claimed set still installs
+    /// (and registers, and takes the acceptance-time IgnorePkg registration)
+    /// before its consumers compile. The row keeps the CLAIM reason
+    /// (`succeeded - - <reason>`); a hook that halts settles it as a failure.
+    fn settle_skip(&mut self, index: usize) {
+        let Some(PreSettle::Skip { reason, .. }) = self.setup.nodes[index].pre.clone() else {
+            return;
+        };
+        let pkg = self.machine.node(index).id.as_str().to_string();
+        let recipe_dir = self.setup.nodes[index].recipe_dir.clone();
+        if let Some(hook) = self.setup.register.as_mut() {
+            let in_flight: std::collections::BTreeSet<String> = (0..self.setup.nodes.len())
+                .filter(|&j| self.machine.node_phase(j) == NodePhase::Dispatched)
+                .map(|j| self.setup.nodes[j].id.as_str().to_string())
+                .collect();
+            for note in hook(&pkg, &recipe_dir, &in_flight, false) {
+                self.emit(&SupEvent::Diagnostic(note));
+            }
+        }
+        let mut status = RowStatus::Succeeded;
+        let mut rc = None;
+        let mut row_reason = reason;
+        if let Some(hook) = self.setup.install.as_mut() {
+            match hook(&pkg, &recipe_dir, false) {
+                InstallStep::Done(_) => {}
+                InstallStep::Halt {
+                    reason: halt_reason,
+                    stop_dispatch,
+                } => {
+                    status = RowStatus::Failed;
+                    rc = Some(1);
+                    row_reason = halt_reason;
+                    self.apply_install_halt(&row_reason, stop_dispatch);
+                }
+            }
+        }
+        let row = OutcomeRow {
+            pkg: self.machine.node(index).id.clone(),
+            status,
+            rc,
+            dur: None,
+            reason: row_reason.clone(),
+        };
+        self.emit(&SupEvent::Finished { index, row });
+        let requests = self.machine.record_pre(index, status, rc, &row_reason);
+        self.write_park_markers(requests);
+    }
+
+    /// The remediation refusal latch (fish `probe_stopped` + `stop_starting`):
+    /// the named refusal, the one probe-refusal prose, and dispatch halted
+    /// exactly once. Every refusal end of the remediation machine funnels here.
+    fn remediation_refuse(&mut self, message: String) {
+        let _ = writeln!(self.err, "gsa: {message}");
+        let _ = writeln!(
+            self.err,
+            "{}",
+            gsa_recipe::toolchain::remediation_refusal_text()
+        );
+        if let Some(rem) = self.remediation.as_mut() {
+            rem.probe_stopped = true;
+        }
+        self.machine.stop_dispatch();
+        self.dispatch_halted = true;
+        self.refused = true;
+        self.emit(&SupEvent::Diagnostic(message));
+    }
+
+    /// The mid-run toolchain-remediation bookkeeping (fish 6960-7130 /
+    /// 7180-7345, owner rule 2026-10-02), run after every settled lane. A
+    /// settled chain member decides the remediation; a successful install of a
+    /// trigger package re-probes and, on failure, FORCE-BUILDS the at-risk
+    /// chain (narrow `rust-git` first, the whole `core` group on escalation)
+    /// instead of refusing while remediation is possible.
+    fn remediation_settle(&mut self, index: usize, code: gsa_model::LaneOutcome) {
+        let Some(cfg) = self.setup.remediation.clone() else {
+            return;
+        };
+        let Some(rem) = self.remediation.as_mut() else {
+            return;
+        };
+        let pkg = self.machine.node(index).id.as_str().to_string();
+
+        if rem.owns(index) {
+            // A chain member settled: its outcome decides the remediation.
+            rem.settle(index);
+            match code {
+                gsa_model::LaneOutcome::Ok => {
+                    if !rem.landed() || rem.probe_stopped {
+                        return;
+                    }
+                    match gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base) {
+                        gsa_recipe::toolchain::ProbeStatus::Ok
+                        | gsa_recipe::toolchain::ProbeStatus::Skipped { .. } => {
+                            let _ = writeln!(
+                                self.err,
+                                "gsa: toolchain remediation reconciled the at-risk chain (rebuilt {}) — rustc sanity probe passes, resuming dispatch",
+                                id_text(self.machine, &rem.attempted)
+                            );
+                            self.machine.set_restrict(None);
+                            rem.started = false;
+                            rem.attempted.clear();
+                            rem.phase = RemediationPhase::Narrow;
+                        }
+                        gsa_recipe::toolchain::ProbeStatus::Failed { detail } => {
+                            let _ = writeln!(self.err, "gsa: {detail}");
+                            match rem.phase {
+                                RemediationPhase::Narrow => {
+                                    let attempted = id_text(self.machine, &rem.attempted);
+                                    let _ = writeln!(
+                                        self.err,
+                                        "gsa: remediation by {attempted} was insufficient — the tool-clang/llvm consumer chain is still broken"
                                     );
-                                    return;
+                                    let _ = writeln!(
+                                        self.err,
+                                        "  Escalating to a full core-group force-build (owner rule 2026-10-02)."
+                                    );
+                                    rem.phase = RemediationPhase::Core;
+                                    let attempted_ids: Vec<String> = rem
+                                        .attempted
+                                        .iter()
+                                        .map(|&i| self.machine.node(i).id.as_str().to_string())
+                                        .collect();
+                                    let chain: Vec<usize> = cfg
+                                        .core_members
+                                        .iter()
+                                        .filter(|id| !attempted_ids.contains(id))
+                                        .filter_map(|id| {
+                                            (0..self.setup.nodes.len()).find(|&i| {
+                                                self.setup.nodes[i].id.as_str() == id.as_str()
+                                            })
+                                        })
+                                        .collect();
+                                    if chain.is_empty() {
+                                        self.remediation_refuse(
+                                            "core-group remediation has nothing left to force-build — refusing to continue"
+                                                .to_string(),
+                                        );
+                                        return;
+                                    }
+                                    let ids = id_text(self.machine, &chain);
+                                    for &i in &chain {
+                                        self.setup.nodes[i].pre = None;
+                                    }
+                                    rem.queue(self.machine, &chain, self.events);
+                                    self.machine.set_restrict(Some(chain));
+                                    let _ = writeln!(
+                                        self.err,
+                                        "gsa: toolchain remediation (phase core): force-building {ids}"
+                                    );
                                 }
-                                let ids = id_text(machine, &chain);
-                                for &i in &chain {
-                                    setup_nodes[i].pre = None;
+                                RemediationPhase::Core => {
+                                    let attempted = id_text(self.machine, &rem.attempted);
+                                    self.remediation_refuse(format!(
+                                        "core-group remediation rebuilt {attempted} and the sanity probe still fails — refusing to continue",
+                                    ));
                                 }
-                                rem.queue(machine, &chain);
-                                machine.set_restrict(Some(chain));
-                                let _ = writeln!(
-                                    err,
-                                    "gsa: toolchain remediation (phase core): force-building {ids}"
-                                );
-                            }
-                            RemediationPhase::Core => {
-                                remediation_refuse(
-                                    rem,
-                                    machine,
-                                    format!(
-                                        "core-group remediation rebuilt {} and the sanity probe still fails — refusing to continue",
-                                        id_text(machine, &rem.attempted)
-                                    ),
-                                    events,
-                                    err,
-                                    refused,
-                                    dispatch_halted,
-                                );
                             }
                         }
                     }
                 }
-            }
-            gsa_model::LaneOutcome::Defer | gsa_model::LaneOutcome::Parked => {
-                remediation_refuse(
-                    rem,
-                    machine,
-                    format!(
+                gsa_model::LaneOutcome::Defer | gsa_model::LaneOutcome::Parked => {
+                    self.remediation_refuse(format!(
                         "toolchain remediation build for {pkg} was deferred — the at-risk chain cannot be reconciled; refusing to continue"
-                    ),
-                    events,
-                    err,
-                    refused,
-                    dispatch_halted,
-                );
-            }
-            _ => {
-                remediation_refuse(
-                    rem,
-                    machine,
-                    format!(
+                    ));
+                }
+                _ => {
+                    self.remediation_refuse(format!(
                         "toolchain remediation build for {pkg} failed — the at-risk chain could not be reconciled; refusing to continue"
-                    ),
-                    events,
-                    err,
-                    refused,
-                    dispatch_halted,
-                );
+                    ));
+                }
             }
-        }
-        return;
-    }
-
-    // The trigger (fish: install runs only, once per remediation cycle):
-    // a successful install of a trigger package re-probes — this run's own
-    // llvm install can break rustc after the preflight passed.
-    if !install_run
-        || code != gsa_model::LaneOutcome::Ok
-        || !cfg.trigger_installs.iter().any(|t| t == &pkg)
-        || rem.started
-        || rem.probe_stopped
-    {
-        return;
-    }
-    let gsa_recipe::toolchain::ProbeStatus::Failed { detail } =
-        gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base)
-    else {
-        return;
-    };
-    let _ = writeln!(err, "gsa: {detail}");
-    let _ = writeln!(
-        err,
-        "gsa: rustc sanity probe failed after {pkg} was installed — this run's own llvm install broke rustc"
-    );
-    for line in [
-        "  Toolchain risk detected for the tool-clang/llvm consumer chain — not",
-        "  just rustc. Owner rule 2026-10-02: the builder FORCE-BUILDS the at-risk",
-        "  chain to reconcile it — first rust-git (rust), or the whole core group",
-        "  when the broken consumer cannot be identified narrowly — and refuses",
-        "  only if that remediation build also fails. This probe stays loud but",
-        "  does not refuse builds while remediation is possible.",
-    ] {
-        let _ = writeln!(err, "{line}");
-    }
-    let known = |id: &str| cfg.known.iter().any(|k| k == id);
-    let is_consumer_of_toolchain = |id: &str| {
-        cfg.toolchain_consumers
-            .get(&pkg)
-            .map(|closure| closure.iter().any(|c| c == id))
-            .unwrap_or(false)
-    };
-    let plan = gsa_recipe::toolchain::remediation_plan(
-        &pkg,
-        &cfg.broken_consumer,
-        &known,
-        &is_consumer_of_toolchain,
-        &cfg.core_members,
-    );
-    let (phase, chain_ids) = match plan {
-        gsa_recipe::toolchain::Remediation::Narrow(ids) => (RemediationPhase::Narrow, ids),
-        gsa_recipe::toolchain::Remediation::Core(ids) => (RemediationPhase::Core, ids),
-        gsa_recipe::toolchain::Remediation::Impossible => {
-            remediation_refuse(
-                rem,
-                machine,
-                format!(
-                    "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
-                ),
-                events,
-                err,
-                refused,
-                dispatch_halted,
-            );
             return;
         }
-    };
-    let chain: Vec<usize> = chain_ids
-        .iter()
-        .filter_map(|id| {
-            (0..setup_nodes.len()).find(|&i| setup_nodes[i].id.as_str() == id.as_str())
-        })
-        .collect();
-    if chain.is_empty() {
-        remediation_refuse(
-            rem,
-            machine,
-            format!(
-                "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
-            ),
-            events,
-            err,
-            refused,
-            dispatch_halted,
+
+        // The trigger (fish: install runs only, once per remediation cycle):
+        // a successful install of a trigger package re-probes — this run's own
+        // llvm install can break rustc after the preflight passed.
+        let install_run = self.setup.install.is_some();
+        if !install_run
+            || code != gsa_model::LaneOutcome::Ok
+            || !cfg.trigger_installs.iter().any(|t| t == &pkg)
+            || rem.started
+            || rem.probe_stopped
+        {
+            return;
+        }
+        let gsa_recipe::toolchain::ProbeStatus::Failed { detail } =
+            gsa_recipe::toolchain::rustc_sanity_probe(&cfg.scratch_base)
+        else {
+            return;
+        };
+        let _ = writeln!(self.err, "gsa: {detail}");
+        let _ = writeln!(
+            self.err,
+            "gsa: rustc sanity probe failed after {pkg} was installed — this run's own llvm install broke rustc"
         );
-        return;
+        for line in [
+            "  Toolchain risk detected for the tool-clang/llvm consumer chain — not",
+            "  just rustc. Owner rule 2026-10-02: the builder FORCE-BUILDS the at-risk",
+            "  chain to reconcile it — first rust-git (rust), or the whole core group",
+            "  when the broken consumer cannot be identified narrowly — and refuses",
+            "  only if that remediation build also fails. This probe stays loud but",
+            "  does not refuse builds while remediation is possible.",
+        ] {
+            let _ = writeln!(self.err, "{line}");
+        }
+        let known = |id: &str| cfg.known.iter().any(|k| k == id);
+        let is_consumer_of_toolchain = |id: &str| {
+            cfg.toolchain_consumers
+                .get(&pkg)
+                .map(|closure| closure.iter().any(|c| c == id))
+                .unwrap_or(false)
+        };
+        let plan = gsa_recipe::toolchain::remediation_plan(
+            &pkg,
+            &cfg.broken_consumer,
+            &known,
+            &is_consumer_of_toolchain,
+            &cfg.core_members,
+        );
+        let (phase, chain_ids) = match plan {
+            gsa_recipe::toolchain::Remediation::Narrow(ids) => (RemediationPhase::Narrow, ids),
+            gsa_recipe::toolchain::Remediation::Core(ids) => (RemediationPhase::Core, ids),
+            gsa_recipe::toolchain::Remediation::Impossible => {
+                self.remediation_refuse(format!(
+                    "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
+                ));
+                return;
+            }
+        };
+        let chain: Vec<usize> = chain_ids
+            .iter()
+            .filter_map(|id| {
+                (0..self.setup.nodes.len())
+                    .find(|&i| self.setup.nodes[i].id.as_str() == id.as_str())
+            })
+            .collect();
+        if chain.is_empty() {
+            self.remediation_refuse(format!(
+                "no force-build remediation chain is identifiable for {pkg} — refusing to continue"
+            ));
+            return;
+        }
+        let ids = id_text(self.machine, &chain);
+        for &i in &chain {
+            self.setup.nodes[i].pre = None;
+        }
+        rem.phase = phase;
+        rem.trigger = pkg.clone();
+        rem.started = true;
+        rem.queue(self.machine, &chain, self.events);
+        self.machine.set_restrict(Some(chain));
+        let phase_name = match rem.phase {
+            RemediationPhase::Narrow => "narrow",
+            RemediationPhase::Core => "core",
+        };
+        let _ = writeln!(
+            self.err,
+            "gsa: toolchain remediation (phase {phase_name}): force-building {ids} to reconcile the at-risk chain before anything else compiles"
+        );
     }
-    let ids = id_text(machine, &chain);
-    for &i in &chain {
-        setup_nodes[i].pre = None;
-    }
-    rem.phase = phase;
-    rem.trigger = pkg.clone();
-    rem.started = true;
-    rem.queue(machine, &chain);
-    machine.set_restrict(Some(chain));
-    let phase_name = match rem.phase {
-        RemediationPhase::Narrow => "narrow",
-        RemediationPhase::Core => "core",
-    };
-    let _ = writeln!(
-        err,
-        "gsa: toolchain remediation (phase {phase_name}): force-building {ids} to reconcile the at-risk chain before anything else compiles"
-    );
 }
 
 /// Run one build: dispatch lanes until the machine settles, applying the
@@ -1172,15 +1208,10 @@ pub fn run(
 ) -> Result<SupOutcome, String> {
     std::fs::create_dir_all(run_dir(&setup))
         .map_err(|e| format!("cannot create run directory: {e}"))?;
-    // The lane-state pointer first (ux): `runs/current` must name THIS run
-    // before the first lane spawns. Observability, never behaviour — a
-    // failure is loud (`note`) and does not stop the run.
-    if let Err(error) = write_current_pointer(&setup) {
+    if let Err(error) = write_current_pointer(&setup, err) {
         events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
     }
-    // The run's own open stamp, for the reader that has no history row yet
-    // (a live run, or one killed before it could persist its record).
-    if let Err(error) = write_run_stamp(&setup, false) {
+    if let Err(error) = write_run_stamp(&setup, false, err) {
         events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
     }
 
@@ -1203,12 +1234,6 @@ pub fn run(
         setup.policy,
         setup.budget.lanes as usize,
     );
-    // The toolchain-remediation state (owner rule 2026-10-02): present on
-    // install runs whose CLI wired the trigger chain. Declared before the
-    // pre-settle pass: a park-delivery failure settles through the same
-    // `remediation_settle` tail a lane's outcome takes.
-    let mut refused = false;
-    let mut dispatch_halted = false;
     let mut remediation: Option<Remediation> = setup.remediation.as_ref().map(|_| Remediation {
         phase: RemediationPhase::Narrow,
         pending: Vec::new(),
@@ -1218,14 +1243,28 @@ pub fn run(
         started: false,
         probe_stopped: false,
     });
-    // Spawned lanes, keyed by node index — declared before the pre-settled
-    // deferrals so every write_park_markers call can reach the lane a broken
-    // stand-down must kill.
     let mut active: HashMap<usize, ActiveLane> = HashMap::new();
-    // Pre-settled deferrals (contract §B.8) land BEFORE any dispatch: the
-    // row is `deferred 99 - <reason>` and the consumer cone parks
-    // `waits-on-deferred`, so unrelated work runs and dependents wait.
-    let pre_defers: Vec<usize> = setup
+    let mut prefetch: Option<Prefetcher> = setup
+        .prefetch
+        .as_ref()
+        .map(|cfg| Prefetcher::new(cfg, machine.len()));
+
+    let mut ctx = SupCtx {
+        setup: &mut setup,
+        machine: &mut machine,
+        active: &mut active,
+        remediation: &mut remediation,
+        prefetch: &mut prefetch,
+        events,
+        err,
+        refused: false,
+        dispatch_halted: false,
+        interrupted: None,
+        grace_started: false,
+    };
+
+    let pre_defers: Vec<usize> = ctx
+        .setup
         .nodes
         .iter()
         .enumerate()
@@ -1233,44 +1272,33 @@ pub fn run(
         .map(|(index, _)| index)
         .collect();
     for index in pre_defers {
-        let Some(PreSettle::Defer { reason }) = setup.nodes[index].pre.clone() else {
+        let Some(PreSettle::Defer { reason }) = ctx.setup.nodes[index].pre.clone() else {
             continue;
         };
         let row = OutcomeRow {
-            pkg: machine.node(index).id.clone(),
+            pkg: ctx.machine.node(index).id.clone(),
             status: RowStatus::Deferred,
             rc: Some(99),
             dur: None,
             reason: reason.clone(),
         };
-        events(&SupEvent::Finished { index, row });
-        let requests = machine.record_pre(index, RowStatus::Deferred, Some(99), &reason);
-        write_park_markers(
-            &mut setup,
-            &mut machine,
-            requests,
-            &active,
-            &mut remediation,
-            events,
-            err,
-            &mut refused,
-            &mut dispatch_halted,
-        );
+        ctx.emit(&SupEvent::Finished { index, row });
+        let requests = ctx
+            .machine
+            .record_pre(index, RowStatus::Deferred, Some(99), &reason);
+        ctx.write_park_markers(requests);
     }
-    // Fetch-ahead (docs/plans/plan.md §2.1): the dispatcher is the only brain — the
-    // lookahead window is derived from live dispatch state every tick.
-    let mut prefetch: Option<Prefetcher> = setup
-        .prefetch
-        .as_ref()
-        .map(|cfg| Prefetcher::new(cfg, machine.len()));
 
     let (tx, rx): (Sender<Event>, Receiver<Event>) = mpsc::channel();
     let pipe = install_handlers().map_err(|e| format!("cannot install signal handlers: {e}"))?;
+    let crate::signals::SignalPipe {
+        mut read,
+        guard: _signal_guard,
+    } = pipe;
     {
         let tx = tx.clone();
         std::thread::spawn(move || {
             use std::io::Read;
-            let mut read = pipe.read;
             let mut buf = [0u8; 64];
             loop {
                 match read.read(&mut buf) {
@@ -1287,88 +1315,72 @@ pub fn run(
         });
     }
 
-    let mut interrupted: Option<i32> = None;
-    let mut grace_started = false;
+    let mut buffered: VecDeque<Event> = VecDeque::new();
     let mut settle_deadline: Option<std::time::Instant> = None;
 
     'outer: loop {
-        // `--skip` claims settle at readiness (contract §B.8): no lane runs,
-        // but the registration + install hooks do — a claimed set still
-        // installs before its consumers compile.
-        while interrupted.is_none() {
-            let Some(index) = machine
+        // `--skip` claims settle at readiness (contract §B.8), polling for
+        // pending teardown signals between claims so a receipt halts before
+        // subsequent register/install hooks run.
+        while ctx.interrupted.is_none() {
+            ctx.drain_signals(&rx, &tx, &mut buffered);
+            if ctx.interrupted.is_some() {
+                break;
+            }
+            let Some(index) = ctx
+                .machine
                 .pick()
                 .into_iter()
-                .find(|&i| matches!(setup.nodes[i].pre, Some(PreSettle::Skip { .. })))
+                .find(|&i| matches!(ctx.setup.nodes[i].pre, Some(PreSettle::Skip { .. })))
             else {
                 break;
             };
-            settle_skip(
-                &mut setup,
-                &mut machine,
-                index,
-                &active,
-                &mut remediation,
-                events,
-                err,
-                &mut refused,
-                &mut dispatch_halted,
-            );
+            ctx.settle_skip(index);
         }
-        // Dispatch everything the machine allows right now.
-        while interrupted.is_none() {
-            let Some(index) = machine
+        // Dispatch everything the machine allows right now, polling for
+        // teardown signals between spawns as well.
+        while ctx.interrupted.is_none() {
+            ctx.drain_signals(&rx, &tx, &mut buffered);
+            if ctx.interrupted.is_some() {
+                break;
+            }
+            let Some(index) = ctx
+                .machine
                 .pick()
                 .into_iter()
-                .find(|&i| machine.can_dispatch(i))
+                .find(|&i| ctx.machine.can_dispatch(i))
             else {
                 break;
             };
-            let jobs = if machine.node(index).core {
-                setup.budget.core_jobs
+            let jobs = if ctx.machine.node(index).core {
+                ctx.setup.budget.core_jobs
             } else {
-                setup.budget.normal_jobs
+                ctx.setup.budget.normal_jobs
             };
-            // One rotation at lane start (contract §J.1 log retention): the
-            // previous run's output moves to `.log.1` BEFORE this run
-            // appends, so the offset sampled below starts at the fresh file.
-            rotate_lane_log(&setup, index, err);
-            // The log offset is sampled BEFORE the spawn: the child appends
-            // from its first instruction (ux lane state).
-            let log_offset = log_start_offset(&setup, index);
-            match spawn_lane(&setup, index, jobs) {
+            rotate_lane_log(ctx.setup, index, ctx.err);
+            let log_offset = log_start_offset(ctx.setup, index);
+            match spawn_lane(ctx.setup, index, jobs) {
                 Ok(mut child) => {
                     let pid = child.id();
-                    // The lane-state marker (ux) before the Started event: a
-                    // detached reader sees the pid and log offset the moment
-                    // the lane exists. Same observability class as the
-                    // pointer — loud, never a behaviour.
-                    if let Err(error) = write_started(&setup, index, pid, log_offset) {
-                        events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
+                    if let Err(error) = write_started(ctx.setup, index, pid, log_offset, ctx.err) {
+                        ctx.emit(&SupEvent::Diagnostic(format!("lane-state: {error}")));
                     }
-                    machine.dispatch(index);
-                    if let Some(rem) = remediation.as_mut() {
+                    ctx.machine.dispatch(index);
+                    if let Some(rem) = ctx.remediation.as_mut() {
                         rem.dispatched(index);
                     }
-                    active.insert(
+                    ctx.active.insert(
                         index,
                         ActiveLane {
                             pid,
                             term_sent: false,
                         },
                     );
-                    events(&SupEvent::Started {
-                        index,
-                        jobs,
-                        core: machine.node(index).core,
-                    });
+                    let core = ctx.machine.node(index).core;
+                    ctx.emit(&SupEvent::Started { index, jobs, core });
                     let waiter_tx = tx.clone();
                     let waiter_index = index;
                     std::thread::spawn(move || {
-                        // Blocking reap (wait(2)): readiness is delivered by
-                        // the kernel through the channel, never polled. The
-                        // exit status carries the death cause — the only
-                        // attribution for a lane that never published (§F.1).
                         let killed_by = child.wait().ok().and_then(|status| {
                             std::os::unix::process::ExitStatusExt::signal(&status)
                         });
@@ -1379,20 +1391,20 @@ pub fn run(
                     });
                 }
                 Err(error) => {
-                    machine.dispatch(index);
-                    let _ = writeln!(err, "gsa: {error}");
+                    ctx.machine.dispatch(index);
+                    let _ = writeln!(ctx.err, "gsa: {error}");
                     let row = OutcomeRow {
-                        pkg: machine.node(index).id.clone(),
+                        pkg: ctx.machine.node(index).id.clone(),
                         status: RowStatus::Failed,
                         rc: Some(1),
                         dur: None,
                         reason: "build-failed".to_string(),
                     };
-                    events(&SupEvent::Finished {
+                    ctx.emit(&SupEvent::Finished {
                         index,
                         row: row.clone(),
                     });
-                    machine.record(
+                    let requests = ctx.machine.record(
                         index,
                         Recorded {
                             code: gsa_model::LaneOutcome::Failed,
@@ -1400,30 +1412,17 @@ pub fn run(
                             reason: "build-failed".to_string(),
                         },
                     );
-                    remediation_settle(
-                        &mut remediation,
-                        setup.remediation.as_ref(),
-                        &mut setup.nodes,
-                        &mut machine,
-                        index,
-                        gsa_model::LaneOutcome::Failed,
-                        setup.install.is_some(),
-                        events,
-                        err,
-                        &mut refused,
-                        &mut dispatch_halted,
-                    );
+                    ctx.write_park_markers(requests);
+                    ctx.remediation_settle(index, gsa_model::LaneOutcome::Failed);
                 }
             }
         }
 
-        // Fetch-ahead (docs/plans/plan.md §2.1): derive the lookahead window from live
-        // dispatcher state and keep ONE fetch child in flight. Advisory: a
-        // fetch outcome never reaches `machine` and never gates dispatch.
-        if let Some(pf) = prefetch.as_mut() {
-            pf.sync(&machine);
-            if interrupted.is_none() {
-                if let Some((index, child)) = pf.spawn_next(&setup, &run_dir(&setup), err) {
+        if let Some(pf) = ctx.prefetch.as_mut() {
+            pf.sync(ctx.machine);
+            if ctx.interrupted.is_none() {
+                let rdir = run_dir(ctx.setup);
+                if let Some((index, child)) = pf.spawn_next(ctx.setup, &rdir, ctx.err) {
                     let waiter_tx = tx.clone();
                     std::thread::spawn(move || {
                         let mut child = child;
@@ -1434,106 +1433,92 @@ pub fn run(
             }
         }
 
-        // A remediation chain that can make no progress (active lanes gone,
-        // chain members queued but nothing dispatchable) is a refusal, not a
-        // hang: name the stuck ids and latch the refusal contract.
-        if interrupted.is_none() {
-            if let (Some(rem), Some(_)) = (remediation.as_mut(), setup.remediation.as_ref()) {
-                if rem.started
-                    && !rem.probe_stopped
-                    && !rem.landed()
-                    && machine.active() == 0
-                    && machine.pick().is_empty()
+        if ctx.interrupted.is_none() {
+            let stalled_ids = match (ctx.remediation.as_ref(), ctx.setup.remediation.as_ref()) {
+                (Some(rem), Some(_))
+                    if rem.started
+                        && !rem.probe_stopped
+                        && !rem.landed()
+                        && ctx.machine.active() == 0
+                        && ctx.machine.pick().is_empty() =>
                 {
-                    let ids = rem
-                        .pending
-                        .iter()
-                        .map(|&i| machine.node(i).id.as_str().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    remediation_refuse(
-                        rem,
-                        &mut machine,
-                        format!(
-                            "toolchain remediation stalled — {ids} cannot be dispatched; refusing to continue"
-                        ),
-                        events,
-                        err,
-                        &mut refused,
-                        &mut dispatch_halted,
-                    );
+                    Some(
+                        rem.pending
+                            .iter()
+                            .map(|&i| ctx.machine.node(i).id.as_str().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )
                 }
+                _ => None,
+            };
+            if let Some(ids) = stalled_ids {
+                ctx.remediation_refuse(format!(
+                    "toolchain remediation stalled — {ids} cannot be dispatched; refusing to continue"
+                ));
             }
         }
-        let nothing_left = machine.active() == 0
-            && active.is_empty()
-            && (machine.finished() || interrupted.is_some() || machine.pick().is_empty());
+        let nothing_left = ctx.machine.active() == 0
+            && ctx.active.is_empty()
+            && (ctx.machine.finished()
+                || ctx.interrupted.is_some()
+                || ctx.machine.pick().is_empty());
         if nothing_left {
-            let fetch_in_flight = prefetch
+            let fetch_in_flight = ctx
+                .prefetch
                 .as_ref()
                 .map(|p| p.pid().is_some())
                 .unwrap_or(false);
             if !fetch_in_flight {
                 break 'outer;
             }
-            // The machine has settled while one fetch is still in flight:
-            // give it a bounded drain window (its verdict is operator
-            // surface), then cancel it — advisory work never holds the run.
             let deadline = *settle_deadline
                 .get_or_insert_with(|| std::time::Instant::now() + Duration::from_secs(5));
             if std::time::Instant::now() >= deadline {
-                if let Some(pf) = prefetch.as_mut() {
+                if let Some(pf) = ctx.prefetch.as_mut() {
                     pf.cancel();
                 }
                 break 'outer;
             }
         }
 
-        let event = if interrupted.is_some() && machine.active() == 0 && active.is_empty() {
-            // Teardown drained every lane.
-            break 'outer;
-        } else {
-            match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(event) => event,
-                Err(RecvTimeoutError::Timeout) => {
-                    // The view heartbeat (ux lane state): ~1s ticks so a live
-                    // dashboard redraws (spinner, elapsed) while nothing
-                    // moves. The events callback is the loop's sole out
-                    // writer, so the tick needs no locking — and render.rs
-                    // renders it empty, so a machine stream never sees it.
-                    events(&SupEvent::Tick);
-                    continue;
+        let event =
+            if ctx.interrupted.is_some() && ctx.machine.active() == 0 && ctx.active.is_empty() {
+                break 'outer;
+            } else if let Some(ev) = buffered.pop_front() {
+                ev
+            } else {
+                match rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(event) => event,
+                    Err(RecvTimeoutError::Timeout) => {
+                        ctx.emit(&SupEvent::Tick);
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break 'outer,
                 }
-                Err(RecvTimeoutError::Disconnected) => break 'outer,
-            }
-        };
+            };
 
         match event {
             Event::LaneDone { index, killed_by } => {
-                active.remove(&index);
-                // §F.1: a node settled out from under its lane (a park
-                // marker that could not be written settled it as lost) —
-                // the late result is never authoritative: the row landed
-                // exactly once and no install hook may run for it.
-                if machine.is_settled(index) {
+                ctx.active.remove(&index);
+                if ctx.machine.is_settled(index) {
                     let message = format!(
                         "gsa: late lane result for {} ignored — the node already settled ({}), it must not install",
-                        machine.node(index).id,
+                        ctx.machine.node(index).id,
                         PARK_MARKER_UNWRITABLE
                     );
-                    let _ = writeln!(err, "{message}");
-                    events(&SupEvent::Diagnostic(message));
+                    let _ = writeln!(ctx.err, "{message}");
+                    ctx.emit(&SupEvent::Diagnostic(message));
                     continue 'outer;
                 }
-                let was_interrupted = interrupted.is_some();
-                // A remediation force build installs in force mode (fish
-                // `lane_force_install=1`): never the same-version skip.
-                let forced = remediation
+                let was_interrupted = ctx.interrupted.is_some();
+                let forced = ctx
+                    .remediation
                     .as_ref()
                     .map(|rem| rem.owns(index))
                     .unwrap_or(false);
                 let settled_code: Option<gsa_model::LaneOutcome>;
-                let result = reap_result(&setup, index, err);
+                let result = reap_result(ctx.setup, index, ctx.err);
                 match result {
                     Some(result) => {
                         let is_signal_report = matches!(
@@ -1543,19 +1528,9 @@ pub fn run(
                                 | gsa_model::LaneOutcome::Term
                                 | gsa_model::LaneOutcome::Parked
                         );
-                        // §I.3: what started is `interrupted …` — a late
-                        // ok/failed result cannot outvote the teardown. It
-                        // still settles, exactly once, as the interrupt row:
-                        // continuing past `machine.record` leaked the
-                        // machine's active count and hung the dispatcher.
                         let late_result = was_interrupted && !is_signal_report;
-                        // Post-build install hook (install-before-dependents,
-                        // rule 11): a successful build installs BEFORE its
-                        // result reaches the machine, so consumers only
-                        // compile after the install landed. Runs on this
-                        // single event loop — one `pacman -U` at a time (§K.3).
                         let mut code = if late_result {
-                            signal_cause(interrupted).unwrap_or(gsa_model::LaneOutcome::Term)
+                            signal_cause(ctx.interrupted).unwrap_or(gsa_model::LaneOutcome::Term)
                         } else {
                             result.code
                         };
@@ -1565,30 +1540,24 @@ pub fn run(
                             result.reason.clone()
                         };
                         if code == gsa_model::LaneOutcome::Ok {
-                            // Post-build registration hook (contract §J.4):
-                            // record the instance while the in-flight set is
-                            // still knowable here — every other lane that is
-                            // still building, minus this one (its lane is
-                            // done; its own retention sweep may proceed).
-                            if let Some(hook) = setup.register.as_mut() {
-                                let pkg = machine.node(index).id.as_str().to_string();
-                                let recipe_dir = setup.nodes[index].recipe_dir.clone();
+                            let pkg = ctx.machine.node(index).id.as_str().to_string();
+                            let recipe_dir = ctx.setup.nodes[index].recipe_dir.clone();
+                            if let Some(hook) = ctx.setup.register.as_mut() {
                                 let in_flight: std::collections::BTreeSet<String> =
-                                    (0..setup.nodes.len())
+                                    (0..ctx.setup.nodes.len())
                                         .filter(|&j| j != index)
                                         .filter(|&j| {
-                                            machine.node_phase(j)
+                                            ctx.machine.node_phase(j)
                                                 == crate::machine::NodePhase::Dispatched
                                         })
-                                        .map(|j| setup.nodes[j].id.as_str().to_string())
+                                        .map(|j| ctx.setup.nodes[j].id.as_str().to_string())
                                         .collect();
-                                for note in hook(&pkg, &recipe_dir, &in_flight, true) {
-                                    events(&SupEvent::Diagnostic(note));
+                                let notes = hook(&pkg, &recipe_dir, &in_flight, true);
+                                for note in notes {
+                                    ctx.emit(&SupEvent::Diagnostic(note));
                                 }
                             }
-                            if let Some(hook) = setup.install.as_mut() {
-                                let pkg = machine.node(index).id.as_str().to_string();
-                                let recipe_dir = setup.nodes[index].recipe_dir.clone();
+                            if let Some(hook) = ctx.setup.install.as_mut() {
                                 match hook(&pkg, &recipe_dir, forced) {
                                     InstallStep::Done(step_reason) => {
                                         reason = step_reason;
@@ -1599,24 +1568,13 @@ pub fn run(
                                     } => {
                                         code = gsa_model::LaneOutcome::Failed;
                                         reason = halt_reason;
-                                        if is_install_refusal(&reason) {
-                                            refused = true;
-                                        }
-                                        if stop_dispatch {
-                                            // Halt new dispatch exactly once
-                                            // (the fail-fast stop), loudly.
-                                            machine.stop_dispatch();
-                                            dispatch_halted = true;
-                                            events(&SupEvent::Diagnostic(format!(
-                                                "install halted dispatch: {reason}"
-                                            )));
-                                        }
+                                        ctx.apply_install_halt(&reason, stop_dispatch);
                                     }
                                 }
                             }
                         }
                         let row = OutcomeRow {
-                            pkg: machine.node(index).id.clone(),
+                            pkg: ctx.machine.node(index).id.clone(),
                             status: match code {
                                 gsa_model::LaneOutcome::Ok => RowStatus::Succeeded,
                                 gsa_model::LaneOutcome::Failed | gsa_model::LaneOutcome::Lost => {
@@ -1632,12 +1590,12 @@ pub fn run(
                             dur: Some(result.dur as i64),
                             reason: reason.clone(),
                         };
-                        events(&SupEvent::Finished {
+                        ctx.emit(&SupEvent::Finished {
                             index,
                             row: row.clone(),
                         });
                         settled_code = Some(code.clone());
-                        let requests = machine.record(
+                        let requests = ctx.machine.record(
                             index,
                             Recorded {
                                 code,
@@ -1645,35 +1603,14 @@ pub fn run(
                                 reason,
                             },
                         );
-                        write_park_markers(
-                            &mut setup,
-                            &mut machine,
-                            requests,
-                            &active,
-                            &mut remediation,
-                            events,
-                            err,
-                            &mut refused,
-                            &mut dispatch_halted,
-                        );
+                        ctx.write_park_markers(requests);
                     }
                     None => {
-                        // §F.1: nothing usable was published — the reap
-                        // anomaly maps to `lost 125` unless the lane's death
-                        // cause is an attributable signal (§K.3: SIGHUP/
-                        // SIGINT/SIGTERM → 129/130/143) or the run was
-                        // interrupted: §I.3's honesty reaches the vanished
-                        // lane too, and an unattributable teardown death (the
-                        // grace SIGKILL) settles with the interrupted signal's
-                        // lane code — the late-result rule's mapping — never
-                        // as a lost reap anomaly. Either way the row settles
-                        // exactly once — continuing past `machine.record`
-                        // leaked the machine's active count and hung the
-                        // dispatcher.
                         let (code, reason) = match signal_cause(killed_by) {
                             Some(code) => (code, "interrupted-mid-build".to_string()),
                             None if was_interrupted => (
-                                signal_cause(interrupted).unwrap_or(gsa_model::LaneOutcome::Term),
+                                signal_cause(ctx.interrupted)
+                                    .unwrap_or(gsa_model::LaneOutcome::Term),
                                 "interrupted-mid-build".to_string(),
                             ),
                             None => (gsa_model::LaneOutcome::Lost, "lane-lost".to_string()),
@@ -1681,20 +1618,20 @@ pub fn run(
                         let message = if code == gsa_model::LaneOutcome::Lost {
                             format!(
                                 "gsa: no usable result for {} — mapping to lost (125)",
-                                machine.node(index).id
+                                ctx.machine.node(index).id
                             )
                         } else {
                             format!(
                                 "gsa: no usable result for {} — mapping to {} ({})",
-                                machine.node(index).id,
+                                ctx.machine.node(index).id,
                                 reason,
                                 code.code()
                             )
                         };
-                        let _ = writeln!(err, "{message}");
-                        events(&SupEvent::Diagnostic(message));
+                        let _ = writeln!(ctx.err, "{message}");
+                        ctx.emit(&SupEvent::Diagnostic(message));
                         let row = OutcomeRow {
-                            pkg: machine.node(index).id.clone(),
+                            pkg: ctx.machine.node(index).id.clone(),
                             status: match code {
                                 gsa_model::LaneOutcome::Hup
                                 | gsa_model::LaneOutcome::Int
@@ -1705,15 +1642,13 @@ pub fn run(
                             dur: None,
                             reason: reason.clone(),
                         };
-                        events(&SupEvent::Finished {
+                        ctx.emit(&SupEvent::Finished {
                             index,
                             row: row.clone(),
                         });
                         settled_code = Some(code.clone());
                         if was_interrupted {
-                            // §I.3: the teardown owns what never launched —
-                            // no failure policy may park the cone here.
-                            machine.record_teardown(
+                            ctx.machine.record_teardown(
                                 index,
                                 Recorded {
                                     code,
@@ -1722,7 +1657,7 @@ pub fn run(
                                 },
                             );
                         } else {
-                            machine.record(
+                            let requests = ctx.machine.record(
                                 index,
                                 Recorded {
                                     code,
@@ -1730,89 +1665,39 @@ pub fn run(
                                     reason,
                                 },
                             );
+                            ctx.write_park_markers(requests);
                         }
                     }
                 }
-                // Toolchain-remediation bookkeeping (owner rule 2026-10-02):
-                // a settled chain member decides the remediation; a trigger
-                // package's successful install re-probes and may FORCE-BUILD
-                // the at-risk chain before anything else compiles.
                 if let Some(code) = settled_code {
                     if !was_interrupted {
-                        remediation_settle(
-                            &mut remediation,
-                            setup.remediation.as_ref(),
-                            &mut setup.nodes,
-                            &mut machine,
-                            index,
-                            code,
-                            setup.install.is_some(),
-                            events,
-                            err,
-                            &mut refused,
-                            &mut dispatch_halted,
-                        );
+                        ctx.remediation_settle(index, code);
                     }
                 }
             }
             Event::FetchDone { index } => {
-                // Advisory reap (docs/plans/plan.md §3.1): warn and log, never a row.
-                if let Some(pf) = prefetch.as_mut() {
-                    if let Some(warning) = pf.reap(&setup, &run_dir(&setup), index, err) {
+                if let Some(pf) = ctx.prefetch.as_mut() {
+                    let rdir = run_dir(ctx.setup);
+                    if let Some(warning) = pf.reap(ctx.setup, &rdir, index, ctx.err) {
                         let message = format!(
                             "prefetch {}: {} — the lane will retry at build time",
                             warning.pkg, warning.reason
                         );
-                        let _ = writeln!(err, "gsa: warning: {message}");
-                        events(&SupEvent::PrefetchWarning(message));
+                        let _ = writeln!(ctx.err, "gsa: warning: {message}");
+                        ctx.emit(&SupEvent::PrefetchWarning(message));
                     }
                 }
             }
-            Event::Signal(sig) => {
-                events(&SupEvent::Signal(sig));
-                if interrupted.is_none() {
-                    interrupted = Some(sig);
-                    events(&SupEvent::Teardown(
-                        "one SIGTERM per lane, shared grace window",
-                    ));
-                    for lane in active.values_mut() {
-                        if !lane.term_sent {
-                            signal_group(lane.pid, signals::SIGTERM);
-                            lane.term_sent = true;
-                        }
-                    }
-                    if let Some(pf) = prefetch.as_mut() {
-                        pf.terminate();
-                    }
-                    if !grace_started {
-                        grace_started = true;
-                        let tx = tx.clone();
-                        let grace = signals::stop_grace_seconds();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_secs(grace));
-                            let _ = tx.send(Event::GraceExpired);
-                        });
-                    }
-                } else {
-                    // Second signal: escalate immediately (§K.3).
-                    events(&SupEvent::Teardown("second signal — SIGKILL sweep"));
-                    for lane in active.values() {
-                        signal_group(lane.pid, SIGKILL);
-                    }
-                    if let Some(pf) = prefetch.as_mut() {
-                        pf.kill();
-                    }
-                }
-            }
+            Event::Signal(sig) => ctx.on_signal(sig, &tx),
             Event::GraceExpired => {
-                if interrupted.is_some() && !active.is_empty() {
-                    events(&SupEvent::Teardown("grace expired — SIGKILL sweep"));
-                    for lane in active.values() {
+                if ctx.interrupted.is_some() && !ctx.active.is_empty() {
+                    ctx.emit(&SupEvent::Teardown("grace expired — SIGKILL sweep"));
+                    for lane in ctx.active.values() {
                         signal_group(lane.pid, SIGKILL);
                     }
                 }
-                if interrupted.is_some() {
-                    if let Some(pf) = prefetch.as_mut() {
+                if ctx.interrupted.is_some() {
+                    if let Some(pf) = ctx.prefetch.as_mut() {
                         pf.kill();
                     }
                 }
@@ -1820,9 +1705,12 @@ pub fn run(
         }
     }
 
-    // Settle the record: interrupt rows first, then policy-specific stops.
+    let interrupted = ctx.interrupted;
+    let refused = ctx.refused;
+    let dispatch_halted = ctx.dispatch_halted;
+    drop(ctx);
+
     if let Some(sig) = interrupted {
-        // Give stragglers one bounded reap window after any SIGKILL sweep.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !active.is_empty() && std::time::Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(100)) {
@@ -1838,24 +1726,17 @@ pub fn run(
             signal_group(lane.pid, SIGKILL);
         }
         if let Some(pf) = prefetch.as_mut() {
-            // The fetch child dies with the run (§K.3) — no orphans.
             pf.kill();
         }
         machine.finalize_interrupted(signal_lane_code(sig));
     } else if machine.finished() {
-        // nothing to settle
     } else if (setup.policy == Policy::FailFast || dispatch_halted) && machine.active() == 0 {
-        // The fail-fast stop — policy-driven, or requested once by an
-        // install-step `Halt { stop_dispatch: true }`.
         machine.finalize_stopped();
     } else {
         machine.finalize_never_ready();
     }
 
-    // The run reached its record: `run.closed` is what tells a reader that
-    // the absence of a history row is not a death (a killed run never gets
-    // here, so its `run.open` stands alone).
-    if let Err(error) = write_run_stamp(&setup, true) {
+    if let Err(error) = write_run_stamp(&setup, true, err) {
         events(&SupEvent::Diagnostic(format!("lane-state: {error}")));
     }
     let prefetch_warnings = prefetch.map(|pf| pf.warnings).unwrap_or_default();
@@ -1890,6 +1771,9 @@ mod tests {
     /// runs. Observability only: the run settles normally either way.
     #[test]
     fn lane_state_markers_and_the_view_tick_land_during_a_run() {
+        let _guard = crate::signals::TEST_SIGNAL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = scratch("lane-state");
         // A lane that outlives the ~1s tick, then exits without publishing —
         // the lost settlement is beside the point, the run only must settle.
@@ -2375,5 +2259,138 @@ mod tests {
         assert_eq!(progress.dispatched(), 3);
         assert_eq!(progress.succeeded(), 3);
         assert_eq!(progress.failed(), 0);
+    }
+
+    #[test]
+    fn coupled_batch_mate_receives_park_marker_when_peer_is_lost() {
+        let dir = scratch("coupled-lost-park");
+        let stub = write_stub(
+            &dir,
+            "stub-lane",
+            "#!/usr/bin/env bash\n\
+             pkg=$2\n\
+             result=$3\n\
+             if [ \"$pkg\" = p2 ]; then exit 0; fi\n\
+             sleep 0.4\n\
+             printf 'v2 %s 0 1 ok\\n' \"$pkg\" >\"$result.tmp.$$\"\n\
+             mv \"$result.tmp.$$\" \"$result\"\n",
+        );
+        let p2 = RecipeId::new("p2").unwrap();
+        let mut setup = one_node_setup(&dir, &stub, "coupled-lost-park");
+        setup.budget.lanes = 2;
+        setup.nodes[0].batch = Some(0);
+        setup.nodes.push(SupNode {
+            id: p2.clone(),
+            recipe_dir: dir.join("root/packages/p2"),
+            core: false,
+            build_tools: false,
+            prereqs: Vec::new(),
+            consumers: Vec::new(),
+            batch: Some(0),
+            pre: None,
+            latent: false,
+        });
+        setup.batches = vec![vec![0, 1]];
+        let run_dir = setup.state_dir.join("runs").join(&setup.run_id);
+
+        let (_outcome, events, _err) = run_capturing(setup);
+        assert!(
+            run_dir.join("p1.result.park").exists(),
+            "in-flight coupled mate p1 must receive a .park marker when p2 settles lost (125)"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SupEvent::Parked { index: 0, reason } if reason == "coupled-batch"
+            )),
+            "SupEvent::Parked(coupled-batch) must be emitted for p1: {events:?}"
+        );
+    }
+
+    #[test]
+    fn state_writes_refuse_symlinks_under_run_and_prefetch_log() {
+        let dir = scratch("state-symlinks");
+        let pf_victim = dir.join("pf-victim");
+        let pf_log = dir.join("state/prefetch.log");
+        std::os::unix::fs::symlink(&pf_victim, &pf_log).unwrap();
+        let pf = Prefetcher::new(
+            &PrefetchSetup {
+                ahead: 1,
+                candidacy: Vec::new(),
+                log_path: pf_log,
+            },
+            0,
+        );
+        let mut pf_err = Vec::new();
+        pf.note("should-not-follow", &mut pf_err);
+        assert!(
+            !pf_victim.exists(),
+            "Prefetcher::note must refuse symlinked prefetch.log"
+        );
+        let pf_err_text = String::from_utf8_lossy(&pf_err);
+        assert!(
+            pf_err_text.contains("symlink"),
+            "Prefetcher::note must warn on symlink refusal: {pf_err_text}"
+        );
+
+        let stub = write_stub(&dir, "noop-lane", "#!/usr/bin/env bash\nexit 0\n");
+        let mut setup = one_node_setup(&dir, &stub, "started-symlink");
+        setup.run_id = "r-sym".to_string();
+        let rdir = setup.state_dir.join("runs").join(&setup.run_id);
+        std::fs::create_dir_all(&rdir).unwrap();
+        let started_victim = dir.join("started-victim");
+        std::os::unix::fs::symlink(&started_victim, rdir.join("p1.started")).unwrap();
+        let mut started_err = Vec::new();
+        let _ = write_started(&setup, 0, 12345, 0, &mut started_err).unwrap_err();
+        assert!(
+            !started_victim.exists(),
+            "write_started must refuse symlinked .started marker"
+        );
+    }
+
+    #[test]
+    fn settle_skip_polls_signals_between_ready_claims() {
+        let dir = scratch("skip-signal");
+        let stub = write_stub(&dir, "noop-lane", "#!/usr/bin/env bash\nexit 0\n");
+        let mut setup = one_node_setup(&dir, &stub, "skip-signal");
+        setup.nodes[0].pre = Some(PreSettle::Skip {
+            reason: "skip-built".to_string(),
+            archives: Vec::new(),
+        });
+        let p2 = RecipeId::new("p2").unwrap();
+        setup.nodes.push(SupNode {
+            id: p2,
+            recipe_dir: dir.join("root/packages/p2"),
+            core: false,
+            build_tools: false,
+            prereqs: Vec::new(),
+            consumers: Vec::new(),
+            batch: None,
+            pre: Some(PreSettle::Skip {
+                reason: "skip-built".to_string(),
+                archives: Vec::new(),
+            }),
+            latent: false,
+        });
+        let installed: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let installed_cb = std::sync::Arc::clone(&installed);
+        setup.install = Some(Box::new(move |pkg, _, _| {
+            installed_cb.lock().unwrap().push(pkg.to_string());
+            if pkg == "p1" {
+                let _ =
+                    crate::signals::send_signal(std::process::id() as i32, crate::signals::SIGTERM);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            InstallStep::Done("ok".to_string())
+        }));
+
+        let (outcome, _events, _err) = run_capturing(setup);
+        assert!(outcome.interrupted);
+        assert_eq!(
+            *installed.lock().unwrap(),
+            vec!["p1".to_string()],
+            "second --skip node must not install after SIGTERM lands"
+        );
     }
 }

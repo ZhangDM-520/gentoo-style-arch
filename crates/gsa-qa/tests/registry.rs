@@ -452,3 +452,68 @@ fn collect_archives_prefers_the_higher_version_over_the_newer_mtime() {
         "the higher version must win over the newer-mtime shadow"
     );
 }
+
+#[test]
+fn collect_archives_finds_archives_in_shared_pkgdest() {
+    let scratch = Scratch::new("shared-pkgdest");
+    scratch.recipe(
+        "qafoo",
+        "pkgbase = qafoo\npkgname = qafoo\npkgver = 1.0\npkgrel = 1\n",
+    );
+    let workspace = load_workspace(&scratch.root).unwrap();
+    let build_dir = scratch.root.join("build-cache");
+    let pkgdest = build_dir.join("pkgs");
+    std::fs::create_dir_all(&pkgdest).unwrap();
+
+    // Put the archive ONLY in shared PKGDEST, not in recipe.dir.
+    let arc_path = pkgdest.join("qafoo-1.0-1-x86_64.pkg.tar.zst");
+    {
+        let file = std::fs::File::create(&arc_path).unwrap();
+        let enc = zstd::Encoder::new(file, 0).unwrap();
+        let mut builder = tar::Builder::new(enc);
+        let body = b"pkgbase = qafoo\npkgname = qafoo\npkgver = 1.0-1\narch = x86_64\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, ".PKGINFO", &body[..])
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+    }
+
+    let prev = std::env::var_os("GSA_BUILD_DIR");
+    std::env::set_var("GSA_BUILD_DIR", &build_dir);
+    let archives = collect_archives(&workspace.recipes, &[]);
+    match prev {
+        Some(v) => std::env::set_var("GSA_BUILD_DIR", v),
+        None => std::env::remove_var("GSA_BUILD_DIR"),
+    }
+    assert_eq!(
+        archives.len(),
+        1,
+        "collect_archives must discover archives from W4 shared PKGDEST"
+    );
+    assert_eq!(archives[0].path, arc_path);
+}
+
+#[test]
+fn load_workspace_fails_on_unreadable_srcinfo() {
+    use std::os::unix::fs::PermissionsExt;
+    if gsa_model::state_gate::current_uid() == 0 {
+        return;
+    }
+    let scratch = Scratch::new("unreadable-srcinfo");
+    scratch.recipe(
+        "qafoo",
+        "pkgbase = qafoo\npkgname = qafoo\npkgver = 1.0\npkgrel = 1\n",
+    );
+    let srcinfo = scratch.root.join("packages/qafoo/.SRCINFO");
+    std::fs::set_permissions(&srcinfo, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let res = load_workspace(&scratch.root);
+    std::fs::set_permissions(&srcinfo, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        res.is_err(),
+        "unreadable .SRCINFO must fail loud instead of classifying as absent"
+    );
+}

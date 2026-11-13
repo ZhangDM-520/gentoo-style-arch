@@ -15,12 +15,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gsa_abi::{plan_waves, Subscriptions, TokenMove, WaveInputs};
 use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
-use gsa_install::localdb::{pacman_db_root, pacman_db_root_for, LocalDb};
+use gsa_install::localdb::{pacman_db_root_for, LocalDb};
 use gsa_install::{preflight_installs, DecideMode, InstallRun};
 use gsa_model::{Group, OutcomeRow, PlanAction, PlanRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::toolchain;
@@ -127,12 +127,15 @@ fn run_build_with(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
     };
     // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
     let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
         .map_err(|error| error.into_exit())?;
     crate::write_notes(err, draft.notes());
+    let _ = resolve_budget(inv, &project, 0).map_err(Exit::Usage)?;
+    let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
+    let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
@@ -227,8 +230,6 @@ fn run_build_with(
     for warning in &warnings {
         let _ = writeln!(err, "{warning}");
     }
-    // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
-    let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
 
     // ── startup refusals (§G.1 rc 3) ─────────────────────────────────────
     // Under-coverage (§E.3): a wave member the topology cannot build —
@@ -394,7 +395,6 @@ fn run_build_with(
         }
     }
     // 2. the version-sync + freshness pass (one pass, canonical order).
-    let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
     for line in &cfg.notes {
         let _ = writeln!(err, "gsa: note: {line}");
     }
@@ -484,10 +484,7 @@ fn run_build_with(
             let state_dir = state_dir.clone();
             let conf = inv.config.as_ref().map(PathBuf::from);
             let pacman_args = inv.pacman_args.clone().unwrap_or_default();
-            let register_ignorepkg = !inv
-                .deferred_flags
-                .iter()
-                .any(|f| f == "--no-register-ignorepkg");
+            let register_ignorepkg = !inv.no_register_ignorepkg;
             let order = build_order_ids(&graph, &ids);
             // Settled-lane ledger for `later_after_settled`: the hook fires
             // per settled lane, so this is the run's landed set.
@@ -623,32 +620,39 @@ fn run_build_with(
                             }
                         }
                         if baselines_ok {
-                            let source = std::fs::read_to_string(recipe_dir.join("PKGBUILD"))
-                                .unwrap_or_default();
+                            let pkgbuild = recipe_dir.join("PKGBUILD");
                             let declared = toolchains.get(pkg).copied().flatten();
-                            let selected = gsa_recipe::toolchain::select(
-                                pkg,
-                                gsa_model::toolchain::override_value(),
-                                declared,
-                                &source,
-                            )
-                            .map(|selected| selected.toolchain)
-                            .unwrap_or(
-                                gsa_model::toolchain::override_value()
-                                    .or(declared)
-                                    .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT),
-                            );
-                            match gsa_recipe::toolchain::build_identity(selected) {
-                                Ok(identity) => {
-                                    if let Err(error) = gsa_recipe::toolchain::write_marker(
-                                        &state_dir, pkg, &identity,
-                                    ) {
-                                        notes.push(format!("toolchain marker: {pkg}: {error}"));
+                            let selected = std::fs::read_to_string(&pkgbuild)
+                                .map_err(|error| {
+                                    format!("cannot read {}: {error}", pkgbuild.display())
+                                })
+                                .and_then(|source| {
+                                    gsa_recipe::toolchain::select(
+                                        pkg,
+                                        gsa_model::toolchain::override_value(),
+                                        declared,
+                                        &source,
+                                    )
+                                    .map(|selected| selected.toolchain)
+                                    .map_err(|error| error.to_string())
+                                });
+                            match selected {
+                                Ok(selected) => match gsa_recipe::toolchain::build_identity(selected)
+                                {
+                                    Ok(identity) => {
+                                        if let Err(error) = gsa_recipe::toolchain::write_marker(
+                                            &state_dir, pkg, &identity,
+                                        ) {
+                                            notes.push(format!("toolchain marker: {pkg}: {error}"));
+                                        }
                                     }
+                                    Err(error) => notes.push(format!(
+                                        "toolchain marker: {pkg}: cannot determine the {selected} build identity ({error})"
+                                    )),
+                                },
+                                Err(error) => {
+                                    notes.push(format!("toolchain marker: {pkg}: {error}"))
                                 }
-                                Err(error) => notes.push(format!(
-                                    "toolchain marker: {pkg}: cannot determine the {selected} build identity ({error})"
-                                )),
                             }
                         }
                     }
@@ -858,7 +862,11 @@ fn run_build_with(
     // install decisions, which the one decision seam made (rule 20).
     let qa = if is_install_run {
         let qa_targets: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
-        crate::qa::report_lines(&qa_targets, inv.state_dir.as_deref())
+        crate::qa::report_lines(
+            &qa_targets,
+            inv.state_dir.as_deref(),
+            inv.config.as_deref().map(Path::new),
+        )
     } else {
         None
     };
@@ -905,11 +913,9 @@ fn record_toolchain(
             continue;
         };
         let dir = root.join(&graph.record(idx).path);
-        families.insert(prepare::selected_toolchain(
-            id.as_str(),
-            graph.record(idx),
-            &dir,
-        ));
+        if let Ok(family) = prepare::selected_toolchain(id.as_str(), graph.record(idx), &dir) {
+            families.insert(family);
+        }
     }
     match families.len() {
         0 => (None, None),
@@ -1132,6 +1138,21 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     exit::render(run_update_inner(inv, out, err), err)
 }
 
+pub(crate) fn load_installed_db_for_update(conf: Option<&Path>) -> Result<LocalDb, Exit> {
+    let db_root = pacman_db_root_for(conf).map_err(|message| {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {message}")],
+        ))
+    })?;
+    LocalDb::load(&db_root).map_err(|message| {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {message}")],
+        ))
+    })
+}
+
 fn run_update_inner(
     inv: &Invocation,
     out: &mut dyn Write,
@@ -1147,10 +1168,13 @@ fn run_update_inner(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
     };
     let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
     crate::write_notes(err, &selection.notes);
+    let _ = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+    let _ = resolve_prefetch(inv).map_err(Exit::Usage)?;
+    let _ = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
@@ -1162,18 +1186,30 @@ fn run_update_inner(
         return Err(exit);
     }
 
+    let mut resolved_inv = inv.clone();
+    if !resolved_inv.dry_run {
+        crate::builddir::resolve(&mut resolved_inv, err)?;
+    }
+
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
+    let state_dir =
+        gsa_state::resolve_state_root(resolved_inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
     // ── 1. the `-Sy` phase (`gsa -Syu` only — H9: `gsa -Su` updates with no
     //    sync pass). A dry run never rewrites recipes, so it runs no sync at
     //    all; the routing below owns the rc classes.
-    if inv.sync_first && !inv.no_sync && !inv.dry_run {
+    if resolved_inv.sync_first && !resolved_inv.no_sync && !resolved_inv.dry_run {
         let srcdest = gsa_model::config::resolve_srcdest();
         let phase = prepare::sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
-        if let Some(exit) = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
-            resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b)
-        }) {
+        if let Some(exit) = after_sync_phase(
+            &resolved_inv,
+            &selection,
+            &state_dir,
+            out,
+            err,
+            &phase,
+            || resolve_budget(&resolved_inv, &project, selection.listed.len()).map(|(b, _)| b),
+        ) {
             return Err(exit);
         }
     }
@@ -1182,7 +1218,7 @@ fn run_update_inner(
     // The installed record is the reference point whenever one exists: an
     // archive whose install was refused must stay stale, or the update
     // disappears from this verb for good.
-    let installed = LocalDb::load(&pacman_db_root()).map_err(Exit::Usage)?;
+    let installed = load_installed_db_for_update(resolved_inv.config.as_deref().map(Path::new))?;
     let stale: Vec<RecipeId> = prepare::stale_set(&root, &graph, &db, &installed, &ids)
         .into_iter()
         .map(|row| row.id)
@@ -1228,19 +1264,23 @@ fn run_update_inner(
     }
 
     // ── 3. build+install the stale set through the normal pipeline ───────
-    let mut update_inv = inv.clone();
+    let mut update_inv = resolved_inv.clone();
     update_inv.targets = stale.iter().map(|id| id.as_str().to_string()).collect();
     update_inv.ranges = Vec::new();
-    if !inv.sync_first {
+    if !resolved_inv.dry_run {
+        // `builddir::resolve` already ran once above for the update pass.
+        update_inv.no_build_dir_prompt = true;
+    }
+    if !resolved_inv.sync_first {
         // `-Su` (H9): the pipeline must not sneak a sync in through its
         // pre-dispatch pass — the committed versions build as-is.
         update_inv.no_sync = true;
     }
-    if inv.dry_run {
+    if resolved_inv.dry_run {
         // The dry run's typed exit owns its rc (a declined prompt is rc 3).
         return plan_only(&ctx, &update_inv, &project, &root, out, err);
     }
-    let mode = if inv.modifiers.contains(&'f') {
+    let mode = if resolved_inv.modifiers.contains(&'f') {
         DecideMode::Force
     } else {
         DecideMode::Checked
@@ -2038,6 +2078,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -2276,5 +2317,34 @@ mod tests {
             .collect();
         let built = build_order_ids(&graph, &listed_ids);
         assert_eq!(later_after(&built, "provider"), order(&["consumer"]));
+    }
+
+    #[test]
+    fn load_installed_db_for_update_honors_config_and_refuses_missing_db() {
+        let dir = scratch("update-db-conf");
+        let db = dir.join("custom-db");
+        let pkg = db.join("local/demo-1.0-1");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("desc"), "%NAME%\ndemo\n\n%VERSION%\n1.0-1\n\n").unwrap();
+        let conf = dir.join("pacman.conf");
+        std::fs::write(&conf, format!("[options]\nDBPath = {}\n", db.display())).unwrap();
+
+        let loaded = super::load_installed_db_for_update(Some(&conf))
+            .expect("custom --config DBPath loads cleanly");
+        assert!(loaded.packages().iter().any(|p| p.name == "demo"));
+
+        let missing_conf = dir.join("missing.conf");
+        let err = super::load_installed_db_for_update(Some(&missing_conf))
+            .expect_err("missing --config must refuse");
+        assert!(
+            matches!(
+                err,
+                crate::exit::Exit::Refuse(ref r)
+                    if r.class == crate::exit::RefusalClass::StartupRefused
+            ),
+            "missing --config must return StartupRefused (rc 3)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

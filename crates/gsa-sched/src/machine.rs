@@ -378,9 +378,19 @@ impl Machine {
             LaneOutcome::Term => (RowStatus::Interrupted, Some(143), reason),
         };
         self.states[index] = State::Done(status, rc, dur, reason);
+        if apply_policy {
+            self.apply_failure_policy(index, status, &mut requests);
+        }
+        requests
+    }
 
+    fn apply_failure_policy(
+        &mut self,
+        index: usize,
+        status: RowStatus,
+        requests: &mut Vec<ParkRequest>,
+    ) {
         match status {
-            _ if !apply_policy => {}
             RowStatus::Failed => {
                 if self.policy == Policy::FailFast {
                     self.stop_dispatch = true;
@@ -389,14 +399,14 @@ impl Machine {
                     // cone, then its coupled batch mates and their cones
                     // (contract open decision 1, recommendation adopted).
                     let cone = self.consumer_cone(index);
-                    self.park_event(&cone, "waits-on-failed", &mut requests);
+                    self.park_event(&cone, "waits-on-failed", requests);
                     if let Some(batch) = self.nodes[index].batch {
                         let mates: Vec<usize> = self.batches[batch]
                             .iter()
                             .copied()
                             .filter(|&m| m != index && !self.is_terminal(m))
                             .collect();
-                        self.park_event(&mates, "coupled-batch", &mut requests);
+                        self.park_event(&mates, "coupled-batch", requests);
                     }
                 }
             }
@@ -405,11 +415,10 @@ impl Machine {
                 // the deferring package's dependents, and dispatch continues
                 // with unrelated work even under --fail-fast.
                 let cone = self.consumer_cone(index);
-                self.park_event(&cone, "waits-on-deferred", &mut requests);
+                self.park_event(&cone, "waits-on-deferred", requests);
             }
             _ => {}
         }
-        requests
     }
 
     /// Record one pre-dispatch settlement (contract §B.8): a `--skip` claim
@@ -430,29 +439,7 @@ impl Machine {
         );
         let mut requests = Vec::new();
         self.states[index] = State::Done(status, rc, None, reason.to_string());
-        match status {
-            RowStatus::Failed => {
-                if self.policy == Policy::FailFast {
-                    self.stop_dispatch = true;
-                } else {
-                    let cone = self.consumer_cone(index);
-                    self.park_event(&cone, "waits-on-failed", &mut requests);
-                    if let Some(batch) = self.nodes[index].batch {
-                        let mates: Vec<usize> = self.batches[batch]
-                            .iter()
-                            .copied()
-                            .filter(|&m| m != index && !self.is_terminal(m))
-                            .collect();
-                        self.park_event(&mates, "coupled-batch", &mut requests);
-                    }
-                }
-            }
-            RowStatus::Deferred => {
-                let cone = self.consumer_cone(index);
-                self.park_event(&cone, "waits-on-deferred", &mut requests);
-            }
-            _ => {}
-        }
+        self.apply_failure_policy(index, status, &mut requests);
         requests
     }
 
