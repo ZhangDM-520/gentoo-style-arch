@@ -90,8 +90,11 @@ pub struct WaveMember {
 /// One provider's rebuild wave (or merged set of overlapping waves).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wave {
-    pub provider: String,
-    /// Every provider whose move merged into this wave (primary first).
+    /// Every provider whose move merged into this wave, PRIMARY FIRST. A
+    /// wave is one transaction, so a caller that needs "the provider" of a
+    /// member must read this whole set: `stage_swap` lands all of them, and
+    /// a reader that only took the first one split a merged wave across two
+    /// transactions (round-2 audit, F-R2-B-02).
     pub providers: Vec<String>,
     /// Seeds ∪ transitive consumers of seeds, canonical build order.
     pub members: Vec<WaveMember>,
@@ -390,7 +393,6 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
             }
         }
         let wave = Wave {
-            provider: provider.to_string(),
             providers: vec![provider.to_string()],
             members: known,
             coupled_noted: noted,
@@ -421,26 +423,27 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
     plan
 }
 
-/// Waves sharing a member or provider are ONE wave (one pass, one
-/// transaction): merge them to a transitive fixpoint and retain every
-/// merged provider so [`stage_swap`] lands all archives together.
+/// Waves that share any identity — a member or a provider on EITHER side,
+/// including the cross-role cases (one wave's provider is another's member,
+/// or the two share a provider) — are ONE wave (one pass, one transaction):
+/// merge them to a transitive fixpoint and retain every merged provider so
+/// [`stage_swap`] lands all archives together.
 fn merge_overlapping(waves: &mut Vec<Wave>) {
-    for w in waves.iter_mut() {
-        if w.providers.is_empty() {
-            w.providers.push(w.provider.clone());
-        }
+    /// Members ∪ providers, the overlap predicate's whole input.
+    fn identities(w: &Wave) -> BTreeSet<String> {
+        let mut set: BTreeSet<String> = w.members.iter().map(|m| m.id.clone()).collect();
+        set.extend(w.providers.iter().cloned());
+        set
     }
     let mut changed = true;
     while changed {
         changed = false;
         let mut merged: Vec<Wave> = Vec::new();
         for mut wave in waves.drain(..) {
-            let members: BTreeSet<&str> = wave.members.iter().map(|m| m.id.as_str()).collect();
-            let target = merged.iter_mut().find(|w| {
-                w.members.iter().any(|m| members.contains(m.id.as_str()))
-                    || w.providers.iter().any(|p| wave.providers.contains(p))
-                    || w.provider == wave.provider
-            });
+            let wave_ids = identities(&wave);
+            let target = merged
+                .iter_mut()
+                .find(|w| !identities(w).is_disjoint(&wave_ids));
             let Some(target) = target else {
                 merged.push(wave);
                 continue;
@@ -449,9 +452,6 @@ fn merge_overlapping(waves: &mut Vec<Wave>) {
                 if !target.providers.contains(&p) {
                     target.providers.push(p);
                 }
-            }
-            if !target.providers.contains(&wave.provider) {
-                target.providers.push(wave.provider);
             }
             let mut seen: BTreeSet<String> = target.members.iter().map(|m| m.id.clone()).collect();
             for member in wave.members {
@@ -494,11 +494,7 @@ pub fn stage_swap(waves: &[Wave], archive_of: &dyn Fn(&str) -> Option<PathBuf>) 
     for wave in waves {
         let mut group: Vec<PathBuf> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
-        let providers: Vec<&str> = if wave.providers.is_empty() {
-            vec![wave.provider.as_str()]
-        } else {
-            wave.providers.iter().map(String::as_str).collect()
-        };
+        let providers: Vec<&str> = wave.providers.iter().map(String::as_str).collect();
         for provider in &providers {
             if let Some(archive) = archive_of(provider) {
                 if !group.contains(&archive) {
@@ -934,7 +930,6 @@ mod tests {
     fn staged_swap_is_one_transaction_per_wave_and_refuses_under_coverage() {
         use std::path::PathBuf;
         let wave = Wave {
-            provider: "p".to_string(),
             providers: vec!["p".to_string()],
             members: vec![
                 WaveMember {
@@ -1030,7 +1025,6 @@ mod tests {
     fn merge_overlapping_reaches_transitive_fixpoint() {
         let mut waves = vec![
             Wave {
-                provider: "p1".to_string(),
                 providers: vec!["p1".to_string()],
                 members: vec![WaveMember {
                     id: "c1".to_string(),
@@ -1040,7 +1034,6 @@ mod tests {
                 fallback: false,
             },
             Wave {
-                provider: "p3".to_string(),
                 providers: vec!["p3".to_string()],
                 members: vec![WaveMember {
                     id: "c2".to_string(),
@@ -1050,7 +1043,6 @@ mod tests {
                 fallback: false,
             },
             Wave {
-                provider: "p2".to_string(),
                 providers: vec!["p2".to_string()],
                 members: vec![
                     WaveMember {
@@ -1087,5 +1079,55 @@ mod tests {
             5,
             "all merged providers + members must land together"
         );
+    }
+
+    #[test]
+    fn merge_overlapping_joins_across_roles() {
+        // One wave's PROVIDER is another wave's MEMBER. The old predicate
+        // compared members to members and providers to providers only, so
+        // these two waves stayed apart and `stage_swap` emitted the same
+        // archive in two transactions (round-2 audit, F-R2-B-02).
+        let mut waves = vec![
+            Wave {
+                providers: vec!["a".to_string()],
+                members: vec![WaveMember {
+                    id: "mid".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                providers: vec!["mid".to_string()],
+                members: vec![WaveMember {
+                    id: "leaf".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+        ];
+        merge_overlapping(&mut waves);
+        assert_eq!(
+            waves.len(),
+            1,
+            "a cross-role overlap is one wave: {waves:?}"
+        );
+        assert_eq!(waves[0].providers, vec!["a", "mid"]);
+        let ids: Vec<&str> = waves[0].members.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["mid", "leaf"]);
+
+        let archives = BTreeMap::from([
+            ("a".to_string(), PathBuf::from("/a/a.pkg.tar.zst")),
+            ("mid".to_string(), PathBuf::from("/a/mid.pkg.tar.zst")),
+            ("leaf".to_string(), PathBuf::from("/a/leaf.pkg.tar.zst")),
+        ]);
+        let swap = stage_swap(&waves, &|id| archives.get(id).cloned());
+        assert_eq!(
+            swap.transactions.len(),
+            1,
+            "the repeated archive must ride ONE transaction"
+        );
+        assert_eq!(swap.transactions[0].len(), 3);
     }
 }

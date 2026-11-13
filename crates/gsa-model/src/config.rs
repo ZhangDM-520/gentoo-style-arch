@@ -524,38 +524,36 @@ pub fn resolve_srcdest_with_source() -> (Option<PathBuf>, &'static str) {
     resolve_srcdest_from(&cfg, home.as_deref())
 }
 
-fn resolve_srcdest_for(
-    cfg: &GsaConfig,
-    home: Option<&Path>,
-) -> Result<(Option<PathBuf>, &'static str), String> {
+/// The precedence ladder alone, no filesystem work: the configured value or
+/// the build user's built-in `~/.gsa-src`. ONE ladder — the absolute-path
+/// check and the pure seam below both read it (round-2 audit, F-R2-A-06: the
+/// fallback arms were copied, so the two ladders could drift).
+fn srcdest_candidate(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
     match resolve_opt(&[("gsa.conf srcdest", cfg.srcdest.clone())]) {
-        Some(resolved) => Ok((
-            Some(absolutize_root(resolved.value, "the source cache")?),
-            resolved.source,
-        )),
+        Some(resolved) => (Some(resolved.value), resolved.source),
         None => match home {
-            Some(home) => Ok((
-                Some(absolutize_root(home.join(".gsa-src"), "the source cache")?),
-                "the built-in default",
-            )),
-            None => Ok((None, "no SRCDEST")),
+            Some(home) => (Some(home.join(".gsa-src")), "the built-in default"),
+            None => (None, "no SRCDEST"),
         },
     }
 }
 
-/// The pure precedence seam for [`resolve_srcdest`] (testable without the
-/// process environment or the filesystem).
-fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
-    match resolve_srcdest_for(cfg, home) {
-        Ok(pair) => pair,
-        Err(_) => match resolve_opt(&[("gsa.conf srcdest", cfg.srcdest.clone())]) {
-            Some(resolved) => (Some(resolved.value), resolved.source),
-            None => match home {
-                Some(home) => (Some(home.join(".gsa-src")), "the built-in default"),
-                None => (None, "no SRCDEST"),
-            },
-        },
+fn resolve_srcdest_for(
+    cfg: &GsaConfig,
+    home: Option<&Path>,
+) -> Result<(Option<PathBuf>, &'static str), String> {
+    let (value, source) = srcdest_candidate(cfg, home);
+    match value {
+        Some(value) => Ok((Some(absolutize_root(value, "the source cache")?), source)),
+        None => Ok((None, source)),
     }
+}
+
+/// The pure precedence seam for [`resolve_srcdest`] (testable without the
+/// process environment or the filesystem). An un-absolutizable root answers
+/// with the raw value; the build path's own absolute-path check names it.
+fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
+    resolve_srcdest_for(cfg, home).unwrap_or_else(|_| srcdest_candidate(cfg, home))
 }
 
 /// Load every auto-read layer, user over system over built-ins. Missing files

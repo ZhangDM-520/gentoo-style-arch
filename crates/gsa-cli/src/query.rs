@@ -891,7 +891,7 @@ pub fn query_info(
                 if db.get(token).is_some() {
                     installed_only.push(token.clone());
                 } else {
-                    return Err(crate::cmd_error(error.to_string()));
+                    return Err(error.to_string());
                 }
             }
         }

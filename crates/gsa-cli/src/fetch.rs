@@ -40,22 +40,36 @@ fn run_fetch_only_inner(
             "selection is mandatory: a fetch never starts without a selection",
         ));
     }
-    // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    let root = crate::resolve_workspace(inv, err)?;
-    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db =
-        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+    // ── read-only probe + usage preflight, then the gate (§B.10, §G.1) ───
+    // A host with no workspace yet preflights nothing, so the gate answers
+    // rc 3 instead of an unprivileged state write (round-2 audit,
+    // F-R2-C-01).
+    let mut preflight: Option<select::Selection> = None;
+    let probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    let mut selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-        .map_err(|error| error.into_exit())?;
-    crate::write_notes(err, &selection.notes);
+    match probe {
+        Ok(root) => {
+            let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+            let graph = Graph::build(&project.topology.records)
+                .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+            let db = RecipeDb::load(&root, graph.records())
+                .map_err(|error| Exit::Usage(error.to_string()))?;
+            let ctx = Ctx {
+                project: &project,
+                graph: &graph,
+                db: &db,
+                user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+            };
+            let resolved = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, &resolved.notes);
+            preflight = Some(resolved);
+        }
+        Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
+    }
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
         &inv.spelling(),
@@ -65,6 +79,29 @@ fn run_fetch_only_inner(
     ) {
         return Err(exit);
     }
+
+    // ── the run's workspace: a mutating run may fetch the store ──────────
+    let root = crate::resolve_workspace_for_run(inv, err)?;
+    let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+    };
+    let mut selection = match preflight {
+        Some(selection) => selection,
+        None => {
+            let resolved = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, &resolved.notes);
+            resolved
+        }
+    };
     // ── missing build-order prerequisites (contract §C.3) ────────────────
     // Fetch is the "before you disconnect" verb: a build run expands to the
     // prerequisites the system lacks and then needs THEIR sources, so fetching

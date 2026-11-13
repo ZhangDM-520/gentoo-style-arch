@@ -34,11 +34,20 @@ fn setup_workspace(root: &Path) {
 }
 
 fn run_gsa(ws: &Path, state: &Path, build: &Path, args: &[&str]) -> (i32, String, String) {
+    // `GSA_CONF_DIR` replaces the whole config ladder, so the host's
+    // `/etc/gsa` and `~/.config/gsa` cannot answer `project = …` over the
+    // fixture's own roots (rule 57; round-2 audit F-R2-C-03).
+    let conf = state
+        .parent()
+        .map(|parent| parent.join("conf"))
+        .unwrap_or_else(|| state.to_path_buf());
+    std::fs::create_dir_all(&conf).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_gsa"))
         .args(args)
         .env("GSA_RECIPES_DIR", ws)
         .env("GSA_STATE_DIR", state)
         .env("GSA_BUILD_DIR", build)
+        .env("GSA_CONF_DIR", &conf)
         .env("GIT_CONFIG_COUNT", "0")
         .output()
         .expect("spawn gsa");
@@ -47,6 +56,52 @@ fn run_gsa(ws: &Path, state: &Path, build: &Path, args: &[&str]) -> (i32, String
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+#[test]
+fn f_r2_c_01_usage_answers_before_a_missing_workspace_and_dry_run_never_fetches() {
+    // Round-2 audit F-R2-C-01: the workspace probe ran with `fetch: true`
+    // BEFORE the usage preflights, so a host with no store answered `NeedsRoot`
+    // (rc 3) to `--lanes 0` and a `--dry-run` could clone the store.
+    if gsa_model::privilege::effective_uid() == 0 {
+        return;
+    }
+    let dir = scratch("r2c01");
+    let ws = dir.join("absent-recipes");
+    let state = dir.join("state");
+    let build = dir.join("build");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(&build).unwrap();
+
+    for args in [
+        &["-B", "--lanes", "0", "p1"][..],
+        &["-Su", "--lanes", "0"][..],
+    ] {
+        let (rc, _out, err) = run_gsa(&ws, &state, &build, args);
+        assert_eq!(
+            rc, 2,
+            "{args:?} is a usage error on a host with no workspace, got {rc}: {err}"
+        );
+    }
+
+    let (rc, _out, err) = run_gsa(&ws, &state, &build, &["-Su", "--dry-run", "--lanes", "1"]);
+    assert_eq!(
+        rc, 2,
+        "a workspace-less dry run is the usage hint, got {rc}: {err}"
+    );
+    assert!(
+        !ws.exists(),
+        "a dry run must never clone the recipe store: {}",
+        ws.display()
+    );
+    assert_eq!(
+        std::fs::read_dir(&state).unwrap().count(),
+        0,
+        "a dry run must not create state under {}",
+        state.display()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

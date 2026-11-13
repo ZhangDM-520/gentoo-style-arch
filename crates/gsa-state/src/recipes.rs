@@ -229,10 +229,11 @@ pub fn fetch(state_dir: &Path, recipe_url: &str) -> Result<(PathBuf, String), St
 /// `None` when the store's origin already answers `recipe_url`.
 pub fn refresh(state_dir: &Path, recipe_url: &str) -> Result<(String, Option<String>), String> {
     let (store, _note) = ensure_store(state_dir)?;
-    let note = match retarget_origin(&store, recipe_url) {
-        Ok(note) => note,
-        Err(error) => Some(format!("warning: cannot retarget origin: {error}")),
-    };
+    // Fail closed: a store whose origin cannot be repointed would sync from
+    // the OLD repository while the caller believes it refreshed the new one
+    // (the note was only a warning and `fetch()` drops it) — AGENTS.md rule
+    // 71, round-2 audit F-R2-B-03.
+    let note = retarget_origin(&store, recipe_url)?;
     git(&store, &["fetch", "--depth", "1", "origin", "HEAD"])?;
     git(&store, &["reset", "--hard", "FETCH_HEAD"])?;
     // The reset writes as the engine (root under a privileged run): the
@@ -323,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_warns_on_retarget_failure_and_continues_fetch() {
+    fn refresh_fails_closed_when_the_origin_cannot_be_repointed() {
         let dir = scratch("retarget-warn");
         let upstream = dir.join("upstream.git");
         let seed = dir.join("seed");
@@ -388,15 +389,26 @@ mod tests {
         run_git(&seed, &["commit", "-am", "c2"]);
         run_git(&seed, &["push", "origin", "main"]);
 
-        // Place a git config lock so `remote set-url` fails when a different URL
-        // is requested, while `origin` in `.git/config` still fetches from `upstream`.
+        // A git config lock makes `remote set-url` fail while `origin` in
+        // `.git/config` would still fetch happily from `upstream`.
         std::fs::write(store.join(".git/config.lock"), b"").unwrap();
         let bogus_url = format!("{}/other.git", dir.display());
-        let (head, note) =
-            refresh(&state, &bogus_url).expect("retarget failure must warn and continue fetch");
-        let note = note.expect("retarget warning expected");
-        assert!(note.contains("warning"), "{note}");
-        assert_ne!(head, c1, "fetch still advanced HEAD");
+        let err = refresh(&state, &bogus_url)
+            .expect_err("an un-retargetable origin must refuse, never sync the OLD remote");
+        assert!(
+            err.contains("remote.origin.url") || err.contains("git config"),
+            "the refusal must name the retarget read/write: {err}"
+        );
+        assert_eq!(
+            origin_url(&store).unwrap(),
+            Some(upstream.display().to_string()),
+            "a refused retarget leaves the origin alone"
+        );
+        assert_eq!(
+            git(&store, &["rev-parse", "HEAD"]).unwrap(),
+            c1,
+            "a refused retarget must not fetch: HEAD stays at the clone's commit"
+        );
         let _ = std::fs::remove_file(store.join(".git/config.lock"));
         let _ = std::fs::remove_dir_all(&dir);
     }

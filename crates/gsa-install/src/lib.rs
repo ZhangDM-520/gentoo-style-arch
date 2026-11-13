@@ -276,13 +276,14 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
         scanned = true;
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if !name.ends_with(".pkg.tar.zst") {
+            // Only a DIRECTORY is not an archive. A symlink loop, a dangling
+            // link or an unreadable file answers `is_file()` false, and
+            // skipping those as "absent" stood the damaged-archive report
+            // down (rule 71; round-2 audit, F-R2-B-04).
+            if !name.ends_with(".pkg.tar.zst") || path.is_dir() {
                 continue;
             }
             let pkginfo = match read_pkginfo(&path) {
@@ -696,34 +697,40 @@ fn qa_refusals(
 ) -> Vec<DecisionRow> {
     let mut recipes: Vec<gsa_qa::QaRecipe> = Vec::new();
     let mut recipe_id = String::new();
-    if candidate.recipe_trusted {
-        if let Some(dir) = candidate.recipe_dir.as_deref() {
-            recipe_id = dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let srcinfo = dir.join(".SRCINFO");
-            let content = match gsa_model::read::optional(&srcinfo) {
-                Ok(None) => None,
-                Ok(Some(content)) => Some(content),
-                Err(error) => return vec![qa_unreadable(info, &error)],
-            };
-            if let Some(content) = content {
-                match gsa_recipe::parse_srcinfo_rows(&content, &srcinfo.to_string_lossy()) {
-                    Ok(rows) => recipes.push(gsa_qa::QaRecipe {
-                        id: recipe_id.clone(),
-                        dir: dir.to_path_buf(),
-                        rows,
-                    }),
-                    Err(error) => {
-                        return vec![qa_unreadable(
-                            info,
-                            &format!(
-                                "cannot parse the committed metadata {}: {error}",
-                                srcinfo.display()
-                            ),
-                        )]
-                    }
+    // The committed `.SRCINFO` is the SECOND NAME AUTHORITY (rule 9) for
+    // `stale-ignorepkg` whether or not the recipe was DISCOVERED: an
+    // operator-named archive path's neighbour is still the recipe those
+    // bytes claim to come from, and that is the only thing the check can
+    // compare. `recipe_trusted` gates the PKGBUILD "is instrumented"
+    // SHORTCUT (a scan bypass), never a read that only produces refusal
+    // rows — gating this one let a direct `-U <archive>` slot an
+    // undeclared name into IgnorePkg (round-2 audit, F-R2-B-01).
+    if let Some(dir) = candidate.recipe_dir.as_deref() {
+        recipe_id = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let srcinfo = dir.join(".SRCINFO");
+        let content = match gsa_model::read::optional(&srcinfo) {
+            Ok(None) => None,
+            Ok(Some(content)) => Some(content),
+            Err(error) => return vec![qa_unreadable(info, &error)],
+        };
+        if let Some(content) = content {
+            match gsa_recipe::parse_srcinfo_rows(&content, &srcinfo.to_string_lossy()) {
+                Ok(rows) => recipes.push(gsa_qa::QaRecipe {
+                    id: recipe_id.clone(),
+                    dir: dir.to_path_buf(),
+                    rows,
+                }),
+                Err(error) => {
+                    return vec![qa_unreadable(
+                        info,
+                        &format!(
+                            "cannot parse the committed metadata {}: {error}",
+                            srcinfo.display()
+                        ),
+                    )]
                 }
             }
         }
@@ -820,10 +827,11 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     } else {
         &collapsed
     };
-    // Resolve trusted `.SRCINFO` names and park membership BEFORE computing
-    // `tx_names` / `ShippedBytes` (`F-INS-06`, `F-INS-08`), so neither
-    // untrusted neighbor `.SRCINFO` nor parked candidates pollute `in_tx` or
-    // shipped-byte resolution.
+    // Resolve `.SRCINFO` names and park membership BEFORE computing
+    // `tx_names` / `ShippedBytes` (`F-INS-06`, `F-INS-08`): `tx_names` is
+    // built from `.PKGINFO` alone and parked candidates are excluded, so
+    // neither a neighbour `.SRCINFO` nor a parked candidate can pollute
+    // `in_tx` or shipped-byte resolution.
     struct Meta<'a> {
         src_err: Option<String>,
         name_chain: Vec<String>,
@@ -840,20 +848,22 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             name_chain.push(info.pkgbase.clone());
             name_chain.push(info.pkgname.clone());
         }
-        let src_err = if candidate.recipe_trusted {
-            match recipe_srcinfo_names(candidate.recipe_dir.as_deref()) {
-                Ok(src_names) => {
-                    for name in src_names {
-                        if !name_chain.contains(&name) {
-                            name_chain.push(name);
-                        }
+        // The committed `.SRCINFO` is read as a NAME AUTHORITY for every
+        // candidate that sits beside one (rule 9's second authority), the
+        // direct `-U <archive>` case included: `recipe_trusted` says only
+        // that the neighbour PKGBUILD's "instrumented" declaration may skip
+        // the payload scan, which is a different question from which names
+        // this archive's recipe declares (round-2 audit, F-R2-B-01).
+        let src_err = match recipe_srcinfo_names(candidate.recipe_dir.as_deref()) {
+            Ok(src_names) => {
+                for name in src_names {
+                    if !name_chain.contains(&name) {
+                        name_chain.push(name);
                     }
-                    None
                 }
-                Err(error) => Some(error),
+                None
             }
-        } else {
-            None
+            Err(error) => Some(error),
         };
         let subject = name_chain
             .first()

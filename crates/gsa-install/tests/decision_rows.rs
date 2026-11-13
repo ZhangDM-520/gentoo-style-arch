@@ -1341,6 +1341,34 @@ fn discovery_ranks_by_version_before_mtime() {
 }
 
 #[test]
+fn discovery_reports_a_dangling_archive_symlink_as_unreadable() {
+    // Rule 71 (round-2 audit, F-R2-B-04): `is_file()` answers false for a
+    // dangling symlink, a symlink loop and an unreadable file alike, so
+    // gating on it made a damaged archive look ABSENT — the very archive the
+    // operator pointed at then reported as an empty list.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("dangling-archive");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let dangling = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    std::os::unix::fs::symlink(dir.join("gone"), &dangling).unwrap();
+
+    let found = discover_recipe(&recipe).unwrap();
+    assert!(found.candidates.is_empty(), "nothing readable to install");
+    assert_eq!(
+        found
+            .unreadable
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>(),
+        vec![dangling.clone()],
+        "the dangling archive must be reported, never skipped as absent"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn discovery_ranks_versions_numerically_not_lexically() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch("version-lexical");
@@ -1518,13 +1546,49 @@ fn dropping_all_sonames_still_engages_unreadable_localdb_fence() {
 }
 
 #[test]
-fn untrusted_candidate_does_not_read_neighbor_srcinfo() {
+fn untrusted_candidate_still_reads_neighbor_srcinfo_as_name_authority() {
+    // A direct `-U <archive-path>` is `recipe_trusted: false`, which must
+    // gate ONLY the PKGBUILD "is instrumented" shortcut. The neighbour
+    // `.SRCINFO` stays the second name authority (rule 9), so the
+    // install-refusing `stale-ignorepkg` comparison still runs
+    // (contract §E.4; round-2 audit F-R2-B-01).
     let dir = scratch("untrusted-srcinfo");
-    let recipe = dir.join("untrusted");
+    let recipe = dir.join("direct");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(
+        recipe.join(".SRCINFO"),
+        "pkgbase = direct\n\tpkgver = 1.0\n\tpkgrel = 1\n\tarch = x86_64\npkgname = direct\n",
+    )
+    .unwrap();
+    let arc = recipe.join("direct-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&arc, &[(".PKGINFO", &pkginfo_body("ghost", "1.0-1", &[]))]);
+    let cand = Candidate {
+        archive: arc.clone(),
+        recipe_dir: Some(recipe),
+        recipe_trusted: false,
+    };
+    let rows = decide(&[cand], &checked_ctx(), &LocalDb::default()).unwrap();
+    assert!(
+        rows.iter().any(|r| r.decision == Decision::Refuse
+            && r.reason.starts_with("stale-ignorepkg ")
+            && r.reason.ends_with("ghost not-declared")),
+        "a direct -U archive must still compare against its neighbour .SRCINFO: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn untrusted_candidate_with_corrupt_neighbor_srcinfo_refuses() {
+    // Same read, fail-closed direction (AGENTS.md rule 71): metadata that
+    // exists and cannot be parsed is BROKEN, never absent — the QA gate
+    // cannot verify rule 9 and refuses rather than installing blind.
+    let dir = scratch("untrusted-srcinfo-broken");
+    let recipe = dir.join("direct");
     std::fs::create_dir_all(&recipe).unwrap();
     std::fs::write(recipe.join(".SRCINFO"), "this is invalid srcinfo\n").unwrap();
-    let arc = recipe.join("pkg-1.0-1-x86_64.pkg.tar.zst");
-    write_archive(&arc, &[(".PKGINFO", &pkginfo_body("pkg", "1.0-1", &[]))]);
+    let arc = recipe.join("direct-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(&arc, &[(".PKGINFO", &pkginfo_body("direct", "1.0-1", &[]))]);
     let cand = Candidate {
         archive: arc,
         recipe_dir: Some(recipe),
@@ -1532,8 +1596,47 @@ fn untrusted_candidate_does_not_read_neighbor_srcinfo() {
     };
     let rows = decide(&[cand], &checked_ctx(), &LocalDb::default()).unwrap();
     assert!(
-        rows.iter().all(|r| r.decision == Decision::Install),
-        "untrusted candidate must not read neighbor .SRCINFO: {:?}",
+        rows.iter()
+            .any(|r| r.decision == Decision::Refuse && r.reason.starts_with("discover-failed ")),
+        "a corrupt neighbour .SRCINFO is broken metadata, not absent: {:?}",
+        rendered(&rows)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn untrusted_candidate_never_trusts_a_neighbor_pkgbuild_pgo_claim() {
+    // The other half of `recipe_trusted`: a neighbour PKGBUILD saying "not
+    // instrumented" must not stand the payload scan down for bytes that came
+    // from anywhere (`F-INS-06`).
+    let dir = scratch("untrusted-pgo");
+    let recipe = dir.join("direct");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(
+        recipe.join("PKGBUILD"),
+        "build() {\n  CFLAGS=\"$CFLAGS -fprofile-generate=/build/prof\"\n}\n",
+    )
+    .unwrap();
+    let arc = recipe.join("direct-1.0-1-x86_64.pkg.tar.zst");
+    let mut payload = b"\x7fELF noise ".to_vec();
+    payload.extend_from_slice(b"/x/y.gcda");
+    write_archive(
+        &arc,
+        &[
+            (".PKGINFO", &pkginfo_body("direct", "1.0-1", &[])),
+            ("usr/bin/direct", &payload),
+        ],
+    );
+    let cand = Candidate {
+        archive: arc,
+        recipe_dir: Some(recipe),
+        recipe_trusted: false,
+    };
+    let rows = decide(&[cand], &force_ctx(), &LocalDb::default()).unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r.decision == Decision::Refuse && r.reason.starts_with("pgo-hit ")),
+        "an untrusted neighbour PKGBUILD must not skip the payload scan: {:?}",
         rendered(&rows)
     );
     let _ = std::fs::remove_dir_all(&dir);

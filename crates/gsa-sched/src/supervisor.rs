@@ -581,10 +581,14 @@ fn park_marker_path(setup: &RunSetup, index: usize) -> PathBuf {
 /// ownership gate (rule 19, §J.5).
 fn write_state_file_gated(path: &Path, contents: &str, err: &mut dyn Write) -> Result<(), String> {
     let mut opts = std::fs::OpenOptions::new();
-    opts.create(true).write(true).truncate(true);
+    // Never `O_TRUNC` at open: the gate quarantines a foreign-owned file by
+    // RENAMING it, and an open-time truncate would zero the bytes first.
+    opts.create(true).write(true);
     let mut file =
         crate::lock::open_state_file_with_uid(path, &mut opts, crate::signals::current_uid(), err)
             .map_err(|e| e.to_string())?;
+    file.set_len(0)
+        .map_err(|e| format!("cannot truncate {}: {e}", path.display()))?;
     file.write_all(contents.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
@@ -819,12 +823,15 @@ impl<'a> SupCtx<'a> {
     }
 
     fn on_signal(&mut self, sig: i32, tx: &Sender<Event>) {
+        // §L.9: the receipt is announced even when a teardown is already in
+        // flight, so the machine stream always carries the signal.
+        self.emit(&SupEvent::Signal(sig));
         if self.interrupted.is_none() {
             self.interrupted = Some(sig);
             self.machine.stop_dispatch();
             self.dispatch_halted = true;
             self.emit(&SupEvent::Teardown(
-                "signal received — stopping active lanes",
+                "one SIGTERM per lane, shared grace window",
             ));
             for lane in self.active.values_mut() {
                 if !lane.term_sent {
@@ -838,8 +845,9 @@ impl<'a> SupCtx<'a> {
             if !self.grace_started {
                 self.grace_started = true;
                 let timer_tx = tx.clone();
+                let grace = signals::stop_grace_seconds();
                 std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_secs(5));
+                    std::thread::sleep(Duration::from_secs(grace));
                     let _ = timer_tx.send(Event::GraceExpired);
                 });
             }

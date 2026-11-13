@@ -199,8 +199,20 @@ pub(crate) fn read_json<T: DeserializeOwned>(
         corrupt: Vec::new(),
     };
     let bytes = match std::fs::read(path) {
+        // Absent store: the file does not exist. `NotADirectory` is the same
+        // fact when a path COMPONENT is a regular file (a `--state-dir`
+        // naming a file): such a file cannot exist either, so there is
+        // nothing to read and nothing to lose — the state-ROOT gate is what
+        // refuses that invocation (run-record §3's startup refusal).
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(out)
+        }
         Err(e) => {
             return Err(StateError::Io(format!(
                 "cannot read state file {} ({e})",

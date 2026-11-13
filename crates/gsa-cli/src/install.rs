@@ -463,10 +463,9 @@ fn stage_groups(
         if groups.iter().any(|g| g.iter().any(|(_, a)| a == archive)) {
             continue;
         }
-        let wave = plan
-            .waves
-            .iter()
-            .position(|w| w.provider == *id || w.members.iter().any(|m| &m.id == id));
+        let wave = plan.waves.iter().position(|w| {
+            w.providers.iter().any(|p| p == id) || w.members.iter().any(|m| &m.id == id)
+        });
         match wave {
             Some(wi) if wi < groups.len() => groups[wi].push((id.clone(), archive.clone())),
             _ => leftover.push((id.clone(), archive.clone())),
@@ -530,7 +529,7 @@ fn grouped_txn_outcome_rows(
 fn wave_heal_names(graph: &Graph<'_>, plan: &WavePlan, candidates: &[Candidate]) -> Vec<String> {
     let mut ids: BTreeSet<String> = BTreeSet::new();
     for wave in &plan.waves {
-        ids.insert(wave.provider.clone());
+        ids.extend(wave.providers.iter().cloned());
         ids.extend(wave.members.iter().map(|m| m.id.clone()));
     }
     let mut names = ids.clone();
@@ -611,8 +610,22 @@ fn run_upgrade_inner(
         return Err(Exit::Usage("selection resolved to no packages".to_string()));
     }
 
+    // ── privilege gate (contract §B.10): every usage preflight this family
+    //    has is the argv check above, so the gate answers BEFORE the
+    //    workspace is resolved — an unprivileged `-U` refuses rc 3 without
+    //    reaching for the store, and `-U --dry-run` never fetches it
+    //    (round-2 audit, F-R2-C-01).
+    if let Some(exit) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Upgrade),
+        true,
+        err,
+    ) {
+        return Err(exit);
+    }
+
     // ── workspace, topology (usage class: rc 2) ─────────────────────────
-    let root = crate::resolve_workspace(inv, err)?;
+    let root = crate::resolve_workspace_for_run(inv, err)?;
     let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
@@ -622,18 +635,8 @@ fn run_upgrade_inner(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
-
-    // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(exit) = crate::privilege_gate(
-        &inv.spelling(),
-        crate::invocation_privilege(inv, &crate::Command::Upgrade),
-        true,
-        err,
-    ) {
-        return Err(exit);
-    }
 
     // §E.5: the build-side park state of this run's state root. A subject
     // the build path parked (`waits-on-failed`/`waits-on-deferred` or a
@@ -885,20 +888,29 @@ fn run_upgrade_inner(
     }
     // Wave members the user did not name join the plan as candidates —
     // their archive sets must resolve, or the wave cannot land wholly and
-    // the member is named `refuse abi-consumer-uncovered` (§E.3).
+    // the member is named `refuse abi-consumer-uncovered` (§E.3). Every
+    // provider of a merged wave is named: dropping the secondary ones hid
+    // which moves the member was riding (round-2 audit, F-R2-B-02).
     for id in &swap_plan.additions {
-        let provider = swap_plan
+        let providers: Vec<String> = swap_plan
             .waves
             .iter()
             .find(|w| w.members.iter().any(|m| &m.id == id))
-            .map(|w| w.provider.clone())
-            .unwrap_or_else(|| "-".to_string());
+            .map(|w| w.providers.clone())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| vec!["-".to_string()]);
+        let uncovered = || {
+            Item::Rejected(
+                providers
+                    .iter()
+                    .map(|provider| gsa_abi::abi_uncovered_row(provider, id))
+                    .collect(),
+            )
+        };
         let recipe_dir = match graph.index_of(id) {
             Some(idx) => root.join(&graph.record(idx).path),
             None => {
-                items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
-                    &provider, id,
-                )]));
+                items.push(uncovered());
                 continue;
             }
         };
@@ -910,9 +922,7 @@ fn run_upgrade_inner(
             {
                 items.push(Item::Recipe(found.candidates));
             }
-            _ => items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
-                &provider, id,
-            )])),
+            _ => items.push(uncovered()),
         }
     }
     candidates = items
@@ -1338,7 +1348,14 @@ fn run_upgrade_inner(
 }
 
 fn dry_run_outcome(rows: &[DecisionRow]) -> (RunOutcome, i32) {
-    let rc = rows_rc(rows);
+    // §G.1: a refused install is the refusal class (rc 3), the same code the
+    // real `-U` exits — `rows_rc` answers §E.5's `--install-decide` code
+    // (rc 1) and is NOT this decision's rc (round-2 audit, F-R2-C-05).
+    let rc = if rows.iter().any(|r| r.decision == Decision::Refuse) {
+        crate::RC_REFUSED
+    } else {
+        0
+    };
     let outcome = if rc == 0 { "planned" } else { "refused" };
     (RunOutcome { outcome, rc }, rc)
 }
@@ -1940,6 +1957,9 @@ fn run_install_decide_inner(
             archive: path,
         });
     }
+    // ONE read-only workspace resolution for both fields below (round-2
+    // audit, F-R2-C-09: it ran twice, so the two consumers could disagree).
+    let workspace_root = crate::resolve_root(false, None);
     let ctx = DecisionContext {
         mode,
         empty_list: match mode {
@@ -1981,8 +2001,8 @@ fn run_install_decide_inner(
                 return Ok(1);
             }
         },
-        workspace_names: match crate::resolve_root(false, None) {
-            Ok(root) => match workspace_output_names_of_root(&root) {
+        workspace_names: match &workspace_root {
+            Ok(root) => match workspace_output_names_of_root(root) {
                 Ok(names) => names,
                 Err(message) => {
                     let _ = write!(
@@ -1996,7 +2016,7 @@ fn run_install_decide_inner(
             Err(crate::RootFailure::NotFound(_)) => Default::default(),
             Err(err) => {
                 let msg = match err {
-                    crate::RootFailure::Usage(m) | crate::RootFailure::NotFound(m) => m,
+                    crate::RootFailure::Usage(m) | crate::RootFailure::NotFound(m) => m.clone(),
                     crate::RootFailure::NeedsRoot => {
                         "workspace resolution requires root".to_string()
                     }
@@ -2009,8 +2029,8 @@ fn run_install_decide_inner(
                 return Ok(1);
             }
         },
-        abi_exclusions: match crate::resolve_root(false, None) {
-            Ok(root) => workspace_exclusions(&root),
+        abi_exclusions: match &workspace_root {
+            Ok(root) => workspace_exclusions(root),
             Err(_) => None,
         },
         wave_heal: Vec::new(),
@@ -2474,7 +2494,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_outcome_returns_rc_one_when_any_row_refuses() {
+    fn dry_run_outcome_returns_the_refusal_rc_when_any_row_refuses() {
         let refused = vec![
             DecisionRow {
                 subject: "okpkg".to_string(),
@@ -2488,9 +2508,9 @@ mod tests {
             },
         ];
         let (outcome, rc) = dry_run_outcome(&refused);
-        assert_eq!(rc, 1);
+        assert_eq!(rc, crate::RC_REFUSED, "§G.1: a refusal is rc 3, not rc 1");
         assert_eq!(outcome.outcome, "refused");
-        assert_eq!(outcome.rc, 1);
+        assert_eq!(outcome.rc, crate::RC_REFUSED);
 
         let clean = vec![DecisionRow {
             subject: "okpkg".to_string(),

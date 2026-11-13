@@ -1176,7 +1176,7 @@ fn sync_pass_selection(root: &Path, inv: &Invocation) -> Result<Selection, Exit>
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
     pass_selection(&ctx, inv).map_err(Exit::Usage)
 }

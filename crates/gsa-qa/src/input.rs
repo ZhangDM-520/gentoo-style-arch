@@ -169,13 +169,15 @@ pub fn collect_archives_checked(
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
+                // Order matters (rule 71): a DIRECTORY is not an archive, but
+                // a symlink loop, a dangling link or an unreadable file is not
+                // ABSENT either — `is_file()` answers false for all of them,
+                // so only `is_dir()` may skip, and `read_pkginfo` below gets
+                // the last word on the rest (round-2 audit, F-R2-B-04).
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if !name.ends_with(".pkg.tar.zst") {
+                if !name.ends_with(".pkg.tar.zst") || path.is_dir() {
                     continue;
                 }
                 let pkginfo = match read_pkginfo(&path) {

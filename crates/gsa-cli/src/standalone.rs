@@ -135,7 +135,9 @@ pub(crate) fn apply(
     let ws_root = crate::resolve_root(false, inv.state_dir.as_deref()).ok();
     // I5: a kv user set is a workspace answer too (@name resolves over
     // kv user-sets ∪ config/sets/).
-    let user_sets = crate::select::load_user_sets(inv)?;
+    // A workspace answer, so a read failure here is the usage class the
+    // staging decision reports (it names the `-B <path>` it could not answer).
+    let user_sets = crate::select::load_user_sets(inv).map_err(|e| e.to_string())?;
     let answered = workspace_answers(&candidates, ws_root.as_deref(), &user_sets);
     for (token, kind) in inv.targets.iter().zip(&kinds) {
         match kind {

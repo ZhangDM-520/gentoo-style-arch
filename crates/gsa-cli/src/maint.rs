@@ -211,20 +211,20 @@ fn preflight_selection(
     match verb {
         MaintVerb::Prune(1) => {
             select::build_selection(sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
-                .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+                .map_err(|error| cmd_error(error.to_string()))?;
         }
         MaintVerb::Sets if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
             if let Some((_, refs)) = inv.targets.split_first() {
                 for spec in refs {
                     let _ = select::resolve_ref(sel_ctx, spec, 0)
-                        .map_err(|e| Exit::Usage(cmd_error(e.to_string())))?;
+                        .map_err(|e| cmd_error(e.to_string()))?;
                 }
             }
         }
         MaintVerb::World if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
             for spec in &inv.targets {
-                let _ = select::resolve_ref(sel_ctx, spec, 0)
-                    .map_err(|e| Exit::Usage(cmd_error(e.to_string())))?;
+                let _ =
+                    select::resolve_ref(sel_ctx, spec, 0).map_err(|e| cmd_error(e.to_string()))?;
             }
         }
         _ => {
@@ -293,22 +293,28 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // same guidance `-Sl` does when no workspace exists.
     let read_only = matches!(privilege(inv), super::Privilege::ReadOnly);
     let mut preloaded = None;
-    let ro_probe = crate::resolve_root(false, inv.state_dir.as_deref());
+    // A standalone-target run staged its own workspace (plan W4): the probe
+    // must answer with THAT root, or `gsa -Mc --dry-run /tmp/foo/PKGBUILD`
+    // validated against the host workspace and refused `unknown reference`
+    // (round-2 audit, F-R2-C-02).
+    let ro_probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
+    };
     if read_only {
         let root = ro_probe.map_err(|e| Exit::Usage(e.message()))?;
         preloaded = Some(root);
     } else if let Ok(root) = ro_probe {
-        let project =
-            load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+        let project = load_project(&root).map_err(|error| cmd_error(error.to_string()))?;
         let graph = gsa_graph::Graph::build(&project.topology.records)
             .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-        let db = RecipeDb::load(&root, graph.records())
-            .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+        let db =
+            RecipeDb::load(&root, graph.records()).map_err(|error| cmd_error(error.to_string()))?;
         let sel_ctx = Ctx {
             project: &project,
             graph: &graph,
             db: &db,
-            user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+            user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
         };
         preflight_selection(verb, inv, &sel_ctx, err)?;
         preloaded = Some(root);
@@ -326,11 +332,11 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         Some(root) => root,
         None => crate::resolve_workspace(inv, err)?,
     };
-    let project = load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+    let project = load_project(&root).map_err(|error| cmd_error(error.to_string()))?;
     let graph = gsa_graph::Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db = RecipeDb::load(&root, graph.records())
-        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| cmd_error(error.to_string()))?;
 
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
     let state =
@@ -346,7 +352,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
 
     let mut rows: Vec<Row> = Vec::new();
@@ -534,7 +540,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                 }
                 let selection =
                     select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
-                        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+                        .map_err(|error| cmd_error(error.to_string()))?;
                 write_notes(err, &selection.notes);
                 selection
                     .listed
@@ -705,8 +711,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
 /// Resolve one §C.1 reference to its recipe id (typo = usage error with
 /// nearest candidates, from the ordinary selection layer).
 fn resolve_one(ctx: &Ctx<'_>, spec: &str, err: &mut dyn Write) -> Result<String, Exit> {
-    let (found, notes) =
-        select::resolve_ref(ctx, spec, 0).map_err(|e| Exit::Usage(cmd_error(e.to_string())))?;
+    let (found, notes) = select::resolve_ref(ctx, spec, 0).map_err(|e| cmd_error(e.to_string()))?;
     write_notes(err, &notes);
     match found.first() {
         Some(&idx) => Ok(ctx.graph.record(idx).id.as_str().to_string()),
@@ -719,10 +724,7 @@ fn file_size(path: &std::path::Path) -> u64 {
 }
 
 fn refuse_note(line: impl Into<String>) -> Exit {
-    Exit::Refuse(Refusal::noted(
-        RefusalClass::StartupRefused,
-        vec![line.into()],
-    ))
+    Exit::refuse_note(line)
 }
 
 fn hold_lock(state_dir: &std::path::Path, what: &str) -> Result<gsa_sched::lock::RunLock, Exit> {

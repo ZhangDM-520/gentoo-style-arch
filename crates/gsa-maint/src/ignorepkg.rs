@@ -100,18 +100,17 @@ fn declared_by<'a>(declared: &'a BTreeMap<String, Vec<String>>, name: &str) -> O
 fn classify(
     declared: &BTreeMap<String, Vec<String>>,
     name: &str,
-    installed: Option<&BTreeSet<String>>,
+    installed: &BTreeSet<String>,
     shipped: &BTreeSet<String>,
 ) -> (&'static str, String) {
     if let Some(id) = declared_by(declared, name) {
         return ("in-use", format!("in-use declared-by {id}"));
     }
-    if let Some(installed) = installed {
-        if installed.contains(name) {
-            return ("in-use", "in-use installed".to_string());
-        }
-    } else {
-        return ("in-use", "in-use installed-db-unavailable".to_string());
+    // `report`/`prune` both refuse before this seam when the installed DB is
+    // unreadable, so "installed-db unavailable" never reaches it (round-2
+    // audit, F-R2-B-06).
+    if installed.contains(name) {
+        return ("in-use", "in-use installed".to_string());
     }
     if shipped.contains(name) {
         (
@@ -138,7 +137,7 @@ pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     };
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     for name in &closure.names {
-        let (class, reason) = classify(&declared, name, Some(&installed_set), &shipped);
+        let (class, reason) = classify(&declared, name, &installed_set, &shipped);
         rows.push(Row::new(name, class, reason));
     }
     for name in &wanted {
@@ -226,7 +225,7 @@ pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, S
     let mut rows = vec![Row::new("ignorepkg", "closure", note)];
     let mut remove: Vec<String> = Vec::new();
     for name in &closure.names {
-        let (class, reason) = classify(&declared, name, Some(&installed_set), &shipped);
+        let (class, reason) = classify(&declared, name, &installed_set, &shipped);
         if class == "in-use" {
             rows.push(crate::protect::keep_row(name, &reason));
         } else {

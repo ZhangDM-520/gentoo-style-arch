@@ -31,21 +31,56 @@ pub struct Ctx<'a> {
 /// `(name, members)` per `set:<name>` key. I5's second half of `@name`
 /// resolution — a set named only in kv was invisible to selections before.
 /// Missing state returns empty; unreadable or corrupt kv refuses cleanly.
-pub fn load_user_sets(inv: &crate::args::Invocation) -> Result<Vec<(String, Vec<String>)>, String> {
+pub fn load_user_sets(
+    inv: &crate::args::Invocation,
+) -> Result<Vec<(String, Vec<String>)>, UserSetsError> {
     load_user_sets_at(inv.state_dir.as_deref())
+}
+
+/// Why a user-sets read failed. The two classes exit differently: an unusable
+/// state-root SETTING is the argv's problem (§G.1 rc 2), while a kv store that
+/// exists and cannot be read is a startup refusal (rc 3).
+#[derive(Debug)]
+pub enum UserSetsError {
+    /// The state-root setting itself is unusable (`--state-dir`/`GSA_STATE_DIR`
+    /// with whitespace, an unabsolutizable path, …).
+    Usage(String),
+    /// The kv store is BROKEN, not absent (contract §C.2, AGENTS.md rule 71):
+    /// degrading to the committed half would silently shrink `@set` and skip
+    /// members, so the run refuses instead.
+    Broken(String),
+}
+
+impl std::fmt::Display for UserSetsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserSetsError::Usage(message) | UserSetsError::Broken(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The `Exit` a user-sets read failure owes (contract §C.2).
+pub fn user_sets_exit(error: UserSetsError) -> crate::exit::Exit {
+    match error {
+        UserSetsError::Usage(message) => crate::exit::Exit::usage(message),
+        UserSetsError::Broken(message) => crate::exit::Exit::refuse_note(format!("gsa: {message}")),
+    }
 }
 
 /// `load_user_sets` for a caller with no parsed invocation (completion):
 /// `state_dir` is the `--state-dir` value, `None` for the resolution ladder.
-pub fn load_user_sets_at(state_dir: Option<&str>) -> Result<Vec<(String, Vec<String>)>, String> {
-    let state = gsa_model::config::resolve_state_dir(state_dir)?;
+pub fn load_user_sets_at(
+    state_dir: Option<&str>,
+) -> Result<Vec<(String, Vec<String>)>, UserSetsError> {
+    let state = gsa_model::config::resolve_state_dir(state_dir).map_err(UserSetsError::Usage)?;
     // Read-only handle: loading user sets is a pure read (§D.1 "touches
     // nothing else") — a dry or refused run must never create `index/`,
     // `runs/`, `kv/` just to learn a set is empty.
     let root = gsa_state::StateRoot::open_readonly(&state);
-    let (pairs, corrupt) = gsa_state::Kv::list(&root).map_err(|e| e.to_string())?;
+    let (pairs, corrupt) =
+        gsa_state::Kv::list(&root).map_err(|e| UserSetsError::Broken(e.to_string()))?;
     if let Some(refusal) = gsa_state::CorruptLine::refusal(&corrupt, "the key-value store") {
-        return Err(refusal);
+        return Err(UserSetsError::Broken(refusal));
     }
     Ok(pairs
         .into_iter()
@@ -831,7 +866,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("kv")).unwrap();
         std::fs::write(dir.join("kv/kv.jsonl"), "{corrupt\n").unwrap();
         let err = load_user_sets_at(Some(dir.to_str().unwrap())).unwrap_err();
-        assert!(err.contains("key-value store"), "{err}");
+        assert!(
+            matches!(&err, UserSetsError::Broken(message) if message.contains("key-value store")),
+            "a corrupt kv store is BROKEN (rc 3), not a usage error: {err}",
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

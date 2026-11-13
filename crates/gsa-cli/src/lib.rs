@@ -275,6 +275,24 @@ pub(crate) fn resolve_workspace(inv: &Invocation, err: &mut dyn Write) -> Result
     }
 }
 
+/// The workspace of a run that may MUTATE: a mutating run reaches the
+/// recipe store on demand (fetch: true), a `--dry-run` never does — a dry run
+/// that cloned the store or created the state root was the surprise
+/// (round-2 audit, F-R2-C-01). A missing workspace on the dry path is the
+/// usage-class hint, not an EACCES.
+pub(crate) fn resolve_workspace_for_run(
+    inv: &Invocation,
+    err: &mut dyn Write,
+) -> Result<PathBuf, Exit> {
+    if !inv.dry_run {
+        return resolve_workspace(inv, err);
+    }
+    if let Some(root) = &inv.standalone_root {
+        return Ok(root.clone());
+    }
+    resolve_root(false, inv.state_dir.as_deref()).map_err(|failure| Exit::Usage(failure.message()))
+}
+
 fn classify(inv: &Invocation) -> Disposition {
     // The build-run modifiers (§B.8) are real on the runs that build or
     // install and still deferred on every other spelling; everything else
@@ -603,8 +621,8 @@ pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<Str
     }
 }
 
-fn cmd_error(message: impl Into<String>) -> String {
-    message.into()
+fn cmd_error(message: impl Into<String>) -> Exit {
+    Exit::usage(message)
 }
 
 /// One selection note, in the active vocabulary: the human default keeps the
@@ -637,8 +655,7 @@ fn resolve_records(
 ) -> Result<Vec<usize>, String> {
     let mut indices = std::collections::BTreeSet::new();
     for token in targets {
-        let (found, notes) =
-            select::resolve_ref(ctx, token, 0).map_err(|e| cmd_error(e.to_string()))?;
+        let (found, notes) = select::resolve_ref(ctx, token, 0).map_err(|e| e.to_string())?;
         write_notes(err, &notes);
         indices.extend(found);
     }
@@ -647,7 +664,7 @@ fn resolve_records(
     Ok(indices)
 }
 
-fn no_ranges(inv: &Invocation) -> Result<(), String> {
+fn no_ranges(inv: &Invocation) -> Result<(), Exit> {
     if inv.ranges.is_empty() {
         Ok(())
     } else {
@@ -662,7 +679,7 @@ fn execute(
     command: Command,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<i32, String> {
+) -> Result<i32, Exit> {
     // `-Ql`/`-Qo` are pacman delegates (H8: "pacman queries stay pacman"):
     // they need no workspace — the argv goes straight to pacman.
     if matches!(command, Command::QueryFiles | Command::QueryOwner) {
@@ -671,7 +688,7 @@ fn execute(
         } else {
             "-Qo"
         };
-        return query::pacman_delegate(action, inv, out, err);
+        return query::pacman_delegate(action, inv, out, err).map_err(Exit::Usage);
     }
     let root = match &inv.standalone_root {
         // A standalone-target run staged its own workspace (plan W4); the
@@ -688,7 +705,7 @@ fn execute(
             project: &project,
             graph: &graph,
             db: &RecipeDb::load(&root, &[]).map_err(|e| cmd_error(e.to_string()))?,
-            user_sets: select::load_user_sets(inv).map_err(cmd_error)?,
+            user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
         };
         let _ = write!(out, "{}", render::render_topology_channel(&ctx));
         return Ok(RC_OK);
@@ -699,7 +716,7 @@ fn execute(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv).map_err(cmd_error)?,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
 
     match command {
@@ -1041,10 +1058,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                             Command::Maint => maint::run(&inv, out, err),
                             command => match execute(&inv, command, out, err) {
                                 Ok(code) => code,
-                                Err(message) => {
-                                    let _ = writeln!(err, "gsa: {message}");
-                                    RC_USAGE
-                                }
+                                Err(exit) => exit.render(err),
                             },
                         };
                         if let Some(staged) = staged {

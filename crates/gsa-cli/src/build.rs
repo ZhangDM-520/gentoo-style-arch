@@ -114,26 +114,45 @@ fn run_build_with(
             "selection is mandatory: a build never starts without a selection".to_string(),
         ));
     }
-    // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    // A standalone-target run staged its own workspace (plan W4); the rest
-    // discover the recipe workspace as before.
-    let root = crate::resolve_workspace(inv, err)?;
-    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db =
-        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+    // ── syntactic budget checks (§G.1): argv/env only, no workspace ──────
+    preflight_budget_syntax(inv)?;
+
+    // ── read-only workspace probe, then the usage preflight (§B.10, §G.1) ─
+    // Everything the argv can be wrong about answers rc 2 BEFORE the
+    // privilege gate and BEFORE any store fetch or state write. A standalone
+    // target staged its own workspace (plan W4); otherwise the probe is
+    // read-only (`fetch: false`) and a host with no workspace yet preflights
+    // nothing, so the gate answers rc 3 instead of dying in an unprivileged
+    // state write (round-2 audit, F-R2-C-01).
+    let mut draft: Option<select::SelectionDraft> = None;
+    let probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
-    let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-        .map_err(|error| error.into_exit())?;
-    crate::write_notes(err, draft.notes());
-    let _ = resolve_budget(inv, &project, 0).map_err(Exit::Usage)?;
+    match probe {
+        Ok(root) => {
+            let project =
+                gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+            let graph = Graph::build(&project.topology.records)
+                .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+            let db = RecipeDb::load(&root, graph.records())
+                .map_err(|error| Exit::Usage(error.to_string()))?;
+            let ctx = Ctx {
+                project: &project,
+                graph: &graph,
+                db: &db,
+                user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+            };
+            // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─
+            let resolved = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, resolved.notes());
+            draft = Some(resolved);
+            let _ = resolve_budget(inv, &project, 0).map_err(Exit::Usage)?;
+        }
+        Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
+    }
     let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
     let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
@@ -146,6 +165,32 @@ fn run_build_with(
     ) {
         return Err(exit);
     }
+
+    // ── the run's workspace (§B.10): a mutating run may fetch the store ───
+    let root = crate::resolve_workspace(inv, err)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+    };
+    // The draft resolved against the probe stands: the probe already reached
+    // this root (a fetch only happens when the probe found none), so the
+    // notes are printed exactly once.
+    let draft = match draft {
+        Some(draft) => draft,
+        None => {
+            let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, draft.notes());
+            draft
+        }
+    };
 
     // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
     //    (rc 3) before any interactive input is rendered or consumed ──────
@@ -1158,21 +1203,39 @@ fn run_update_inner(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
-    let root = crate::resolve_workspace(inv, err)?;
-    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db =
-        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv).map_err(Exit::Usage)?,
+    preflight_budget_syntax(inv)?;
+
+    // ── read-only probe + usage preflight, then the gate (§B.10, §G.1) ───
+    // `-Su --dry-run` must not clone the store or create the state root, and
+    // a host with no workspace preflights nothing — the gate answers rc 3
+    // (round-2 audit, F-R2-C-01).
+    let mut preflight: Option<select::Selection> = None;
+    let probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
-    crate::write_notes(err, &selection.notes);
-    let _ = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+    match probe {
+        Ok(root) => {
+            let project =
+                gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+            let graph = Graph::build(&project.topology.records)
+                .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+            let db = RecipeDb::load(&root, graph.records())
+                .map_err(|error| Exit::Usage(error.to_string()))?;
+            let ctx = Ctx {
+                project: &project,
+                graph: &graph,
+                db: &db,
+                user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+            };
+            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
+            crate::write_notes(err, &selection.notes);
+            let _ = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+            preflight = Some(selection);
+        }
+        Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
+    }
     let _ = resolve_prefetch(inv).map_err(Exit::Usage)?;
     let _ = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
@@ -1185,6 +1248,28 @@ fn run_update_inner(
     ) {
         return Err(exit);
     }
+
+    // ── the run's workspace: a mutating run may fetch the store ──────────
+    let root = crate::resolve_workspace_for_run(inv, err)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+    };
+    let selection = match preflight {
+        Some(selection) => selection,
+        None => {
+            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
+            crate::write_notes(err, &selection.notes);
+            selection
+        }
+    };
 
     let mut resolved_inv = inv.clone();
     if !resolved_inv.dry_run {
@@ -1239,9 +1324,13 @@ fn run_update_inner(
         }];
         let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, false);
         let mut record = record::build_run_record(
-            inv,
-            &inv.targets,
-            &inv.ranges,
+            // §H.2's `command:` scalar must name the roots the run actually
+            // resolved — `builddir::resolve` may have replaced `--build-dir`
+            // with the interactively chosen one above (round-2 audit,
+            // F-R2-C-04).
+            &resolved_inv,
+            &resolved_inv.targets,
+            &resolved_inv.ranges,
             None,
             plan,
             vec![subject],
@@ -1396,6 +1485,28 @@ fn resolve_budget(
 /// comes back WITH the value — a clamp warning must name the spelling that
 /// answered, and re-deriving it from the environment would be a second ladder
 /// for one setting (rule 73).
+/// The argv/env half of the budget ladder, checkable with NO workspace:
+/// `--lanes 0` is a usage error on every host, and answering it after the
+/// workspace probe made a workspace-less host report the privilege refusal
+/// (rc 3) instead (round-2 audit, F-R2-C-01). The project-default rung needs
+/// the project and stays in [`resolve_budget`].
+fn preflight_budget_syntax(inv: &Invocation) -> Result<(), Exit> {
+    let pairs = [
+        ("--lanes", inv.lanes.as_deref(), "GSA_LANES"),
+        ("--jobs", inv.jobs.as_deref(), "GSA_JOBS"),
+    ];
+    for (flag, raw, env_name) in pairs {
+        if let Some(raw) = raw {
+            Override::parse(raw).map_err(|e| Exit::Usage(format!("{flag}: {e}")))?;
+        } else if let Ok(raw) = std::env::var(env_name) {
+            if !raw.is_empty() {
+                Override::parse(&raw).map_err(|e| Exit::Usage(format!("{env_name}: {e}")))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn override_value(
     flag: Option<&str>,
     env_name: &str,
@@ -1765,13 +1876,15 @@ pub(crate) fn wave_check(
     });
     for wave in &plan.waves {
         for member in &wave.members {
-            let _ = writeln!(
-                out,
-                "abi-wave {} {} {}",
-                wave.provider,
-                member.id,
-                member.basis.wire()
-            );
+            for provider in &wave.providers {
+                let _ = writeln!(
+                    out,
+                    "abi-wave {} {} {}",
+                    provider,
+                    member.id,
+                    member.basis.wire()
+                );
+            }
         }
     }
     for row in plan.refusal_rows() {
