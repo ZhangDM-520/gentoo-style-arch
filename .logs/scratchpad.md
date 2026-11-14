@@ -1,7 +1,8 @@
 # scratchpad (reset)
 
-No active task. Last: docs consolidated — `docs/journals/` and the CLOSED runbook
-removed (content preserved and proven first), `gsa-fixture-migration.md` cut 68%
-with all anchors intact, the four design plans kept on measurement, and 14
-dangling recipe-doc citations fixed — see `docs/JOURNAL.md` tail and
-`.logs/action-2026-11-14-consolidate-docs.md`.
+No active task. Last: `.github/copilot-instructions.md` improved in place
+(single-test spellings, toolchain, §B.10 privilege classes, no `--version`, the
+fixture scale-pin rule, a question→file navigation table, the docs-layering
+rule, and a stale warning on `crates/README.md`). Every claim verified by an
+executed command or a read first. See `docs/JOURNAL.md` tail and
+`.logs/action-2026-11-14-copilot-instructions.md`.

@@ -27,14 +27,27 @@ cargo build --release                    # ./target/release/gsa
 cargo test --workspace                   # all 13 crates
 cargo test -p gsa-sched                  # one crate
 cargo test -p gsa-sched budget::tests::budget_formulas_follow_portability_doc
+cargo test -p gsa-cli --test preflight_contract   # one integration test file
 cargo test --workspace -- --test-threads=1   # deterministic; see flake note
 cargo clippy --workspace --all-targets       # must be clean
 tools/fmt.sh                                 # rustfmt check; --write to apply
 ```
 
+Ten crates carry a `crates/<crate>/tests/` integration directory in addition to
+in-crate `#[cfg(test)]` modules, so `--test <file>` selects one integration
+file and a bare `budget::tests::…`-style path selects one unit test. The crate
+name is `gsa-sched`, the binary name is `gsa`, and they differ: `-p gsa-cli`
+builds the binary package.
+
 `cargo test --workspace` runs two supervisor timing tests that are load-flaky
 under full parallelism. That flake is pre-existing and measured at HEAD — never
 a regression to chase, and `--test-threads=1` is the deterministic run.
+
+There is **no `rust-toolchain` file**: the toolchain is the distro `rust-git`
+nightly (`rustc 1.101.0-nightly` at the time of writing), and that is why
+`cargo fmt` aborts and `tools/fmt.sh` exists. Never add a toolchain file to work
+around it, and never rely on a specific nightly feature without checking the
+installed one.
 
 **There is no CI: the validation block in `CONTRIBUTING.md` is the gate.** A
 change is validated only when those commands have been run locally and their
@@ -46,9 +59,19 @@ as `/usr/bin/gsa` through the `gsa-pm` recipe in the recipe repository.
 
 ```sh
 ./target/release/gsa --help            # the authoritative command/env roster
+./target/release/gsa -Qt | wc -l       # roster size; the fastest read-only smoke
 ./target/release/gsa -Sl @git          # the set, in build order — read-only
 ./target/release/gsa -S --dry-run @git # plan and decision rows, no mutation
 ```
+
+`gsa` has **no `--version` spelling** (contract §B): identity is the resolved
+path, the digest of its bytes and the owning package, which is what
+`tools/perf/lib.sh` records. `--version` is rc 2 like any unknown flag, as is a
+bare `gsa`. Read-only (any user, never writes state): every `-Q*`, `-Sl`,
+`-Bl`, `--dry-run`, `-Ma`, and the *report* forms of the `-M` verbs. Mutating
+(root required, early refusal rc 3 otherwise): `-S`, `-B`, `-U`, `-Sw`, `-Sy`,
+`-Su`, every `-Mc*`, and the write flags on `-M` verbs (`-Ml --keep`,
+`-Mh --prune`, `-Mi --backfill`, …). The class table is contract §B.10.
 
 The engine needs a recipe workspace: a checkout selected by `gsa.conf`'s
 `project` key, or hermetically by `GSA_CONF`/`GSA_CONF_DIR` and
@@ -69,6 +92,7 @@ bash tests/run-all.sh                    # everything, in parallel
 bash tests/run-all.sh abi                # substring filter (a no-match exits 2)
 bash tests/run-all.sh --serial           # one at a time, for a flaky fixture
 bash tests/run-all.sh -j 4               # cap concurrency
+RUN_ALL_JOBS=2 bash tests/run-all.sh     # same cap, via the env twin
 bash tests/<name>.sh                     # a single fixture, standalone
 GSA_TEST_GSA_BIN=$PWD/target/release/gsa bash tests/run-all.sh   # pre-install
 GSA_RECIPE_CHECKOUT=~/Projects/gsa-recipe bash tests/run-all.sh # real-tree sections
@@ -127,6 +151,31 @@ Three owners of runtime state, never mixed: the root-owned state root
 (`build/`, `pkg/`, `pkgs/`), and the build-user-owned recipe store. `SRCDEST`
 is the engine's too (a `srcdest` gsa.conf key, built-in `~/.gsa-src`) — there
 is no environment rung, so never export it.
+
+### Navigating the code
+
+Start at the composition root and follow the one-way edges down; no crate
+depends on `gsa-cli`. Entry is `crates/gsa-cli/src/main.rs` → `lib.rs::run`
+(dispatch) → `args.rs::parse` (the §B grammar). From there every decision
+surface is a named module, not a search:
+
+| Question | File |
+| --- | --- |
+| How is this argv parsed? | `gsa-cli/src/args.rs`, grammar in `docs/gsa-contract.md` §B |
+| What does this reference select? | `gsa-cli/src/select.rs` (§C) |
+| Which exit code does this path produce? | `gsa-cli/src/exit.rs` (§G) — the only rc renderer |
+| Which env vars/commands exist? | `gsa-cli/src/help.rs` (`ENV_INPUTS`) |
+| Why is this cell coloured/wide? | `gsa-cli/src/style.rs`, `render.rs` (§L.9) |
+| Which row vocabulary is this? | `gsa-model` (record types) + `gsa-cli/src/output.rs::kv_line` (§L.9) |
+| Should this install happen? | `gsa-install/src/lib.rs::decide` (§E) — the only seam |
+| Why did this lane stop? | `gsa-sched/src/machine.rs` (dispatch), `signals.rs` |
+| What is the run's state? | `gsa-sched/src/progress.rs` (the one projection) |
+| Which state file? | `gsa-state`; layout in `docs/gsa-contract.md` §J |
+
+Add a module, not a branch: the crates are separated so that a new behaviour
+lands in the crate that owns the noun (a new gate in `gsa-install::gates`, a
+new lint in `gsa-qa`, a new `-M` verb in `gsa-maint`), and `gsa-cli` only
+parses, selects, renders and exits.
 
 The engine also owns **makepkg's configuration**: `/etc/gsa/{gsa.conf,
 gcc-makepkg.conf, clang-makepkg.conf}` plus a `~/.config/gsa/` clone plus
@@ -190,6 +239,21 @@ flag by editing the site body, and add package-specific switches by appending
   detail in `.logs/action-<date>-<task>.md`. Never write memory files in
   `$HOME`; `.logs/` is git-excluded apart from the scratchpad, so an action
   export is never staged.
+- **The docs are layered, and each layer has one job.** `AGENTS.md` holds the
+  rule text and one line per pitfall mechanism; incidents, dates and
+  measurements go in `docs/JOURNAL.md`; `docs/adr/` holds the *why* behind a
+  rule; `docs/plans/` are frozen provenance records cited by section and must
+  never be edited to change behaviour (the contract or a new ADR is the place).
+  Do not restate a rule in a second file — a copied rule drifts in one of them.
+  `AGENTS.md` §6 is a queue: a finished item is deleted, never ticked.
+- **A doc that teaches how to check, never the shape of a retired era.** No
+  live doc asserts a volatile fact; it names the command that prints it
+  (`gsa -Sl`, `gsa --help`, `gsa -Qt`). Retired spellings survive only in the
+  contract's migration table (§B.9).
+- **The scratchpad is reset, not appended forever.** After an action, write the
+  export, append exactly one `docs/JOURNAL.md` line, then reset
+  `.logs/scratchpad.md` to the stub. It is the only tracked file under
+  `.logs/`.
 - **The run record is the assertion surface.** Assert on the `format: 2`
   machine block via `tests/lib/rr-v2.bash`, not on prose. Prose pins live in
   exactly one place (`tests/dashboard.sh`'s rendering section).
@@ -209,6 +273,10 @@ flag by editing the site body, and add package-specific switches by appending
   The loader validates every record, edge and the whole topological sort on
   every invocation, so `make_workspace` must produce a complete workspace and
   `add_package`/`set_topology_record` are the only writers for records.
+- **Scale pins are probe/CALL counts and event waits, never wall-clock.**
+  Wait on a marker or a log line; a `sleep` races the pre-dispatch phase under
+  parallelism. `stub_sleep` is the capped clock for SUT-side waits, installed
+  only where no long sleep is a lease or a measured duration.
 - **A behavioural change to scheduling, install, state, fetch or signals ships
   with a fixture in the same change**, and retires its dead code and config in
   the same pass.
@@ -240,6 +308,7 @@ flag by editing the site body, and add package-specific switches by appending
 | `CONTEXT.md` | Vocabulary: recipe, topology record, build-order edge, lane, run record, decision row |
 | `CONTRIBUTING.md` | Change hygiene, the validation block, the commit policy |
 | `SECURITY.md` | Trust model, privilege boundary, what must never be committed |
-| `docs/adr/` | Decision records: the run record, the prefetch advisory, engine-owned makepkg config |
-| `docs/plans/` | Archive-class design records cited by section — provenance, never specification |
+| `docs/adr/` | Decision records (`README.md` indexes them; numbering starts at 0003 — 0001/0002 moved to the recipe repo): the run record, the prefetch advisory, engine-owned makepkg config, and why a `--print-*` seam owes a shipped file |
+| `docs/plans/` | Frozen design records (`README.md` is the index) cited by section from code and the contract — provenance, never specification; they carry ~148 citation lines, so never delete one to "clean up" |
 | `docs/JOURNAL.md` | The chronological log — read the tail, grep by date |
+| `crates/README.md` | **Stale — do not trust it.** It still describes phase 1 and lists eight crates as "not yet in this workspace", and it recommends `cargo fmt --check`, which is the command that aborts. `AGENTS.md` §3 and the table above are current. |
