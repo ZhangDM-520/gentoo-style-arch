@@ -11,6 +11,7 @@ use gsa_model::{
 };
 
 use crate::args::{Family, Invocation};
+use crate::prepare::SyncClass;
 use crate::select::Selection;
 
 /// Emit the `format: 2` machine block AND persist the same record into the
@@ -658,6 +659,80 @@ pub fn build_fetch_record(
     }
 }
 
+/// The one run record for a `-Sy` version-sync pass (contract §B.4/§H.1,
+/// I1-ivy-3). The pass rewrites recipes and builds nothing, so its rows carry
+/// the SYNC verdict, never a would-be build action: `skip <reason>` for a
+/// deferral (that recipe's rewrite did not happen) and `noop ok` for
+/// everything else (a rewrite is an edit to the recipe, not a lane).
+///
+/// The outcome rows make the deferrals inspectable days later — the whole
+/// point of the record: `deferred 99 <key>` per deferral and `succeeded 0 ok`
+/// otherwise, so `RunOutcome::compute` earns exactly the pass's own rc
+/// (5 deferral-only, 0 clean). The continuation names `-Sy` itself: the
+/// pending rewrites are on disk uncommitted, and a deferral is retried by
+/// re-running the same pass (`not_mirrored_of` already lists `-Sy`).
+pub fn build_sync_record(
+    inv: &Invocation,
+    members: &[crate::prepare::SyncMember],
+    outcomes: Vec<OutcomeRow>,
+    outcome: &gsa_model::RunOutcome,
+) -> RunRecord {
+    let selection_source = selection_source(&inv.targets, inv.leaf, &inv.ranges);
+    let order: Vec<RecipeId> = members.iter().map(|member| member.id.clone()).collect();
+    let plan: Vec<PlanRow> = members
+        .iter()
+        .map(|member| PlanRow {
+            pkg: member.id.clone(),
+            action: match &member.class {
+                SyncClass::Defer(_) => PlanAction::Skip,
+                SyncClass::Refuse(_) => PlanAction::Refused,
+                _ => PlanAction::Noop,
+            },
+            reason: member.reason.clone(),
+        })
+        .collect();
+    // `remaining:` is every row not `succeeded` (§H.2): the recipes a re-run
+    // must revisit, which is exactly the deferral set.
+    let remaining: Vec<RecipeId> = outcomes
+        .iter()
+        .filter(|row| row.status != RowStatus::Succeeded)
+        .map(|row| row.pkg.clone())
+        .collect();
+    let mut command = format!("{}{}", command_prefix(inv), mirror_verb(inv));
+    command.push_str(&mirror_flags(inv, None));
+    command.push_str(&selection_argv(inv, &remaining));
+    if remaining.is_empty() {
+        command.clear();
+    }
+    RunRecord {
+        selection_source,
+        order,
+        // The pass dispatches no lane and no build job (§H.2: `0`, never a
+        // predicted plan).
+        lanes: Some(0),
+        normal_jobs: Some(0),
+        core_jobs: Some(0),
+        intensity: "-".to_string(),
+        outcome: outcome.outcome.to_string(),
+        rc: outcome.rc,
+        dry_run: inv.dry_run,
+        prefetch_warnings: None,
+        stamp: gsa_model::RecordStamp {
+            started: Some(run_started()),
+            ended: Some(gsa_model::epoch_now()),
+            ..gsa_model::RecordStamp::default()
+        },
+        plan,
+        outcomes,
+        continuation: Continuation {
+            command,
+            remaining,
+            not_mirrored: not_mirrored_of(inv),
+            env_required: env_required(inv),
+        },
+    }
+}
+
 /// The `-U` record's per-subject collapse (contract §H.2: "Rows are full —
 /// one per selected package"): a multi-row candidate — several PGO hits, a
 /// stacked PGO+ABI refusal, a split output set — is ONE package in the run
@@ -1276,6 +1351,105 @@ mod tests {
     /// workspace the next run never recreates: a failed row must not turn that
     /// into a continuation naming the staged id (a replay answers `unknown
     /// reference`). The subjects are the PATHS, quoted as given.
+    #[test]
+    fn a_deferral_only_sync_pass_records_its_deferrals_and_the_remedy() {
+        use crate::prepare::{SyncClass, SyncMember};
+        let mut inv = inv_for(Family::S);
+        inv.action = Some('y');
+        let members = vec![
+            SyncMember {
+                id: RecipeId::new("acl-git").unwrap(),
+                class: SyncClass::Defer("source-unfetchable"),
+                reason: "source-unfetchable".to_string(),
+            },
+            SyncMember {
+                id: RecipeId::new("ninja-git").unwrap(),
+                class: SyncClass::Continue,
+                reason: "ok".to_string(),
+            },
+        ];
+        let outcomes: Vec<OutcomeRow> = members
+            .iter()
+            .map(|member| match &member.class {
+                SyncClass::Defer(key) => OutcomeRow {
+                    pkg: member.id.clone(),
+                    status: RowStatus::Deferred,
+                    rc: Some(99),
+                    dur: None,
+                    reason: key.to_string(),
+                },
+                _ => OutcomeRow {
+                    pkg: member.id.clone(),
+                    status: RowStatus::Succeeded,
+                    rc: Some(0),
+                    dur: None,
+                    reason: "ok".to_string(),
+                },
+            })
+            .collect();
+        // §G.1: a deferral-only pass is the deferral class, rc 5 — the same
+        // code the pass always returned, now earned by rows.
+        let outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        assert_eq!((outcome.outcome, outcome.rc), ("deferral", 5));
+        let record = build_sync_record(&inv, &members, outcomes, &outcome);
+        assert_eq!(record.lanes, Some(0), "a sync pass dispatches no lane");
+        assert_eq!(record.intensity, "-");
+        assert_eq!(record.plan[0].action, PlanAction::Skip);
+        assert_eq!(record.plan[0].reason, "source-unfetchable");
+        assert_eq!(record.plan[1].action, PlanAction::Noop);
+        assert_eq!(record.outcomes[0].status, RowStatus::Deferred);
+        assert_eq!(record.outcomes[0].rc, Some(99));
+        // The continuation reissues the pass for what it could not answer,
+        // and `-Sy` never mirrors (it is this record's own spelling).
+        assert_eq!(
+            record.continuation.remaining,
+            vec![RecipeId::new("acl-git").unwrap()]
+        );
+        assert!(
+            record
+                .continuation
+                .command
+                .starts_with("sudo gsa -Sy acl-git"),
+            "{:?}",
+            record.continuation.command
+        );
+        // `-Sy` is the composed command itself, so the run carries no
+        // spelling the continuation fails to restate (§H.2 argv-scoped).
+        assert!(record.continuation.not_mirrored.is_empty());
+        // The block parses as a complete `format: 2` record.
+        let rendered = record.render_machine();
+        assert!(rendered.contains("acl-git skip source-unfetchable"));
+        assert!(rendered.contains("acl-git deferred 99 - source-unfetchable"));
+        assert!(rendered.contains("ninja-git noop ok"));
+        assert!(rendered.contains("rc: 5"));
+    }
+
+    /// A clean pass is rc 0 and names nothing to replay: `remaining:` empty
+    /// omits the `command:` line entirely (§H.2 — a selection-less
+    /// continuation cannot be pasted).
+    #[test]
+    fn a_clean_sync_pass_has_no_continuation_command() {
+        use crate::prepare::{SyncClass, SyncMember};
+        let mut inv = inv_for(Family::S);
+        inv.action = Some('y');
+        let members = vec![SyncMember {
+            id: RecipeId::new("ninja-git").unwrap(),
+            class: SyncClass::Continue,
+            reason: "ok".to_string(),
+        }];
+        let outcomes = vec![OutcomeRow {
+            pkg: RecipeId::new("ninja-git").unwrap(),
+            status: RowStatus::Succeeded,
+            rc: Some(0),
+            dur: None,
+            reason: "ok".to_string(),
+        }];
+        let outcome = gsa_model::RunOutcome::compute(&outcomes, false, false, false);
+        let record = build_sync_record(&inv, &members, outcomes, &outcome);
+        assert_eq!(record.continuation.remaining, Vec::new());
+        assert_eq!(record.continuation.command, "");
+    }
+
     #[test]
     fn a_failed_standalone_run_continuation_names_the_paths_not_the_staged_ids() {
         let mut inv = inv_for(Family::B);

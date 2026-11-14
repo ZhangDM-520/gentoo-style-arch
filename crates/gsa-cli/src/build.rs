@@ -2237,7 +2237,7 @@ mod tests {
             &mut err,
             &prepare::SyncPhase {
                 refused: Some(crate::exit::RefusalClass::SyncRefused),
-                deferred: Vec::new(),
+                members: Vec::new(),
             },
             || Ok(budget()),
         )
@@ -2293,7 +2293,11 @@ mod tests {
             &mut err,
             &prepare::SyncPhase {
                 refused: None,
-                deferred: vec![("gtk4-git".to_string(), "source-unfetchable".to_string())],
+                members: vec![prepare::SyncMember {
+                    id: gsa_model::RecipeId::new("gtk4-git").expect("id"),
+                    class: prepare::SyncClass::Defer("source-unfetchable"),
+                    reason: "source-unfetchable".to_string(),
+                }],
             },
             || Ok(budget()),
         )
@@ -2309,7 +2313,7 @@ mod tests {
                 &mut err,
                 &prepare::SyncPhase {
                     refused: Some(crate::exit::RefusalClass::SyncRefused),
-                    deferred: Vec::new(),
+                    members: Vec::new(),
                 },
                 || Err("--lanes: garbage".to_string()),
             ),

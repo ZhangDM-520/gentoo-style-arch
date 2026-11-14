@@ -3062,6 +3062,14 @@ impl NvcheckerRunner {
             .output()
             .map_err(|e| ProviderError::ToolMissing(format!("nvchecker: {e}")))?;
         if !out.status.success() {
+            // Exit 127 is a shell's "command not found" — the provider tool is
+            // absent, not outaged (I1-ivy-3: it used to read as a genuine
+            // upstream failure, and neither remedy was discoverable).
+            if out.status.code() == Some(127) {
+                return Err(ProviderError::ToolMissing(
+                    "nvchecker: not found on PATH (exit 127)".to_string(),
+                ));
+            }
             return Err(ProviderError::Outage(format!(
                 "nvchecker failed for {} key {key} (exit {})",
                 self.config.display(),
@@ -4860,6 +4868,11 @@ pub fn sync_nvchecker(
     }
     let mut resolved: Option<String> = None;
     let mut query_failure: Option<String> = None;
+    // A missing optional provider TOOL is not an outage (I1-ivy-3): `nvchecker`
+    // exit 127 read exactly like a genuine upstream failure, so an operator
+    // could neither fix it (install the tool) nor drop the opt-in tag. Kept
+    // apart from `query_failure` and spelled as the disclosure it is.
+    let mut tool_missing: Option<String> = None;
     for k in &keys {
         match provider.query_name(k) {
             Ok(VersionAnswer::Found(v)) => {
@@ -4869,9 +4882,12 @@ pub fn sync_nvchecker(
             Ok(VersionAnswer::UnknownName) => continue,
             Ok(VersionAnswer::QueryFailed(m))
             | Err(ProviderError::Invalid(m))
-            | Err(ProviderError::ToolMissing(m))
             | Err(ProviderError::Outage(m)) => {
                 query_failure = Some(m);
+                break;
+            }
+            Err(ProviderError::ToolMissing(m)) => {
+                tool_missing = Some(m);
                 break;
             }
             Err(ProviderError::Unsupported(m)) => {
@@ -4890,12 +4906,21 @@ pub fn sync_nvchecker(
         }
     }
     let Some(new_pkgver) = resolved else {
-        let message = query_failure.unwrap_or_else(|| "no version from the provider".to_string());
+        let message = match (tool_missing, query_failure) {
+            (Some(tool), _) => format!(
+                "{tool} is not installed — install it, or drop the 'version-sync=nvchecker' tag to sync through the Arch provider instead"
+            ),
+            (None, Some(failure)) => {
+                format!("nvchecker could not resolve a version ({failure})")
+            }
+            (None, None) => "nvchecker could not resolve a version (no version from the provider)"
+                .to_string(),
+        };
         return SyncReport {
             pkg,
             outcome: SyncOutcome::Deferred {
                 reason: DeferReason::AnchoringRefused,
-                message: format!("nvchecker could not resolve a version ({message})"),
+                message,
                 restored: RestoreStatus::NothingToRestore,
             },
             anchor: None,

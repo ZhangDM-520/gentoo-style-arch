@@ -35,7 +35,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use gsa_graph::Graph;
-use gsa_model::{PlanAction, PlanRow, RecipeId, Tag};
+use gsa_model::{OutcomeRow, PlanAction, PlanRow, RecipeId, RowStatus, RunOutcome, Tag};
 use gsa_recipe::freshness::{self, Discovery, FreshnessContext, ProbeOptions, SkipMode, Verdict};
 use gsa_recipe::sync::{
     self, AnchorOutcome, DispositionRow, NvcheckerRunner, ProviderError, ProviderFamily,
@@ -1094,8 +1094,22 @@ fn sync_status_line(id: &str, outcome: &SyncOutcome, human: bool) -> Option<Stri
 pub struct SyncPhase {
     /// The first refusing recipe's class, `None` when nothing refused.
     pub refused: Option<RefusalClass>,
-    /// Every deferred recipe with its §H.3 reason key.
-    pub deferred: Vec<(String, String)>,
+    /// Every selected recipe's verdict, in canonical build order — the
+    /// per-member evidence a `-Sy` run record needs (I1-ivy-3: the pass used
+    /// to write nothing at all, so 89 deferrals left no trace on disk).
+    pub members: Vec<SyncMember>,
+}
+
+/// One selected recipe's verdict in a `sync_phase` pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncMember {
+    /// The recipe.
+    pub id: RecipeId,
+    /// The typed class the pass answered with.
+    pub class: SyncClass,
+    /// The §H.3 reason key: the class's own key for a deferral or refusal,
+    /// the rewritten/unchanged evidence otherwise.
+    pub reason: String,
 }
 
 pub fn sync_phase(
@@ -1108,7 +1122,7 @@ pub fn sync_phase(
 ) -> SyncPhase {
     let mut rows: Vec<DispositionRow> = Vec::new();
     let mut refused: Option<RefusalClass> = None;
-    let mut deferred: Vec<(String, String)> = Vec::new();
+    let mut members: Vec<SyncMember> = Vec::new();
     for (_, id) in &selection.listed {
         let idx = graph.index_of(id.as_str()).expect("selection ids resolve");
         let recipe_dir = root.join(&graph.record(idx).path);
@@ -1125,14 +1139,17 @@ pub fn sync_phase(
             let _ = writeln!(err, "gsa: note: {line}");
         }
         rows.extend(report.rows.iter().cloned());
+        let member_class = class.clone();
         match class {
             SyncClass::Defer(key) => {
+                // The pass rewrites recipes and builds nothing, so the note
+                // must not claim a build stood down (I1-ivy-3): what a
+                // deferral costs HERE is the rewrite it could not make.
                 let _ = writeln!(
                     err,
-                    "gsa: note: {}: deferred ({key}) — nothing was built; retry when provider metadata is available, or use '--no-sync' to build the committed version and sums",
+                    "gsa: note: {}: deferred ({key}) — no recipe was rewritten; retry when provider metadata is available, or use '--no-sync' to build the committed version and sums",
                     id.as_str()
                 );
-                deferred.push((id.as_str().to_string(), key.to_string()));
             }
             SyncClass::Refuse(class) => {
                 let _ = writeln!(
@@ -1147,14 +1164,46 @@ pub fn sync_phase(
             }
             _ => {}
         }
+        members.push(SyncMember {
+            id: id.clone(),
+            class: member_class,
+            reason: match &class {
+                SyncClass::Defer(key) => key.to_string(),
+                SyncClass::Refuse(class) => class.key().to_string(),
+                SyncClass::Rewritten => "rewritten".to_string(),
+                SyncClass::Continue => "ok".to_string(),
+            },
+        });
     }
     let block = sync::render_disposition(&rows);
     if !block.is_empty() {
         let _ = write!(out, "{block}");
-    } else {
+    }
+    // A pass that could not answer for every recipe never says "nothing to do"
+    // (I1-ivy-3): the counted summary is the only line that tells an operator —
+    // or a cron job's log — how much of the selection it actually looked at.
+    // "nothing to do" survives only for a genuinely clean, deferral-free pass.
+    let (deferred_count, rewritten, unchanged) =
+        members
+            .iter()
+            .fold((0usize, 0usize, 0usize), |acc, member| {
+                match &member.class {
+                    SyncClass::Defer(_) => (acc.0 + 1, acc.1, acc.2),
+                    SyncClass::Rewritten => (acc.0, acc.1 + 1, acc.2),
+                    SyncClass::Continue => (acc.0, acc.1, acc.2 + 1),
+                    SyncClass::Refuse(_) => acc,
+                }
+            });
+    if deferred_count > 0 || refused.is_some() {
+        let _ = writeln!(
+            out,
+            "Version and checksum sync: {deferred_count} deferred, {rewritten} rewritten, {unchanged} unchanged (of {} selected)",
+            members.len()
+        );
+    } else if block.is_empty() && rewritten == 0 {
         let _ = writeln!(out, "Version and checksum sync: nothing to do");
     }
-    SyncPhase { refused, deferred }
+    SyncPhase { refused, members }
 }
 
 /// `gsa -Sy [targets…] [ranges…]` (contract §B.4): the version-sync pass
@@ -1266,17 +1315,51 @@ fn run_sync_pass_inner(
 
     let srcdest = gsa_model::config::resolve_srcdest();
     let phase = sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
+    // A pass that looked at recipes owes a record whether it succeeded, deferred
+    // or refused (I1-ivy-3): the disposition block is the human deliverable,
+    // the `format: 2` block plus its persisted history row are what makes the
+    // run inspectable after the terminal is closed. The rc is the ROWS' own
+    // (§G.1), computed once from them.
+    let members = phase.members.clone();
+    let outcomes: Vec<OutcomeRow> = members
+        .iter()
+        .map(|member| match &member.class {
+            SyncClass::Defer(key) => OutcomeRow {
+                pkg: member.id.clone(),
+                status: RowStatus::Deferred,
+                rc: Some(99),
+                dur: None,
+                reason: key.to_string(),
+            },
+            SyncClass::Refuse(class) => OutcomeRow {
+                pkg: member.id.clone(),
+                status: RowStatus::Failed,
+                rc: Some(1),
+                dur: None,
+                reason: class.key().to_string(),
+            },
+            _ => OutcomeRow {
+                pkg: member.id.clone(),
+                status: RowStatus::Succeeded,
+                rc: Some(0),
+                dur: None,
+                reason: "ok".to_string(),
+            },
+        })
+        .collect();
+    let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, phase.refused.is_some());
+    let record = crate::record::build_sync_record(inv, &members, outcomes, &run_outcome);
     if let Some(class) = phase.refused {
-        // A one-shot `-Sy` renders the disposition block only: the contract
-        // (§H.1/H.2) owes a run record to build-shaped runs, and `-Sy` is
-        // never mirrored into a continuation — the refusal class is the rc,
-        // and the per-recipe refusal line was already printed by the pass.
-        return Err(Exit::Refuse(Refusal::silent(class)));
+        // A one-shot `-Sy` renders the disposition block and the record only:
+        // the refusal class is the rc, and the per-recipe refusal line was
+        // already printed by the pass.
+        let rec_state = crate::install::record_state_dir(inv, err);
+        crate::record::emit_machine_record(out, &record, &rec_state, err);
+        return Err(Exit::Refuse(Refusal::recorded(class)));
     }
-    if !phase.deferred.is_empty() {
-        return Ok(5);
-    }
-    Ok(0)
+    let rec_state = crate::install::record_state_dir(inv, err);
+    crate::record::emit_machine_record(out, &record, &rec_state, err);
+    Ok(run_outcome.rc)
 }
 
 /// One stale-set row: the decision AND the evidence it was made on, computed

@@ -391,10 +391,18 @@ record_block() {
     grep -F 'checksums, and verified against the fetched sources' \
         "$fixture/s1/err" >/dev/null \
         || fail "the anchoring verification note is missing:" "$fixture/s1/err"
-    # -Sy is the rewrite pass itself: disposition block, NEVER a run record
-    if grep -F -- '--- run record begin ---' "$fixture/s1/out" >/dev/null; then
-        fail "-Sy must not emit a run record:" "$fixture/s1/out"
+    # -Sy owes the same complete `format: 2` record as every other pass
+    # (I1-ivy-3): the disposition block is the human deliverable, the record
+    # and its history row are what survive the closed terminal.
+    if ! grep -F -- '--- run record begin ---' "$fixture/s1/out" >/dev/null; then
+        fail "-Sy must emit a run record:" "$fixture/s1/out"
     fi
+    [ "$(rr2_scalar order <"$fixture/s1/out")" = "demo" ] \
+        || fail "the -Sy record's order is not the selection:" "$fixture/s1/out"
+    [ "$(rr2_outcome demo status <"$fixture/s1/out")" = "succeeded" ] \
+        || fail "a rewritten recipe's outcome row is not succeeded:" "$fixture/s1/out"
+    [ "$(rr2_plan demo plan <"$fixture/s1/out")" = "noop" ] \
+        || fail "a rewritten recipe's plan row is not noop:" "$fixture/s1/out"
 
     # H4: the per-recipe status line (machine vocabulary, §L.6) — every
     # recipe answers with exactly one line, the rewrite included.
@@ -463,10 +471,28 @@ record_block() {
         || fail "a query-outage deferral exits 5 (§G.1), got $SY_RC:" "$fixture/s2a/err"
     grep -F 'demo: deferred (upstream-unverified)' "$fixture/s2a/err" >/dev/null \
         || fail "the deferral note does not name upstream-unverified:" "$fixture/s2a/err"
-    grep -F 'nothing was built' "$fixture/s2a/err" >/dev/null \
-        || fail "the deferral note must state nothing was built:" "$fixture/s2a/err"
-    grep -F 'Version and checksum sync: nothing to do' "$fixture/s2a/out" >/dev/null \
-        || fail "the disposition block is missing on a deferral:" "$fixture/s2a/out"
+    # the note must not claim a build happened: this verb never builds, and on a
+    # deferral nothing was REWRITTEN either (I1-ivy-3).
+    grep -F 'no recipe was rewritten' "$fixture/s2a/err" >/dev/null \
+        || fail "the deferral note must state no recipe was rewritten:" "$fixture/s2a/err"
+    # a pass that could not answer for every recipe never says "nothing to do"
+    # (§F: "answering 'nothing to do' when it could not look is not").
+    grep -Eq 'Version and checksum sync: [1-9][0-9]* deferred,' "$fixture/s2a/out" >/dev/null \
+        || fail "the counted disposition block is missing on a deferral:" "$fixture/s2a/out"
+    grep -Fx 'Version and checksum sync: nothing to do' "$fixture/s2a/out" >/dev/null \
+        && fail "a deferral pass claimed 'nothing to do':" "$fixture/s2a/out"
+    # the deferral OWES the record (I1-ivy-3): rc 5 used to leave nothing on
+    # disk at all — no record, no history row, no log.
+    [ "$(rr2_scalar order <"$fixture/s2a/out")" = "demo" ] \
+        || fail "the deferred -Sy record's order is not the selection:" "$fixture/s2a/out"
+    [ "$(rr2_outcome demo status <"$fixture/s2a/out")" = "deferred" ] \
+        || fail "the deferred -Sy record's outcome row is not deferred:" "$fixture/s2a/out"
+    [ "$(rr2_outcome demo rc <"$fixture/s2a/out")" = "99" ] \
+        || fail "a deferral owes lane rc 99 in the record:" "$fixture/s2a/out"
+    [ "$(rr2_outcome demo reason <"$fixture/s2a/out")" = "upstream-unverified" ] \
+        || fail "the deferred row does not name upstream-unverified:" "$fixture/s2a/out"
+    [ -s "$fixture/s2a/state/runs/history.jsonl" ] \
+        || fail "a deferred -Sy left no run-history row:" "$fixture/s2a/state/runs"
     cmp -s "$fixture/s2a/PKGBUILD.pre" "$recipe/PKGBUILD" \
         || fail "a query outage mutated the recipe:" "$recipe/PKGBUILD"
 

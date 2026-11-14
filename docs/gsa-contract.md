@@ -173,7 +173,7 @@ Pinned by `tests/gsa-query.sh` §h.
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `AGENTS.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
 | `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) — except on a `-Sw` run, where they ARE the work and set the rc. Two honest non-`ok` outcomes (added 2026-11-11): `failed local-source-missing` when a `source=()` entry with no transport is absent from the recipe directory (the build cannot start; the plan row says `fetch local-source-missing`), and `ok unverified-sums` when a REMOTE source is pinned `SKIP` (fetched, never verified — warning-class, never a clean `ok`; a detached signature's `SKIP` is excluded, since makepkg gpg-verifies it) |
-| `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed (today's automatic pre-build sync made explicitly runnable) |
+| `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed, and the `format: 2` run record emitted (one `noop`/`rewritten` plan row and one outcome row per selected recipe — `succeeded`/`failed`/`deferred`; a deferral-only pass therefore leaves a record and its `-Mh` history row, never nothing at all: I1-ivy-3) (today's automatic pre-build sync made explicitly runnable) |
 | `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (`-Qu`'s definition: the installed reference when one exists, else the newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
 | `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
 
@@ -1204,7 +1204,10 @@ once, as one typed structure, and rendered three ways: the streaming dashboard,
 the prose summary, and the machine block. The three renderings are views of the
 same rows; no rendering re-derives state. The block is default-on, printed to
 stdout after the dashboard finishes, and emitted on the interrupt and
-preflight-refusal paths too.
+preflight-refusal paths too. The `-Sy` version-sync pass owes it as well
+(I1-ivy-3) — its rows are `noop`/`rewritten` plans and
+`succeeded`/`failed`/`deferred` outcomes, so "could not answer" and "nothing
+to do" never render identically.
 
 **One deliberate amendment to ADR 0003:** the record is now also *persisted*
 into the side-car run history (§J.2, `gsa -Mh`), because the side-car DB owns

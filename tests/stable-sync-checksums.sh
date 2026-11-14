@@ -76,8 +76,9 @@ set -euo pipefail
 # (§H.2–§H.3): integrity stop `failed 1 - integrity-stop` + `never-started - -
 # startup-refused` rc 3 (§G.1), deferral `deferred 99 - <key>` + consumer cone
 # `parked - - waits-on-deferred`, deferral-only rc 5. `gsa -Sy` prints the
-# `Version and checksum sync this run` disposition block on stdout, emits NO
-# run record, and exits 0/3/5. Retired fish-era sections, with reasons:
+# `Version and checksum sync this run` disposition block on stdout, emits the
+# `format: 2` run record (I1-ivy-3), and exits 0/3/5. Retired fish-era
+# sections, with reasons:
 #   * case 41's sed-argv/.SRCINFO-tmp watch: the rewrite is Rust-side
 #     (RecipeTransaction staging), no `sed` is ever invoked and the .SRCINFO
 #     scratch is created after `makepkg --printsrcinfo` exits — the tool-
@@ -522,8 +523,10 @@ run_sync() { # $1 = workspace · $2 = label · $3 = expected rc — the -Sy pass
     if ((FIXTURE_RC != expect)); then
         fail "$label: gsa -Sy exited $FIXTURE_RC, want $expect:" "$dir/out.txt"
     fi
-    if grep -q -- '--- run record begin ---' <<<"$FIXTURE_OUTPUT"; then
-        fail "$label: -Sy emitted a run record — the sync pass has none (§H):" "$dir/out.txt"
+    # -Sy owes the same complete record as every pass (I1-ivy-3): the
+    # disposition block is the deliverable, the record is what survives.
+    if ! grep -q -- '--- run record begin ---' <<<"$FIXTURE_OUTPUT"; then
+        fail "$label: -Sy emitted no run record (§H, I1-ivy-3):" "$dir/out.txt"
     fi
 }
 
