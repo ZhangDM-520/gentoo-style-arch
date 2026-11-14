@@ -58,6 +58,17 @@ make_lib() {
         cc -shared -x c - -Wl,-soname,"$3" -o "$1/$2"
 }
 
+# make_lib_bare DIR FILENAME — a shared object with NO DT_SONAME, so the
+# loader indexes it by its bare file name only (perl's libperl.so).
+make_lib_bare() {
+    mkdir -p "$1"
+    printf 'int gsa_fixture_anchor;\n' |
+        cc -shared -x c - -o "$1/$2"
+    readelf -dW "$1/$2" | grep -q '(SONAME)' &&
+        fail "synthesis gave $2 a DT_SONAME the fixture claims it lacks"
+    return 0
+}
+
 # make_bin DIR FILENAME NEEDED [rpath] — a consumer ELF with DT_NEEDED.
 # Synthesis links against a throwaway stub whose DT_SONAME is exactly the
 # wanted name: the produced consumer records that DT_NEEDED no matter what
@@ -292,7 +303,7 @@ compgen -G "$tmp/factcache/*.facts" >/dev/null || fail "fact cache not written"
 sha=$(sha256sum "$tmp/cache/pkg-clean-1.0.0-1-any.pkg.tar.zst")
 sha=${sha%% *}
 {
-    printf '# gsa-abi-need-check facts v1 %s\n' "$sha"
+    printf '# gsa-abi-need-check facts v2 %s\n' "$sha"
     printf 'pkg\x1fpkg-clean\n'
     printf 'file\x1fusr/bin/consumer\x1fELF64\x1f\x1f\x1flibmissing-fixture.so.42\n'
 } >"$tmp/factcache/$sha.facts"
@@ -609,5 +620,145 @@ GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/exclusions-id.conf" run out err -- "$tmp/y" 
 status=0
 GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/does-not-exist.conf" run out err -- --quiet "$tmp/y" || status=$?
 [[ $status == 1 ]] || fail "a missing registry must degrade to empty (want fatal 1), got $status: $out"
+
+# ── 17. a SONAME-less in-payload lib covers its own consumer ─────────────
+# `tx_sonames` is the transaction-internal cover set, and it was built from
+# the SONAME field alone. A payload lib that declares none is indexed by ld.so
+# under its BARE FILE NAME, so `libperl.so` (usr/lib/perl5/5.44/core_perl/
+# CORE/libperl.so, no DT_SONAME) never entered the set, its own consumer
+# `usr/bin/perl` recorded `NEEDED libperl.so`, and `host_resolves` cannot
+# succeed on a clean box: `perl` was uninstallable and every transaction
+# carrying it aborted. A payload file's bare name is as loadable as a soname —
+# same class, same existence — so it is the same cover.
+make_lib_bare "$tmp/o/usr/lib/perl5/5.44/core_perl/CORE" libbare-fixture.so
+# The runpath is the INSTALL path (absolute, as `perl` records it) and the
+# payload file is not under it yet, so no direct file resolution can cover
+# the name: only the transaction-internal set can.
+make_bin "$tmp/o/usr/bin" bare-consumer libbare-fixture.so /usr/lib/perl5/5.44/core_perl/CORE
+make_pkgroot "$tmp/o" pkg-bare-soname
+status=0
+run out err -- --quiet "$tmp/o" || status=$?
+[[ $status == 0 ]] || fail "a SONAME-less in-payload lib did not cover its consumer (want 0), got $status: $out"
+[[ $out == *'libbare-fixture.so'* ]] && fail "the SONAME-less cover still reported: $out"
+
+# Negative control: the same consumer shape, but the bare-named file belongs to
+# NO package of this transaction (it is not under the scanned root), so it must
+# stay fatal — the section cannot pass by covering any bare name it has seen.
+make_lib_bare "$tmp/elsewhere" libotherbare-fixture.so
+make_bin "$tmp/o2/usr/bin" other-consumer libotherbare-fixture.so /usr/lib/perl5/5.44/core_perl/CORE
+make_pkgroot "$tmp/o2" pkg-bare-unshipped
+status=0
+run out err -- --quiet "$tmp/o2" || status=$?
+[[ $status == 1 ]] || fail "a bare name outside the transaction resolved (want 1), got $status: $out"
+[[ $out == *"needs 'libotherbare-fixture.so'"* ]] || fail "absent bare-name finding lost: $out"
+
+# ── 18. a payload symlink alias covers its own loader name ───────────────
+# The transaction-internal cover set was built from DT_SONAME plus the bare
+# name of a REGULAR payload file. A DSO the payload also ships as an
+# unversioned symlink (`libaaf.so -> libaaf.so.0.0.0`, ardour issue #2) is
+# absent from that set twice over: `find -type f` skips the link, and the
+# regular file's own name (`libaaf.so.0.0.0`) is not the name a consumer
+# records. When such a consumer needs the SYMLINK's name — which only the
+# launcher's LD_LIBRARY_PATH (a private dir, no ld.so entry, no RUNPATH) can
+# resolve — the gate called it fatal although the payload ships it.
+make_lib_bare "$tmp/p/usr/lib/ardour9" libalias-fixture.so.1.2.3
+ln -s libalias-fixture.so.1.2.3 "$tmp/p/usr/lib/ardour9/libalias-fixture.so"
+make_bin "$tmp/p/usr/bin" alias-consumer libalias-fixture.so
+make_pkgroot "$tmp/p" pkg-private-libdir
+status=0
+run out err -- --quiet "$tmp/p" || status=$?
+[[ $status == 0 ]] || fail "a payload symlink alias did not cover its consumer (want 0), got $status: $out"
+[[ $out == *'libalias-fixture.so'* ]] && fail "the payload alias still reported: $out"
+
+# A SONAME-carrying payload file is loadable under its own FILE name too (the
+# private dir is on the loader path by launcher, nothing else names it).
+make_lib "$tmp/p/usr/lib/ardour9" libsonamefile-fixture.so.3.0.0 libsonamefile-fixture.so.3
+make_bin "$tmp/p/usr/bin" sonamefile-consumer libsonamefile-fixture.so.3.0.0
+status=0
+run out err -- --quiet "$tmp/p" || status=$?
+[[ $status == 0 ]] || fail "a payload file did not cover its own name (want 0), got $status: $out"
+
+# Negative control A: the link's target is NOT this package's file (it lives
+# outside the scanned root), so its name must stay fatal.
+make_lib_bare "$tmp/elsewhere18" liboutlink-fixture.so.7.0.0
+mkdir -p "$tmp/p2/usr/lib/priv"
+ln -s "$tmp/elsewhere18/liboutlink-fixture.so.7.0.0" "$tmp/p2/usr/lib/priv/liboutlink-fixture.so"
+make_bin "$tmp/p2/usr/bin" outlink-consumer liboutlink-fixture.so
+make_pkgroot "$tmp/p2" pkg-private-outlink
+status=0
+run out err -- --quiet "$tmp/p2" || status=$?
+[[ $status == 1 ]] || fail "a link out of the payload resolved (want 1), got $status: $out"
+[[ $out == *"needs 'liboutlink-fixture.so'"* ]] || fail "absent out-of-payload finding lost: $out"
+
+# Negative control B: no name of this batch covers anything — a provider that
+# belongs to NO package of the transaction stays fatal.
+make_lib "$tmp/elsewhere2" libunshipped-fixture.so.4 libunshipped-fixture.so.4
+make_bin "$tmp/p3/usr/bin" unshipped-consumer libunshipped-fixture.so.4
+make_pkgroot "$tmp/p3" pkg-private-unshipped
+status=0
+run out err -- --quiet "$tmp/p3" || status=$?
+[[ $status == 1 ]] || fail "a private name outside the transaction resolved (want 1), got $status: $out"
+[[ $out == *"needs 'libunshipped-fixture.so.4'"* ]] || fail "absent private-lib finding lost: $out"
+
+
+# ── 19. the registry resolves through the ACTIVE workspace first ──────────
+# Issue #2 secondary: a host with a store copy but no `project` key in
+# /etc/gsa/gsa.conf silently read the STALE store registry, so an edit to the
+# checkout's config/abi-exclusions.conf was untestable — the hook kept
+# exempting whatever the store said. The engine's own conf ladder decides what
+# the active workspace IS (GSA_CONF > GSA_CONF_DIR > /etc/gsa then
+# ~/.config/gsa), and the checkout that ladder names is the operator's
+# workspace: its registry must win over the store copy.
+mkdir -p "$tmp/store/.local/share/gsa/recipes/config" "$tmp/ws/config" "$tmp/state"
+printf '# store copy: no rows\n' >"$tmp/store/.local/share/gsa/recipes/config/abi-exclusions.conf"
+printf 'libwsgap-fixture.so|checkout gap under review|2027-04-01\n' >"$tmp/ws/config/abi-exclusions.conf"
+printf 'project = %s\n' "$tmp/ws" >"$tmp/gsa.conf"
+make_bin "$tmp/z/usr/bin" zconsumer libwsgap-fixture.so.9
+make_pkgroot "$tmp/z" pkg-workspace-registry
+
+# Baseline: the store copy is what gets read when no workspace is active.
+status=0
+SUDO_HOME="$tmp/store" GSA_STATE_DIR="$tmp/state" GSA_CONF=/nonexistent/gsa.conf \
+    run out err -- --quiet "$tmp/z" || status=$?
+[[ $status == 1 ]] || fail "the store copy was not read as the baseline (want 1), got $status: $out"
+
+status=0
+SUDO_HOME="$tmp/store" GSA_STATE_DIR="$tmp/state" GSA_CONF="$tmp/gsa.conf" \
+    run out err -- --quiet "$tmp/z" || status=$?
+[[ $status == 0 ]] || fail "the ACTIVE workspace registry was not honoured (want 0), got $status: $out"
+
+# The explicit override still beats the workspace registry.
+printf '# override: no rows\n' >"$tmp/override.conf"
+status=0
+SUDO_HOME="$tmp/store" GSA_STATE_DIR="$tmp/state" GSA_CONF="$tmp/gsa.conf" \
+    GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/override.conf" run out err -- --quiet "$tmp/z" || status=$?
+[[ $status == 1 ]] || fail "the explicit override did not win (want 1), got $status: $out"
+
+# `GSA_CONF_DIR` collapses the ladder onto one directory (fixture control) —
+# and `GSA_CONF` above wins outright over it, exactly as `config::load` merges.
+mkdir -p "$tmp/confdir"
+printf 'project = %s\n' "$tmp/ws" >"$tmp/confdir/gsa.conf"
+status=0
+SUDO_HOME="$tmp/store" GSA_STATE_DIR="$tmp/state" GSA_CONF_DIR="$tmp/confdir" \
+    run out err -- --quiet "$tmp/z" || status=$?
+[[ $status == 0 ]] || fail "GSA_CONF_DIR was not consulted (want 0), got $status: $out"
+
+
+# A non-ELF payload FILE must never cover a loader name: readelf_facts emits a
+# record for every tracked payload file (the resolve loop skips the non-ELF
+# ones), so an unguarded basename would let a data file named like a soname
+# cover a real miss — measured: 18 834 "sonames" from 117 ELFs plus 18 751
+# data files, and the whole scan went 2 s -> 29 s.
+mkdir -p "$tmp/p/usr/share/ardour9"
+# Content that makes readelf emit its `File:` marker with NO class (a `#!`
+# script does not even get that far), so the record exists and only the
+# class gate can keep it out of the cover set.
+printf 'plain payload text, not an ELF \n%.0s' $(seq 1 8) >"$tmp/p/usr/share/ardour9/libfakeelf-fixture.so.1"
+make_bin "$tmp/p/usr/bin" fakeelf-consumer libfakeelf-fixture.so.1
+status=0
+run out err -- --quiet "$tmp/p" || status=$?
+[[ $status == 1 ]] || fail "a data file covered a loader name (want 1), got $status: $out"
+[[ $out == *"needs 'libfakeelf-fixture.so.1'"* ]] || fail "data-file cover finding lost: $out"
+rm -rf "$tmp/p/usr/share/ardour9" "$tmp/p/usr/bin/fakeelf-consumer"
 
 printf 'abi-need-check fixture: ok\n'

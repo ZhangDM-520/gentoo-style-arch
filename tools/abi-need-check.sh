@@ -335,7 +335,7 @@ for target in "${targets[@]}"; do
             continue
         fi
         if ((factcache_ok)) && [[ -s $factcache_dir/$sha.facts ]] &&
-            [[ $(head -1 "$factcache_dir/$sha.facts") == "# gsa-abi-need-check facts v1 $sha" ]]; then
+            [[ $(head -1 "$factcache_dir/$sha.facts") == "# gsa-abi-need-check facts v2 $sha" ]]; then
             blob=$(sed '1d' "$factcache_dir/$sha.facts")
         fi
     else
@@ -365,8 +365,31 @@ for target in "${targets[@]}"; do
             blob+=$(readelf_facts "$root" "${chunk[0]}" "${chunk[@]}")$'\n'
         done
 
+        # A payload SYMLINK is a loader name of its own: a versioned DSO
+        # shipped as `libaaf.so -> libaaf.so.0.0.0` (ardour, issue #2) is
+        # recorded by consumers as `NEEDED libaaf.so`, a name the regular
+        # file does not have. `find -type f` never yields it, so it takes a
+        # second pass, and the link only names a real payload ELF when its
+        # resolved target IS one — a link out of the tree, a dangling link
+        # (never resolution: the tk `libtk.so` lesson) and a link to a data
+        # file all stay out of the cover set.
+        declare -A elf_rel=()
+        link=''
+        while IFS= read -r line; do
+            [[ $line == "file"$US* ]] || continue
+            rest=${line#*"$US"}
+            elf_rel[${rest%%"$US"*}]=1
+        done <<<"$blob"
+        while IFS= read -r -d '' link; do
+            target=$(readlink -f -- "$link" 2>/dev/null) || continue
+            [[ -n $target && $target == "$root"/* ]] || continue
+            [[ -n ${elf_rel[${target#"$root"/}]:-} ]] || continue
+            blob+="link${US}${link#"$root"/}"$'\n'
+        done < <(find "$root" -type l \
+            ! -name '.PKGINFO' ! -name '.BUILDINFO' ! -name '.MTREE' ! -name '.CHANGELOG' -print0)
+
         if [[ -n $sha ]] && ((factcache_ok)); then
-            { printf '# gsa-abi-need-check facts v1 %s\n' "$sha"; printf '%s' "$blob"; } \
+            { printf '# gsa-abi-need-check facts v2 %s\n' "$sha"; printf '%s' "$blob"; } \
                 >"$factcache_dir/$sha.facts.tmp" 2>/dev/null &&
                 mv "$factcache_dir/$sha.facts.tmp" "$factcache_dir/$sha.facts" 2>/dev/null
         fi
@@ -385,11 +408,35 @@ for target in "${targets[@]}"; do
                 ;;
             "file"$'\x1f'*)
                 rest=${line#*"$US"}
+                relpath=${rest%%"$US"*}
                 rest=${rest#*"$US"}
+                class=${rest%%"$US"*}
                 rest=${rest#*"$US"}
                 rest=${rest#*"$US"}
                 son=${rest%%"$US"*}
                 [[ -n $son ]] && tx_sonames+=("$son")
+                # A payload ELF is in this transaction, so its bare FILE name
+                # covers exactly as a soname does — the loader is told where
+                # that directory is by whoever ships it (a launcher's
+                # LD_LIBRARY_PATH, a runpath, a provide), and the gate cannot
+                # see a private dir at all. That is the perl case (no
+                # DT_SONAME: `NEEDED libperl.so`) and the ardour case (no
+                # runpath, libs under usr/lib/ardour9, indexed by `find -type f`
+                # but never by the default dirs, the cache, or any runpath);
+                # leaving the bare name out aborted every transaction carrying
+                # either. The CLASS gate keeps it honest: readelf_facts emits a
+                # line for any tracked payload FILE (the resolve loop needs the
+                # non-ELF ones to skip), so a data file read
+                # `/usr/bin/ardour9` must never cover a loader name.
+                case $class in
+                    ELF64 | ELF32) tx_sonames+=("${relpath##*/}") ;;
+                esac
+                ;;
+            "link"$'\x1f'*)
+                # The LINK's own name is the loader name a consumer records;
+                # the file it resolves to keeps its regular-file name above.
+                relpath=${line#*"$US"}
+                tx_sonames+=("${relpath##*/}")
                 ;;
         esac
     done <<<"$blob"
@@ -492,12 +539,17 @@ load_ld_cache() {
 # condition it had already accepted once.
 #
 # Searched in the order a hook can actually see: an explicit override
-# (fixtures), the workspace gsa.conf's `project` checkout when that file is
-# root-readable, then the build user's recipe store via `$SUDO_HOME` (pacman
-# runs this hook as root with HOME=/root, so the build user's path needs the
-# sudo variable). Absent everywhere means the empty registry — a host with no
-# recipe workspace keeps the strict behaviour rather than silently exempting
+# (fixtures); the state-root copy; the ACTIVE workspace's own checkout; then
+# the build user's recipe store via `$SUDO_HOME` (pacman runs this hook as
+# root with HOME=/root, so the build user's path needs the sudo variable).
+# Absent everywhere means the empty registry — a host with no recipe
+# workspace keeps the strict behaviour rather than silently exempting
 # anything.
+#
+# The active workspace sits ABOVE the store on purpose: a checkout edit must
+# be testable here before it is shipped, and a store-first order silently
+# read the stale copy (issue #2 secondary — the host's /etc/gsa/gsa.conf had
+# `project` commented out, so the checkout existed and still lost).
 abi_exclusions_file=${GSA_ABI_NEED_CHECK_EXCLUSIONS:-}
 abi_ids=()
 
@@ -515,19 +567,44 @@ gsa_conf_project() {
     printf '%s\n' "$value"
 }
 
+# The engine's own gsa.conf LADDER (gsa_model::config::load): `GSA_CONF`
+# replaces the layers with exactly one file, `GSA_CONF_DIR` replaces the
+# directory resolution with exactly one directory, otherwise /etc/gsa then the
+# build user's ~/.config/gsa merge in that order (the override last, so it
+# answers). Mirrored here because the hook is bash and must see the same
+# workspace the engine would act on.
+gsa_conf_ladder() {
+    local conf=$1 dir
+    if [[ -n ${GSA_CONF:-} ]]; then
+        printf '%s\n' "$GSA_CONF"
+        return 0
+    fi
+    if [[ -n ${GSA_CONF_DIR:-} ]]; then
+        [[ -r $GSA_CONF_DIR/$conf ]] && printf '%s\n' "$GSA_CONF_DIR/$conf"
+        return 0
+    fi
+    for dir in /etc/gsa "${SUDO_HOME:-${HOME:-}}/.config/gsa"; do
+        [[ -r $dir/$conf ]] && printf '%s\n' "$dir/$conf"
+    done
+}
+
 load_abi_exclusions() {
     local path=''
     if [[ -n $abi_exclusions_file ]]; then
         path=$abi_exclusions_file
     else
-        local candidate project
-        for candidate in \
-            "${GSA_STATE_DIR:-/var/lib/gsa}/abi/exclusions.conf" \
-            "${SUDO_HOME:-${HOME:-}}/.local/share/gsa/recipes/config/abi-exclusions.conf"; do
+        local candidate project conf
+        for candidate in "${GSA_STATE_DIR:-/var/lib/gsa}/abi/exclusions.conf"; do
             [[ -r $candidate ]] && { path=$candidate; break; }
         done
-        if [[ -z $path ]] && project=$(gsa_conf_project /etc/gsa/gsa.conf); then
+        while IFS= read -r conf; do
+            [[ -n $conf ]] || continue
+            project=$(gsa_conf_project "$conf") || continue
             candidate="$project/config/abi-exclusions.conf"
+            [[ -r $candidate ]] && { path=$candidate; break; }
+        done < <(gsa_conf_ladder gsa.conf)
+        if [[ -z $path ]]; then
+            candidate="${SUDO_HOME:-${HOME:-}}/.local/share/gsa/recipes/config/abi-exclusions.conf"
             [[ -r $candidate ]] && path=$candidate
         fi
     fi
