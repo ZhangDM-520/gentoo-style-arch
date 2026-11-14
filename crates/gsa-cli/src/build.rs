@@ -984,7 +984,7 @@ fn record_toolchain(
 /// visible to every consumer (`record_toolchain`, the lane channel). The build
 /// path and its dry-run plan share this ONE seam, so a plan can never name a
 /// compiler the run would refuse — or accept a spelling the run rejects.
-fn pin_toolchain(inv: &Invocation) -> Result<(), Exit> {
+pub(crate) fn pin_toolchain(inv: &Invocation) -> Result<(), Exit> {
     if let Some(value) = &inv.toolchain {
         let toolchain = gsa_model::toolchain::Toolchain::parse(value)
             .map_err(|message| Exit::Usage(format!("--toolchain: {message}")))?;

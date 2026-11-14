@@ -115,6 +115,12 @@ if [[ " $* " == *" --verifysource "* ]]; then
     n=$(cat "$log.count.$id" 2>/dev/null || echo 0)
     n=$((n + 1))
     printf '%s\n' "$n" >"$log.count.$id"
+    # FETCH_CONF records the engine-owned makepkg composite the engine handed
+    # `--verifysource` (§B.11): the FAMILY picks it, so the row is what proves
+    # `--toolchain` reaches a fetch run (I1-ren-2). A distinct $1 kind keeps
+    # every other parser in this fixture reading the same lines as before.
+    conf=$(printf '%s\n' "$@" | awk 'p { print; exit } $0 == "--config" { p = 1 }')
+    printf 'FETCH_CONF %s %s\n' "$id" "${conf:--}" >>"$log"
     printf 'FETCH_START %s %s\n' "$id" "$(date +%s%N)" >>"$log"
     if [[ ${GSA_FAKE_FETCH_FLAKY:-} == "$id" && $n -eq 1 ]]; then
         printf 'stub flake: attempt %s failed\n' "$n" >&2
@@ -543,6 +549,48 @@ if want h; then
         vgrep "$FIXTURE_OUTPUT" -Eq '^p-local skipped [0-9]+ not-a-candidate$' >/dev/null \
             || fail "h: an existing local source stays not-a-candidate: $FIXTURE_OUTPUT"
         assert_no_transactions h
+    )
+fi
+
+if want i; then
+    # ─── i. -Sw takes the modifiers it USES, and its refusal says which ─────
+    # I1-ren-2: `-Sw --toolchain gcc` answered "deferred to a later phase:
+    # --toolchain (a later phase owns it; a build run accepts … --toolchain)" —
+    # a refusal enumerating the very flag it refused, in a build-family run.
+    # Two defects: the blanket build-run roster was printed unconditionally,
+    # and `--toolchain` is a REAL fetch input that was being refused (the
+    # `--verifysource` composite is chosen by the family, §B.11).
+    (
+        set -euo pipefail
+        ws="$fixture/i/ws"
+        fetch_ws "$ws"
+        add_package "$ws" p1 "$gsa_meta_any"$'\nsource=(https://example.invalid/p1-1.0.0.tar.gz)'
+
+        run_engine "$ws" -Sw --toolchain clang p1
+        [ "$FIXTURE_RC" = 0 ] || fail_out "i: -Sw --toolchain clang must be accepted (rc $FIXTURE_RC):"
+        assert_verdict_row p1 ok ok "i: the fetch runs under --toolchain"
+        vgrep "$(cat "$GSA_FAKE_FETCH_LOG")" -q -- 'lane-makepkg-clang.conf' \
+            || fail "i: the fetch was not handed the clang composite — the family chooses it (§B.11):" "$GSA_FAKE_FETCH_LOG"
+
+        # The default family is the OTHER composite, so the pin discriminates
+        # rather than matching some path that happens to be there.
+        : >"$GSA_FAKE_FETCH_LOG"
+        run_engine "$ws" -Sw p1
+        [ "$FIXTURE_RC" = 0 ] || fail_out "i: a plain -Sw must stay accepted:"
+        vgrep "$(cat "$GSA_FAKE_FETCH_LOG")" -q -- 'lane-makepkg-gcc.conf' \
+            || fail "i: a plain -Sw must use the default (gcc) composite:" "$GSA_FAKE_FETCH_LOG"
+
+        # A build-only modifier is still refused — but the message names what
+        # THIS verb takes, never a roster that lists the refused flag.
+        run_engine "$ws" -Sw --lanes 1 p1
+        [ "$FIXTURE_RC" = 2 ] || fail_out "i: -Sw --lanes must be a usage error (rc $FIXTURE_RC):"
+        vgrep "$FIXTURE_OUTPUT" -q -- 'deferred to a later phase: --lanes' \
+            || fail_out "i: the refusal must name the flag through the deferral vocabulary:"
+        vgrep "$FIXTURE_OUTPUT" -q -- 'this verb takes: --state-dir, --toolchain' \
+            || fail_out "i: the refusal must name what -Sw actually takes:"
+        vgrep "$FIXTURE_OUTPUT" -q -- 'accepts --lanes' \
+            && fail_out "i: the refusal claims this verb accepts the flag it refuses:"
+        assert_no_transactions i
     )
 fi
 

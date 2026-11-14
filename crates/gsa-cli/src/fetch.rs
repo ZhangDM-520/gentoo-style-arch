@@ -40,6 +40,11 @@ fn run_fetch_only_inner(
             "selection is mandatory: a fetch never starts without a selection",
         ));
     }
+    // `--toolchain` is a fetch input (I1-ren-2): `--verifysource` is given the
+    // engine-owned makepkg composite, and the family picks WHICH composite, so
+    // a fetch must pin the same override the following build will — otherwise
+    // the two runs fetch and build under different configurations.
+    crate::build::pin_toolchain(inv)?;
     // ── read-only probe + usage preflight, then the gate (§B.10, §G.1) ───
     // A host with no workspace yet preflights nothing, so the gate answers
     // rc 3 instead of an unprivileged state write (round-2 audit,

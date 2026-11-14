@@ -337,10 +337,17 @@ fn classify(inv: &Invocation) -> Disposition {
         flags
     } else if is_upgrade_run {
         install::REAL_UPGRADE_FLAGS.to_vec()
-    } else if is_sync_pass || is_fetch_run {
-        // I4 (2026-10-28): the §B.8 roster is combinable with the families
-        // that act — a sync/fetch run reads the state root and takes the
-        // override like every other state-root surface.
+    } else if is_fetch_run {
+        // §B.10/I4 (2026-10-28): the §B.8 roster is combinable with the
+        // families that act — a fetch run reads the state root. `--toolchain`
+        // is a REAL fetch input, not an inert one: `--verifysource` is given
+        // the engine-owned makepkg composite (`gsa_fetch::engine`), and that
+        // composite is chosen BY the family — so a fetch that ignored the
+        // family fetched under a different configuration than the build that
+        // follows it (I1-ren-2).
+        vec!["--state-dir", "--toolchain"]
+    } else if is_sync_pass {
+        // The sync pass reads the state root and nothing else.
         vec!["--state-dir"]
     } else if is_state_query {
         vec!["--state-dir"]
@@ -397,8 +404,15 @@ fn classify(inv: &Invocation) -> Disposition {
                 "{flag} is not a flag of this -M action ({owner_text}; this one accepts: {here})"
             ));
         }
+        // The parenthetical names THIS verb's accepted modifiers, never a
+        // blanket build-run roster: the old fixed sentence enumerated the
+        // very flag it was refusing (`-Sw --toolchain` refused `--toolchain`
+        // with "a build run accepts … --toolchain", I1-ren-2). Derived from
+        // the same `accepted` vector the gate above uses, so the message can
+        // never claim a flag this verb does not take.
         return Disposition::Deferred(format!(
-            "{flag} (a later phase owns it; a build run accepts --skip, --skip-built, --vcs-skip-tolerance, --no-sync, --allow-broken-rustc, --fail-fast, --lanes, --jobs, --intensity, --state-dir, --build-dir, --no-build-dir-prompt, --toolchain; an install run (-S/-U) additionally accepts --no-register-ignorepkg, --config, --build-dir)"
+            "{flag} (a later phase owns it; this verb takes: {})",
+            accepted.join(", ")
         ));
     }
     let accepts_pacman_args = matches!(inv.family, Family::S | Family::U) && inv.action.is_none();

@@ -365,6 +365,25 @@ is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 | `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
 | `--color auto\|always\|never` | colour for the HUMAN rendering, every family (added 2026-11-11): `auto` (the default) colours only when stdout is a terminal, `TERM` is set and not `dumb`, and `NO_COLOR` is unset or empty; `always` asks for the human rendering WITH colour even through a pipe (the only rendering that has colour), and `never` keeps the terminal's own vocabulary without colour. `--machine` is the machine vocabulary and is never coloured, whatever the flag says — an escape byte in the record, the kv lines or a decision row is a contract break, not a style choice. Colour is never the only signal: every state keeps its word and glyph (`✓ DONE`, `✗ FAILED`, `parked`, `deferred`), so a piped or `NO_COLOR` reader loses nothing. Presentation only, never mirrored (§H.2); resolved once in `gsa-cli::style`, never at a call site |
 
+*Amendment (2026-11-14, per-verb acceptance and the refusal it names).*
+"Combinable with the families that can act" is per verb, not a blanket roster.
+`-Sw` takes exactly `--state-dir` and `--toolchain`: the fetch spawn is handed
+the engine-owned makepkg composite (§B.11), the family CHOOSES which composite,
+and `--verifysource` reads the composite's source-cache half — so a fetch that
+ignored the family could fetch under a different configuration than the build
+that follows it. Every other build-run modifier (`--lanes`/`--jobs`/
+`--intensity`/`--build-dir`/`--no-build-dir-prompt`/`--skip`/…) remains a usage
+error on `-Sw`, because a fetch dispatches no lane and installs nothing.
+
+The refusal must never contradict itself. It previously printed one fixed
+sentence naming the whole build-run roster — including the flag it was
+refusing (`-Sw --toolchain` answered "deferred to a later phase: --toolchain
+(a later phase owns it; a build run accepts … --toolchain)"). It now derives
+its parenthetical from the verb's own accepted set (`this verb takes: …`), the
+same vector the gate tests, so the message cannot claim a flag the verb does
+not take. Pinned by `tests/gsa-fetch-v2.sh` §i (the clang/gcc composite the
+stub is actually handed, plus both halves of the message).
+
 *Amendment (2026-11-08, the build-dir prompt).* A build-shaped run — `-S`,
 `-B`, the `-Su`/`-Syu` stale-set build and their `--dry-run` plans — asks
 which root the build cache lives under BEFORE anything resolves the layout,
