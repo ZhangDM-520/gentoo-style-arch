@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use gsa_state::{BinpkgIndex, Kv, StateRoot};
+use gsa_state::{Kv, StateRoot};
 
 use crate::{protect, MaintCtx, Row};
 
@@ -239,11 +239,10 @@ pub fn set_rows(
 ) -> Result<Vec<Row>, String> {
     let wanted: Vec<String> = if names.is_empty() {
         let mut all: BTreeSet<String> = ctx.project.sets.iter().map(|s| s.name.clone()).collect();
-        if let Ok((pairs, _)) = Kv::list(state) {
-            for (key, _) in pairs {
-                if let Some(name) = key.strip_prefix("set:") {
-                    all.insert(name.to_string());
-                }
+        let (pairs, _corrupt) = Kv::list(state).map_err(|e| e.to_string())?;
+        for (key, _) in pairs {
+            if let Some(name) = key.strip_prefix("set:") {
+                all.insert(name.to_string());
             }
         }
         for name in COMPUTED_SETS {
@@ -301,7 +300,7 @@ pub fn edit_set(
 }
 
 /// One computed set's listing rows (§B.7: listed, never editable).
-fn computed_rows(ctx: &MaintCtx<'_>, state: &StateRoot, name: &str) -> Result<Vec<Row>, String> {
+fn computed_rows(ctx: &MaintCtx<'_>, _state: &StateRoot, name: &str) -> Result<Vec<Row>, String> {
     match name {
         "live-rebuild" => {
             let members: Vec<String> = ctx
@@ -322,33 +321,18 @@ fn computed_rows(ctx: &MaintCtx<'_>, state: &StateRoot, name: &str) -> Result<Ve
             Ok(rows)
         }
         "stale" => {
-            let index = BinpkgIndex::load(state).map_err(|e| e.to_string())?;
-            let mut rows = Vec::new();
-            let mut count = 0;
-            for record in ctx.graph.records() {
-                let id = record.id.as_str();
-                let Some(built) = index.rows_for(id).first().map(|row| row.version.clone()) else {
-                    continue;
-                };
-                let Some(committed) = ctx.committed_version(id) else {
-                    continue;
-                };
-                // Canonical form on BOTH sides (epoch default 0): the index
-                // row stores `0:1.0-1` while the recipe says `1.0-1`, and a
-                // raw string compare called every fresh build stale while
-                // `-Qu` (the same question) stayed silent (2026-11-11
-                // blind review).
-                let built_key = gsa_recipe::pkginfo::canonical_version(&built);
-                let committed_key = gsa_recipe::pkginfo::canonical_version(&committed);
-                if built_key != committed_key {
-                    count += 1;
-                    rows.push(Row::new(
+            let items = crate::version_skew_rows(ctx)?;
+            let count = items.len();
+            let mut rows: Vec<Row> = items
+                .into_iter()
+                .map(|(id, built, committed)| {
+                    Row::new(
                         name,
                         "member",
                         format!("{id} built={built} committed={committed}"),
-                    ));
-                }
-            }
+                    )
+                })
+                .collect();
             let mut out = vec![
                 Row::new(name, "computed", format!("{count} member(s)")),
                 Row::new(

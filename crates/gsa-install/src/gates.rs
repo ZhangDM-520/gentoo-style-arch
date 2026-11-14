@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use gsa_recipe::pkginfo::{member_names, members_with_needed};
 
-use crate::localdb::{provide_covers, soname_stem, LocalDb};
+use crate::localdb::{provide_covers_as, soname_stem, LocalDb};
 use gsa_abi::view::{path_class, ElfClass};
 
 // The base-system soname roster and its predicate are SHARED with the ABI
@@ -130,15 +130,17 @@ fn is_iso_date(text: &str) -> bool {
 /// scan of the `PKGBUILD` for the C (`-fprofile-generate`) or rustc
 /// (`-Cprofile-generate` / `-C profile-generate`) spelling — never shell, and
 /// whole-file so a flag inside `build()` is seen (the fish gate greps the
-/// file). A missing/unreadable recipe is not instrumented (no witness).
-pub fn pgo_instrumented_recipe(recipe_dir: Option<&Path>) -> bool {
+/// file). An absent `PKGBUILD` is not instrumented (`Ok(false)`); an
+/// unreadable `PKGBUILD` propagates `Err` so a damaged/unreadable file can
+/// never silently bypass the PGO payload gate (`F-INS-02`).
+pub fn pgo_instrumented_recipe(recipe_dir: Option<&Path>) -> Result<bool, String> {
     let Some(dir) = recipe_dir else {
-        return false;
+        return Ok(false);
     };
-    let Ok(text) = std::fs::read_to_string(dir.join("PKGBUILD")) else {
-        return false;
+    let Some(text) = gsa_model::read::optional(&dir.join("PKGBUILD"))? else {
+        return Ok(false);
     };
-    pgo_flag_in(&text)
+    Ok(pgo_flag_in(&text))
 }
 
 fn pgo_flag_in(text: &str) -> bool {
@@ -272,17 +274,21 @@ pub fn needed_misses(
             if base_lib_ok(&soname) || exclusions.covers(&soname) {
                 continue;
             }
-            if own_provides.iter().any(|p| provide_covers(p, &soname)) {
+            // Every provide and file-truth resolution runs in the CONSUMER
+            // member's ELF class: `usr/lib32/*` members resolve `-32` / lib32
+            // provides and files; `usr/lib/*` members never resolve through
+            // 32-bit `-32` provides or lib32 bytes (`F-INS-04`).
+            let class = path_class(&member);
+            if own_provides
+                .iter()
+                .any(|p| provide_covers_as(p, &soname, class))
+            {
                 continue;
             }
-            // Every file-truth resolution runs in the CONSUMER member's ELF
-            // class: `usr/lib32/*` members resolve lib32-owned/shipped
-            // files, `usr/lib/*` members never resolve through lib32 bytes.
-            let class = path_class(&member);
             if shipped.ships_as(&soname, class) {
                 continue;
             }
-            if db.provides_cover(&soname) || db.owns_file_as(&soname, class) {
+            if db.provides_cover_as(&soname, class) || db.owns_file_as(&soname, class) {
                 continue;
             }
             misses.push(NeededMiss {

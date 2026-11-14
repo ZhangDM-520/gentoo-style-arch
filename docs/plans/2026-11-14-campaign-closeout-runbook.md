@@ -1,5 +1,13 @@
 # Plan: campaign close-out, openssl swap, system upgrade, and engine review consolidation
 
+> **CLOSED 2026-11-14.** All seven tasks ran; T6's `/code-review` gate closed at
+> `open_n=0, blocking_n=0, std=pass, spec=pass` and the work is PR #1. The
+> audit clone this plan cites (`~/Projects/.workspace/PERMANENT/gentoo-style-arch`)
+> is **retired**: its diff is byte-identical to
+> `PERMANENT/gsa-campaign/audit-round2.patch`, and its report and marker are
+> archived in `PERMANENT/gsa-campaign/audit-retired/` (sha256 recorded). The
+> paths below are the SITUATION AT PLAN TIME, never live pointers.
+
 Written 2026-11-14. Owner is offline until this plan's report lands; all action
 permitted. **This file is the runbook: re-read it at every resumed context.**
 

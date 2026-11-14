@@ -103,7 +103,7 @@ pub(crate) fn supports(command: &crate::Command) -> bool {
 pub(crate) fn apply(
     inv: &mut Invocation,
     command: &crate::Command,
-) -> Result<Option<Staged>, String> {
+) -> Result<Option<Staged>, crate::exit::Exit> {
     if inv.targets.is_empty() {
         return Ok(None);
     }
@@ -135,7 +135,14 @@ pub(crate) fn apply(
     let ws_root = crate::resolve_root(false, inv.state_dir.as_deref()).ok();
     // I5: a kv user set is a workspace answer too (@name resolves over
     // kv user-sets ∪ config/sets/).
-    let user_sets = crate::select::load_user_sets(inv);
+    //
+    // A kv read FAILURE is not a workspace answer, and it is not this
+    // function's usage class either: contract §C.2 makes a broken kv store a
+    // startup refusal (rc 3, `startup-refused`), exactly like every other
+    // verb's user-sets read. Downgrading it to `Err(String)` here reported
+    // that refusal as rc 2/"usage" with no record (round-3 audit,
+    // SPEC-R3-01).
+    let user_sets = crate::select::load_user_sets(inv).map_err(crate::select::user_sets_exit)?;
     let answered = workspace_answers(&candidates, ws_root.as_deref(), &user_sets);
     for (token, kind) in inv.targets.iter().zip(&kinds) {
         match kind {
@@ -153,11 +160,11 @@ pub(crate) fn apply(
         return Ok(None);
     }
     if !workspace.is_empty() {
-        return Err(format!(
+        return Err(crate::exit::Exit::Usage(format!(
             "standalone targets ({}) cannot be combined with workspace references ({}) in one run",
             join_names(standalone.iter().map(|(t, _)| t.as_str())),
             join_names(workspace.iter().map(|t| t.as_str())),
-        ));
+        )));
     }
 
     // Ephemeral staging when the run writes nothing anyway: a --dry-run
@@ -176,17 +183,23 @@ pub(crate) fn apply(
         ))
     } else {
         gsa_model::config::resolve_state_dir(inv.state_dir.as_deref())
-            .map_err(|e| format!("cannot resolve the state root for staging: {e}"))?
+            .map_err(|e| {
+                crate::exit::Exit::Usage(format!("cannot resolve the state root for staging: {e}"))
+            })?
             .join("standalone")
     };
 
     // Delete the destination first (change hygiene): staging is derived
     // state and is rebuilt wholesale on every run.
     if root.exists() {
-        std::fs::remove_dir_all(&root)
-            .map_err(|e| format!("cannot clear the staging area {}: {e}", root.display()))?;
+        std::fs::remove_dir_all(&root).map_err(|e| {
+            crate::exit::Exit::Usage(format!(
+                "cannot clear the staging area {}: {e}",
+                root.display()
+            ))
+        })?;
     }
-    let ids = stage(&standalone, &root, ws_root.as_deref())?;
+    let ids = stage(&standalone, &root, ws_root.as_deref()).map_err(crate::exit::Exit::Usage)?;
     for ((token, _), id) in standalone.iter().zip(&ids) {
         eprintln!(
             "gsa: staged standalone target '{}' as '{id}'",

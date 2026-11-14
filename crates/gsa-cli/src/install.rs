@@ -463,10 +463,9 @@ fn stage_groups(
         if groups.iter().any(|g| g.iter().any(|(_, a)| a == archive)) {
             continue;
         }
-        let wave = plan
-            .waves
-            .iter()
-            .position(|w| w.provider == *id || w.members.iter().any(|m| &m.id == id));
+        let wave = plan.waves.iter().position(|w| {
+            w.providers.iter().any(|p| p == id) || w.members.iter().any(|m| &m.id == id)
+        });
         match wave {
             Some(wi) if wi < groups.len() => groups[wi].push((id.clone(), archive.clone())),
             _ => leftover.push((id.clone(), archive.clone())),
@@ -530,7 +529,7 @@ fn grouped_txn_outcome_rows(
 fn wave_heal_names(graph: &Graph<'_>, plan: &WavePlan, candidates: &[Candidate]) -> Vec<String> {
     let mut ids: BTreeSet<String> = BTreeSet::new();
     for wave in &plan.waves {
-        ids.insert(wave.provider.clone());
+        ids.extend(wave.providers.iter().cloned());
         ids.extend(wave.members.iter().map(|m| m.id.clone()));
     }
     let mut names = ids.clone();
@@ -611,8 +610,22 @@ fn run_upgrade_inner(
         return Err(Exit::Usage("selection resolved to no packages".to_string()));
     }
 
+    // ── privilege gate (contract §B.10): every usage preflight this family
+    //    has is the argv check above, so the gate answers BEFORE the
+    //    workspace is resolved — an unprivileged `-U` refuses rc 3 without
+    //    reaching for the store, and `-U --dry-run` never fetches it
+    //    (round-2 audit, F-R2-C-01).
+    if let Some(exit) = crate::privilege_gate(
+        &inv.spelling(),
+        crate::invocation_privilege(inv, &crate::Command::Upgrade),
+        true,
+        err,
+    ) {
+        return Err(exit);
+    }
+
     // ── workspace, topology (usage class: rc 2) ─────────────────────────
-    let root = crate::resolve_workspace(inv, err)?;
+    let root = crate::resolve_workspace_for_run(inv, err)?;
     let project = load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
     let graph = Graph::build(&project.topology.records)
         .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
@@ -622,18 +635,8 @@ fn run_upgrade_inner(
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
-
-    // ── privilege gate (contract §B.10; after every usage preflight) ─────
-    if let Some(exit) = crate::privilege_gate(
-        &inv.spelling(),
-        crate::invocation_privilege(inv, &crate::Command::Upgrade),
-        true,
-        err,
-    ) {
-        return Err(exit);
-    }
 
     // §E.5: the build-side park state of this run's state root. A subject
     // the build path parked (`waits-on-failed`/`waits-on-deferred` or a
@@ -885,20 +888,29 @@ fn run_upgrade_inner(
     }
     // Wave members the user did not name join the plan as candidates —
     // their archive sets must resolve, or the wave cannot land wholly and
-    // the member is named `refuse abi-consumer-uncovered` (§E.3).
+    // the member is named `refuse abi-consumer-uncovered` (§E.3). Every
+    // provider of a merged wave is named: dropping the secondary ones hid
+    // which moves the member was riding (round-2 audit, F-R2-B-02).
     for id in &swap_plan.additions {
-        let provider = swap_plan
+        let providers: Vec<String> = swap_plan
             .waves
             .iter()
             .find(|w| w.members.iter().any(|m| &m.id == id))
-            .map(|w| w.provider.clone())
-            .unwrap_or_else(|| "-".to_string());
+            .map(|w| w.providers.clone())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| vec!["-".to_string()]);
+        let uncovered = || {
+            Item::Rejected(
+                providers
+                    .iter()
+                    .map(|provider| gsa_abi::abi_uncovered_row(provider, id))
+                    .collect(),
+            )
+        };
         let recipe_dir = match graph.index_of(id) {
             Some(idx) => root.join(&graph.record(idx).path),
             None => {
-                items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
-                    &provider, id,
-                )]));
+                items.push(uncovered());
                 continue;
             }
         };
@@ -910,9 +922,7 @@ fn run_upgrade_inner(
             {
                 items.push(Item::Recipe(found.candidates));
             }
-            _ => items.push(Item::Rejected(vec![gsa_abi::abi_uncovered_row(
-                &provider, id,
-            )])),
+            _ => items.push(uncovered()),
         }
     }
     candidates = items
@@ -938,7 +948,7 @@ fn run_upgrade_inner(
         // `later_installs` stays empty), so no marker key is ever resolved.
         recipe_of_name: Default::default(),
         parks: parks.iter().map(|(s, r)| (s.clone(), r.clone())).collect(),
-        workspace_names: workspace_output_names_of_root(&root),
+        workspace_names: workspace_output_names(&db),
         abi_exclusions: workspace_exclusions(&root),
         wave_heal,
         state_dir: Some(state_dir.clone()),
@@ -1028,10 +1038,7 @@ fn run_upgrade_inner(
                 reason: "dry-run".to_string(),
             })
             .collect();
-        let run_outcome = RunOutcome {
-            outcome: "planned",
-            rc: 0,
-        };
+        let (run_outcome, dry_rc) = dry_run_outcome(&rows);
         let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
         // A dry run executes nothing: the install-time QA report surface
         // (contract §E.4) belongs to a run that reached its record finish.
@@ -1041,7 +1048,7 @@ fn run_upgrade_inner(
             render::render_run_prose(&record, &log_dir, &[], None)
         );
         let _ = write!(out, "{}", record.render_machine());
-        return Ok(0);
+        return Ok(dry_rc);
     }
 
     // ── a refusing plan is pacman-free end to end (rule 25(h)) ──────────
@@ -1107,10 +1114,7 @@ fn run_upgrade_inner(
     let conf = conf_override
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONF));
-    let register = !inv
-        .deferred_flags
-        .iter()
-        .any(|f| f == "--no-register-ignorepkg");
+    let register = !inv.no_register_ignorepkg;
     // The registration's write set, kept for the failed-transaction
     // rollback (rule 9's complement): what this run added, split by
     // transaction role.
@@ -1327,31 +1331,11 @@ fn run_upgrade_inner(
     }
 
     if interrupted {
-        // §I.3: the full record still runs; the run exits 130.
+        // §I.3: the full record still runs; the run exits 130. Any wave that
+        // already landed keeps `succeeded`; unlanded install rows stay
+        // `interrupted`.
         let signal_code = signals::signal_lane_code(signal);
-        let outcomes = rows
-            .iter()
-            .map(|row| {
-                let pkg = record::subject_id(&row.subject);
-                if row.decision == Decision::Install {
-                    OutcomeRow {
-                        pkg,
-                        status: RowStatus::Interrupted,
-                        rc: Some(signal_code),
-                        dur: None,
-                        reason: "interrupted-mid-build".to_string(),
-                    }
-                } else {
-                    OutcomeRow {
-                        pkg,
-                        status: RowStatus::NeverStarted,
-                        rc: None,
-                        dur: None,
-                        reason: "interrupted-before-start".to_string(),
-                    }
-                }
-            })
-            .collect();
+        let outcomes = interrupted_txn_outcome_rows(&paired, &fates, signal_code, dur);
         return Ok(finish_record(
             inv, out, err, plan, outcomes, false, true, &log_dir,
         ));
@@ -1361,6 +1345,62 @@ fn run_upgrade_inner(
     Ok(finish_record(
         inv, out, err, plan, outcomes, false, false, &log_dir,
     ))
+}
+
+fn dry_run_outcome(rows: &[DecisionRow]) -> (RunOutcome, i32) {
+    // §G.1: a refused install is the refusal class (rc 3), the same code the
+    // real `-U` exits — `rows_rc` answers §E.5's `--install-decide` code
+    // (rc 1) and is NOT this decision's rc (round-2 audit, F-R2-C-05).
+    let rc = if rows.iter().any(|r| r.decision == Decision::Refuse) {
+        crate::RC_REFUSED
+    } else {
+        0
+    };
+    let outcome = if rc == 0 { "planned" } else { "refused" };
+    (RunOutcome { outcome, rc }, rc)
+}
+
+fn interrupted_txn_outcome_rows(
+    paired: &[(DecisionRow, Option<Candidate>)],
+    fates: &BTreeMap<PathBuf, GroupFate>,
+    signal_code: i32,
+    dur: i64,
+) -> Vec<OutcomeRow> {
+    paired
+        .iter()
+        .map(|(row, candidate)| {
+            let pkg = record::subject_id(&row.subject);
+            if row.decision != Decision::Install {
+                return OutcomeRow {
+                    pkg,
+                    status: RowStatus::NeverStarted,
+                    rc: None,
+                    dur: None,
+                    reason: "interrupted-before-start".to_string(),
+                };
+            }
+            if matches!(
+                candidate.as_ref().and_then(|c| fates.get(&c.archive)),
+                Some(GroupFate::Landed)
+            ) {
+                OutcomeRow {
+                    pkg,
+                    status: RowStatus::Succeeded,
+                    rc: Some(0),
+                    dur: Some(dur),
+                    reason: "ok".to_string(),
+                }
+            } else {
+                OutcomeRow {
+                    pkg,
+                    status: RowStatus::Interrupted,
+                    rc: Some(signal_code),
+                    dur: None,
+                    reason: "interrupted-mid-build".to_string(),
+                }
+            }
+        })
+        .collect()
 }
 
 /// One `refuse` row for the "plan failed without a row" class (§E.3).
@@ -1384,8 +1424,13 @@ fn plan_failed_row(message: &str) -> DecisionRow {
 /// review, 2026-11-11).
 fn parked_subjects(state_dir: &Path) -> Result<BTreeMap<String, String>, String> {
     let root = gsa_state::StateRoot::open_readonly(state_dir);
-    let (records, _corrupt) = gsa_state::RunHistory::read(&root)
+    let (records, corrupt) = gsa_state::RunHistory::read(&root)
         .map_err(|e| format!("cannot read the run history — the park state is unknown: {e}"))?;
+    if let Some(refusal) = gsa_state::CorruptLine::refusal(&corrupt, "the run history") {
+        return Err(format!(
+            "cannot read the run history — the park state is unknown: {refusal}"
+        ));
+    }
     let mut parks: BTreeMap<String, String> = BTreeMap::new();
     for record in &records {
         for row in &record.outcomes {
@@ -1492,13 +1537,13 @@ pub(crate) fn workspace_output_names(db: &RecipeDb) -> std::collections::BTreeSe
     names
 }
 
-/// [`workspace_output_names`] from a workspace root — an unresolvable
-/// workspace stands down to the empty universe (standalone `-U`).
-pub(crate) fn workspace_output_names_of_root(root: &Path) -> std::collections::BTreeSet<String> {
-    match RecipeDb::load(root, &[]) {
-        Ok(db) => workspace_output_names(&db),
-        Err(_) => std::collections::BTreeSet::new(),
-    }
+/// [`workspace_output_names`] from a workspace root — fails closed if the
+/// workspace metadata itself cannot be loaded.
+pub(crate) fn workspace_output_names_of_root(
+    root: &Path,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let db = RecipeDb::load(root, &[]).map_err(|e| e.to_string())?;
+    Ok(workspace_output_names(&db))
 }
 
 /// Workspace output name → owning recipe id (rule 25(d), §E.3 gap-G1
@@ -1605,7 +1650,11 @@ fn finish_record(
             qa_targets.push(target);
         }
     }
-    let qa = crate::qa::report_lines(&qa_targets, inv.state_dir.as_deref());
+    let qa = crate::qa::report_lines(
+        &qa_targets,
+        inv.state_dir.as_deref(),
+        inv.config.as_deref().map(Path::new),
+    );
     let record = record::build_txn_record(inv, &inv.targets, plan, outcomes, &run_outcome);
     let _ = write!(
         out,
@@ -1669,6 +1718,8 @@ fn execute_supervised(
         let _ = write_txn_outcome(&result_path, &outcome);
         std::process::exit(0);
     }
+    let _signal_guard = pipe.guard;
+    let pipe_read = pipe.read;
     let pid = match forked {
         Forked::Parent { pid } => pid,
         Forked::Child => unreachable!("the child exited above"),
@@ -1685,7 +1736,7 @@ fn execute_supervised(
         let tx = tx.clone();
         std::thread::spawn(move || {
             use std::io::Read;
-            let mut read = pipe.read;
+            let mut read = pipe_read;
             let mut buf = [0u8; 64];
             loop {
                 match read.read(&mut buf) {
@@ -1906,6 +1957,9 @@ fn run_install_decide_inner(
             archive: path,
         });
     }
+    // ONE read-only workspace resolution for both fields below (round-2
+    // audit, F-R2-C-09: it ran twice, so the two consumers could disagree).
+    let workspace_root = crate::resolve_root(false, None);
     let ctx = DecisionContext {
         mode,
         empty_list: match mode {
@@ -1938,17 +1992,47 @@ fn run_install_decide_inner(
                     return Ok(1);
                 }
             },
-            Err(_) => Vec::new(),
+            Err(message) => {
+                let _ = write!(
+                    out,
+                    "{}",
+                    gsa_install::render_rows(&[plan_failed_row(&message)])
+                );
+                return Ok(1);
+            }
         },
-        workspace_names: crate::resolve_root(false, None)
-            .ok()
-            .as_deref()
-            .map(workspace_output_names_of_root)
-            .unwrap_or_default(),
-        abi_exclusions: crate::resolve_root(false, None)
-            .ok()
-            .as_deref()
-            .and_then(workspace_exclusions),
+        workspace_names: match &workspace_root {
+            Ok(root) => match workspace_output_names_of_root(root) {
+                Ok(names) => names,
+                Err(message) => {
+                    let _ = write!(
+                        out,
+                        "{}",
+                        gsa_install::render_rows(&[plan_failed_row(&message)])
+                    );
+                    return Ok(1);
+                }
+            },
+            Err(crate::RootFailure::NotFound(_)) => Default::default(),
+            Err(err) => {
+                let msg = match err {
+                    crate::RootFailure::Usage(m) | crate::RootFailure::NotFound(m) => m.clone(),
+                    crate::RootFailure::NeedsRoot => {
+                        "workspace resolution requires root".to_string()
+                    }
+                };
+                let _ = write!(
+                    out,
+                    "{}",
+                    gsa_install::render_rows(&[plan_failed_row(&msg)])
+                );
+                return Ok(1);
+            }
+        },
+        abi_exclusions: match &workspace_root {
+            Ok(root) => workspace_exclusions(root),
+            Err(_) => None,
+        },
         wave_heal: Vec::new(),
         // The seam is order-blind AND index-blind by design (§D.1): the
         // §J.4 index gate stands down (`state_dir: None`) and nothing here
@@ -2387,5 +2471,96 @@ mod tests {
             ("app1.arch", GroupFate::Landed),
         ]);
         assert_eq!(registered.names_to_rollback(&fates), vec!["lib2", "app2"]);
+    }
+
+    #[test]
+    fn parked_subjects_refuses_corrupt_run_history() {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-cli-parked-corrupt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("runs")).unwrap();
+        std::fs::write(dir.join("runs/history.jsonl"), "{not json\n").unwrap();
+        let err = parked_subjects(&dir).unwrap_err();
+        assert!(
+            err.contains("run history") && err.contains("unreadable"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dry_run_outcome_returns_the_refusal_rc_when_any_row_refuses() {
+        let refused = vec![
+            DecisionRow {
+                subject: "okpkg".to_string(),
+                decision: Decision::Install,
+                reason: "ok".to_string(),
+            },
+            DecisionRow {
+                subject: "badpkg".to_string(),
+                decision: Decision::Refuse,
+                reason: "abi-soname libfoo.so.1".to_string(),
+            },
+        ];
+        let (outcome, rc) = dry_run_outcome(&refused);
+        assert_eq!(rc, crate::RC_REFUSED, "§G.1: a refusal is rc 3, not rc 1");
+        assert_eq!(outcome.outcome, "refused");
+        assert_eq!(outcome.rc, crate::RC_REFUSED);
+
+        let clean = vec![DecisionRow {
+            subject: "okpkg".to_string(),
+            decision: Decision::Install,
+            reason: "ok".to_string(),
+        }];
+        let (outcome, rc) = dry_run_outcome(&clean);
+        assert_eq!(rc, 0);
+        assert_eq!(outcome.outcome, "planned");
+    }
+
+    #[test]
+    fn interrupted_txn_preserves_already_landed_waves() {
+        let cand = |name: &str| Candidate {
+            recipe_dir: None,
+            recipe_trusted: true,
+            archive: PathBuf::from(name),
+        };
+        let paired = vec![
+            (
+                DecisionRow {
+                    subject: "wave1-pkg".to_string(),
+                    decision: Decision::Install,
+                    reason: "ok".to_string(),
+                },
+                Some(cand("wave1.pkg.tar.zst")),
+            ),
+            (
+                DecisionRow {
+                    subject: "wave2-pkg".to_string(),
+                    decision: Decision::Install,
+                    reason: "ok".to_string(),
+                },
+                Some(cand("wave2.pkg.tar.zst")),
+            ),
+            (
+                DecisionRow {
+                    subject: "skip-pkg".to_string(),
+                    decision: Decision::Skip,
+                    reason: "same-version".to_string(),
+                },
+                Some(cand("skip.pkg.tar.zst")),
+            ),
+        ];
+        let fates = fate_map(&[("wave1.pkg.tar.zst", GroupFate::Landed)]);
+        let rows = interrupted_txn_outcome_rows(&paired, &fates, 130, 7);
+        assert_eq!(rows[0].status, RowStatus::Succeeded);
+        assert_eq!(rows[0].rc, Some(0));
+        assert_eq!(rows[1].status, RowStatus::Interrupted);
+        assert_eq!(rows[1].rc, Some(130));
+        assert_eq!(rows[2].status, RowStatus::NeverStarted);
     }
 }

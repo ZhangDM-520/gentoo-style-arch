@@ -84,12 +84,6 @@ impl RecipeProbe for ConstProbe {
 
 const GROUP_ROSTER: &str = "git,stable,core,misc,app,build-tools";
 
-fn valid_id_chars(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
-}
-
 /// The loaded topology: records in file order plus the indexes the loader
 /// validated (unique ids, resolvable build-order edges).
 #[derive(Clone, Debug, Default)]
@@ -147,13 +141,13 @@ pub fn parse_topology(
             ));
         }
         let id = fields[0];
-        if !valid_id_chars(id) {
-            return Err(TopologyError::at(
+        let recipe_id = RecipeId::new(id).map_err(|_| {
+            TopologyError::at(
                 file,
                 line_no,
                 format!("invalid topology record id '{id}' (allowed: A-Za-z0-9._+-): {line}"),
-            ));
-        }
+            )
+        })?;
         if topo.by_id.contains_key(id) {
             return Err(TopologyError::at(
                 file,
@@ -307,9 +301,7 @@ pub fn parse_topology(
         }
 
         let record = TopologyRecord {
-            id: RecipeId::new(id).map_err(|_| {
-                TopologyError::at(file, line_no, format!("invalid topology record id '{id}'"))
-            })?,
+            id: recipe_id,
             path: path.to_string(),
             groups,
             edges,
@@ -540,7 +532,7 @@ pub fn parse_abi_exclusions(content: &str, file: &str) -> Result<Vec<AbiExclusio
         let id = fields[0].trim();
         let reason = fields[1].trim();
         let review_by = fields[2].trim();
-        if !valid_id_chars(id) {
+        if RecipeId::new(id).is_err() {
             return Err(TopologyError::at(
                 file,
                 line_no,
@@ -600,7 +592,7 @@ pub struct UserSet {
 
 /// Parse one set file's content. Refs are kept verbatim (one per line).
 pub fn parse_set_file(name: &str, content: &str, file: &str) -> Result<UserSet, TopologyError> {
-    if !valid_id_chars(name) {
+    if RecipeId::new(name).is_err() {
         return Err(TopologyError::whole(
             file,
             format!("invalid set name '{name}' (allowed: A-Za-z0-9._+-)"),
@@ -677,55 +669,90 @@ fn read_file(path: &Path) -> Result<String, TopologyError> {
 pub fn load_project(root: &Path) -> Result<ProjectConfig, TopologyError> {
     let config_dir = root.join("config");
     let topology_path = config_dir.join("topology.conf");
-    if !topology_path.is_file() {
-        return Err(TopologyError::whole(
-            topology_path.to_string_lossy().as_ref(),
-            format!(
-                "topology file not found ({})",
-                gsa_model::config::WORKSPACE_HINT
-            ),
-        ));
-    }
+    let topology_text = match gsa_model::read::load(&topology_path) {
+        gsa_model::read::Loaded::Present(text) => text,
+        gsa_model::read::Loaded::Absent => {
+            return Err(TopologyError::whole(
+                topology_path.to_string_lossy().as_ref(),
+                format!(
+                    "topology file not found ({})",
+                    gsa_model::config::WORKSPACE_HINT
+                ),
+            ));
+        }
+        gsa_model::read::Loaded::Broken(reason) => {
+            return Err(TopologyError::whole(
+                topology_path.to_string_lossy().as_ref(),
+                reason,
+            ));
+        }
+    };
     let defaults_path = config_dir.join("build-defaults.conf");
     // The store-compatibility gate speaks FIRST: defaults are parsed before a
     // single topology record, so a store written for a newer engine is named as
     // such instead of being reported through whatever record shape it changed.
     let defaults = parse_build_defaults(&read_file(&defaults_path)?, "config/build-defaults.conf")?;
 
-    let topology = parse_topology(
-        &read_file(&topology_path)?,
-        "config/topology.conf",
-        &FsProbe { root },
-    )?;
+    let topology = parse_topology(&topology_text, "config/topology.conf", &FsProbe { root })?;
 
     let exclusions_path = config_dir.join("abi-exclusions.conf");
-    let abi_exclusions = if exclusions_path.is_file() {
-        parse_abi_exclusions(&read_file(&exclusions_path)?, "config/abi-exclusions.conf")?
-    } else {
-        Vec::new()
+    let abi_exclusions = match gsa_model::read::optional(&exclusions_path) {
+        Ok(Some(text)) => parse_abi_exclusions(&text, "config/abi-exclusions.conf")?,
+        Ok(None) => Vec::new(),
+        Err(reason) => {
+            return Err(TopologyError::whole(
+                exclusions_path.to_string_lossy().as_ref(),
+                reason,
+            ));
+        }
     };
 
     let sets_dir = config_dir.join("sets");
     let mut sets = Vec::new();
-    if sets_dir.is_dir() {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(&sets_dir)
-            .map_err(|e| {
+    match std::fs::symlink_metadata(&sets_dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(TopologyError::whole(
+                sets_dir.to_string_lossy().as_ref(),
+                format!("cannot inspect sets directory: {e}"),
+            ));
+        }
+        Ok(_) => {
+            let mut entries: Vec<PathBuf> = Vec::new();
+            let dir_iter = std::fs::read_dir(&sets_dir).map_err(|e| {
                 TopologyError::whole(
                     sets_dir.to_string_lossy().as_ref(),
                     format!("cannot read sets directory: {e}"),
                 )
-            })?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        entries.sort();
-        for path in entries {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let file = format!("config/sets/{name}");
-            sets.push(parse_set_file(&name, &read_file(&path)?, &file)?);
+            })?;
+            for entry in dir_iter {
+                let entry = entry.map_err(|e| {
+                    TopologyError::whole(
+                        sets_dir.to_string_lossy().as_ref(),
+                        format!("cannot read sets directory entry: {e}"),
+                    )
+                })?;
+                let path = entry.path();
+                let meta = std::fs::symlink_metadata(&path).map_err(|e| {
+                    TopologyError::whole(
+                        path.to_string_lossy().as_ref(),
+                        format!("cannot inspect set entry: {e}"),
+                    )
+                })?;
+                if meta.is_dir() {
+                    continue;
+                }
+                entries.push(path);
+            }
+            entries.sort();
+            for path in entries {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let file = format!("config/sets/{name}");
+                sets.push(parse_set_file(&name, &read_file(&path)?, &file)?);
+            }
         }
     }
 
@@ -1013,6 +1040,34 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
             .unwrap_err()
             .to_string()
             .contains("collides with a group name"));
+    }
+
+    #[test]
+    fn broken_exclusions_or_sets_fail_instead_of_silently_absent() {
+        let dir = std::env::temp_dir().join(format!("gsa-topo-broken-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("config/sets")).unwrap();
+        std::fs::create_dir_all(dir.join("packages/a")).unwrap();
+        std::fs::write(dir.join("packages/a/PKGBUILD"), "pkgname=a\n").unwrap();
+        std::fs::write(dir.join("config/build-defaults.conf"), "store_format = 1\n").unwrap();
+        std::fs::write(dir.join("config/topology.conf"), "a|packages/a|core|\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), dir.join("config/abi-exclusions.conf"))
+            .unwrap();
+
+        let err = load_project(&dir).unwrap_err();
+        assert!(
+            err.to_string().contains("abi-exclusions") || err.to_string().contains("cannot read"),
+            "{err}"
+        );
+
+        std::fs::remove_file(dir.join("config/abi-exclusions.conf")).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), dir.join("config/sets/broken")).unwrap();
+        let err = load_project(&dir).unwrap_err();
+        assert!(
+            err.to_string().contains("sets") || err.to_string().contains("cannot read"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

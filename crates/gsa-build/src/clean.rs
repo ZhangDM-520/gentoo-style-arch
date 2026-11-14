@@ -40,35 +40,7 @@ pub fn clean_recipe(
     report: &mut CleanReport,
 ) {
     for name in ["src", "pkg", "build"] {
-        let path = recipe_dir.join(name);
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        // A symlinked RECIPE directory is the escape this refuses: the join
-        // carries no `..`, yet `remove_dir_all` follows the link and deletes
-        // the target's tree. The guard resolves the path (`gsa_model::guard`,
-        // blind review 2026-11-11).
-        if !gsa_model::guard::delete_allowed(workspace_root, &path) {
-            report.errors.push(format!(
-                "refusing to prune {}: outside {}",
-                path.display(),
-                workspace_root.display()
-            ));
-            continue;
-        }
-        let removed = if meta.file_type().is_symlink() {
-            std::fs::remove_file(&path)
-        } else {
-            std::fs::remove_dir_all(&path)
-        };
-        match removed {
-            Ok(()) => report.removed.push(path.display().to_string()),
-            Err(error) => {
-                report
-                    .errors
-                    .push(format!("cannot remove {}: {e}", path.display(), e = error))
-            }
-        }
+        prune_tree(workspace_root, &recipe_dir.join(name), report);
     }
     remove_archives_in(recipe_dir, &|_| true, report);
     if let Some(layout) = layout {
@@ -81,27 +53,45 @@ pub fn clean_recipe(
             &|path| archive_belongs_to_outputs(path, outputs, version.as_ref()),
             report,
         );
+        // `pkgbase` is committed `.SRCINFO` data: `pkgbase = ../../x`
+        // used to delete a sibling cache tree as root.
         for tree in [layout.builddir.join(pkgbase), layout.pkgdir.join(pkgbase)] {
-            if !tree.exists() {
-                continue;
-            }
-            // `pkgbase` is committed `.SRCINFO` data: `pkgbase = ../../x`
-            // used to delete a sibling cache tree as root.
-            if !gsa_model::guard::delete_allowed(&layout.root, &tree) {
-                report.errors.push(format!(
-                    "refusing to prune {}: outside {}",
-                    tree.display(),
-                    layout.root.display()
-                ));
-                continue;
-            }
-            match std::fs::remove_dir_all(&tree) {
-                Ok(()) => report.removed.push(tree.display().to_string()),
-                Err(error) => report
-                    .errors
-                    .push(format!("cannot remove {}: {error}", tree.display())),
-            }
+            prune_tree(&layout.root, &tree, report);
         }
+    }
+}
+
+/// Remove one build/pkg/src directory or symlink under `scope_root`, unlinking
+/// symlinks without following them and reporting non-`NotFound` I/O errors.
+fn prune_tree(scope_root: &Path, path: &Path, report: &mut CleanReport) {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            report
+                .errors
+                .push(format!("cannot stat {}: {error}", path.display()));
+            return;
+        }
+    };
+    if !gsa_model::guard::delete_allowed(scope_root, path) {
+        report.errors.push(format!(
+            "refusing to prune {}: outside {}",
+            path.display(),
+            scope_root.display()
+        ));
+        return;
+    }
+    let removed = if meta.file_type().is_symlink() {
+        std::fs::remove_file(path)
+    } else {
+        std::fs::remove_dir_all(path)
+    };
+    match removed {
+        Ok(()) => report.removed.push(path.display().to_string()),
+        Err(error) => report
+            .errors
+            .push(format!("cannot remove {}: {error}", path.display())),
     }
 }
 
@@ -127,10 +117,26 @@ fn archive_belongs_to_outputs(
 }
 
 fn remove_archives_in(dir: &Path, selected: &dyn Fn(&Path) -> bool, report: &mut CleanReport) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            report
+                .errors
+                .push(format!("cannot read {}: {error}", dir.display()));
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry_res in entries {
+        let entry = match entry_res {
+            Ok(entry) => entry,
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("cannot read entry in {}: {error}", dir.display()));
+                continue;
+            }
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
         if !name.ends_with(".pkg.tar.zst") || !selected(&path) {
@@ -151,7 +157,10 @@ fn remove_archives_in(dir: &Path, selected: &dyn Fn(&Path) -> bool, report: &mut
                             .errors
                             .push(format!("cannot remove {}: {error}", sidecar.display())),
                     },
-                    Err(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => report
+                        .errors
+                        .push(format!("cannot stat {}: {error}", sidecar.display())),
                 }
             }
             Err(error) => report
@@ -336,6 +345,42 @@ mod tests {
             "the recipe-dir prune must take the sidecar exactly when its archive goes"
         );
         assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clean_removes_dangling_cache_symlinks_and_reports_io_errors() {
+        let (dir, recipe, layout) = scratch_layout("symlink-and-err");
+        std::fs::create_dir_all(&layout.builddir).unwrap();
+        std::fs::create_dir_all(&layout.pkgdir).unwrap();
+        let build_link = layout.builddir.join("python");
+        std::os::unix::fs::symlink(dir.join("does-not-exist"), &build_link).unwrap();
+        // Make pkgdest a regular file so read_dir fails with ENOTDIR (not NotFound).
+        let _ = std::fs::remove_dir_all(&layout.pkgdest);
+        std::fs::write(&layout.pkgdest, "not a dir").unwrap();
+
+        let mut report = CleanReport::default();
+        clean_recipe(
+            &dir,
+            &recipe,
+            "python",
+            &["python".to_string()],
+            Some(&layout),
+            &mut report,
+        );
+        assert!(
+            std::fs::symlink_metadata(&build_link).is_err(),
+            "dangling symlink under builddir must be unlinked, not skipped"
+        );
+        assert!(
+            report.removed.iter().any(|p| p.ends_with("build/python")),
+            "removed must record the unlinked symlink: {:?}",
+            report.removed
+        );
+        assert!(
+            !report.errors.is_empty(),
+            "ENOTDIR on pkgdest must be reported in errors, not swallowed"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

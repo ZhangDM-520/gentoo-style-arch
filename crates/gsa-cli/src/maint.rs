@@ -16,7 +16,7 @@ use gsa_state::StateRoot;
 use gsa_topo::load_project;
 
 use crate::args::Invocation;
-use crate::exit::{self, Exit};
+use crate::exit::{self, Exit, Refusal, RefusalClass};
 use crate::install::DEFAULT_CONF;
 use crate::select::{self, Ctx};
 use crate::style;
@@ -147,6 +147,93 @@ pub fn run(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 
 /// `Ok(code)` carries the §G.1 outcome rc the verb computed (0/1/3);
 /// `Err(exit)` is a usage-class gate the ONE renderer maps.
+fn preflight_syntax(verb: MaintVerb, inv: &Invocation) -> Result<(), Exit> {
+    match verb {
+        MaintVerb::Logs => {
+            if let Some(spec) = &inv.keep {
+                spec.parse::<usize>()
+                    .map_err(|_| Exit::Usage(format!("--keep wants a number (got '{spec}')")))?;
+            }
+        }
+        MaintVerb::History => {
+            if let Some(spec) = &inv.show {
+                match spec.parse::<usize>() {
+                    Ok(id) if id > 0 => {}
+                    _ => {
+                        return Err(Exit::Usage(
+                            "--show wants a run id (1-based over the recorded history)".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        MaintVerb::Prune(1) => {
+            if inv.targets.is_empty() {
+                return Err(Exit::Usage(
+                    "-Mc requires a selection (targets or @set)".to_string(),
+                ));
+            }
+        }
+        MaintVerb::Sets if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
+            let (name, refs) = match inv.targets.split_first() {
+                Some((name, refs)) => (name, refs),
+                None => {
+                    return Err(Exit::Usage(
+                        "-Ms --add/--remove wants one set name and its references".to_string(),
+                    ));
+                }
+            };
+            gsa_maint::sets::user_set_name(name).map_err(Exit::Usage)?;
+            if refs.is_empty() {
+                return Err(Exit::Usage(
+                    "-Ms --add/--remove wants at least one reference".to_string(),
+                ));
+            }
+        }
+        MaintVerb::World
+            if (has_flag(inv, "--add") || has_flag(inv, "--remove")) && inv.targets.is_empty() =>
+        {
+            return Err(Exit::Usage(
+                "-Mw --add/--remove wants at least one reference".to_string(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn preflight_selection(
+    verb: MaintVerb,
+    inv: &Invocation,
+    sel_ctx: &Ctx<'_>,
+    err: &mut dyn Write,
+) -> Result<(), Exit> {
+    match verb {
+        MaintVerb::Prune(1) => {
+            select::build_selection(sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| cmd_error(error.to_string()))?;
+        }
+        MaintVerb::Sets if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
+            if let Some((_, refs)) = inv.targets.split_first() {
+                for spec in refs {
+                    let _ = select::resolve_ref(sel_ctx, spec, 0)
+                        .map_err(|e| cmd_error(e.to_string()))?;
+                }
+            }
+        }
+        MaintVerb::World if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
+            for spec in &inv.targets {
+                let _ =
+                    select::resolve_ref(sel_ctx, spec, 0).map_err(|e| cmd_error(e.to_string()))?;
+            }
+        }
+        _ => {
+            let _ = err;
+        }
+    }
+    Ok(())
+}
+
 fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32, Exit> {
     let verb = verb_of(inv).map_err(Exit::Usage)?;
 
@@ -196,6 +283,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             "-Mi takes ONE of --prune / --backfill".to_string(),
         ));
     }
+    preflight_syntax(verb, inv)?;
 
     // A REPORT-ONLY maintain verb never fetches the recipe store: `gsa -Sy`
     // is the one refresh, and a first-run `-Ma` used to clone the whole
@@ -204,31 +292,55 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // error's rc (2026-11-11 blind review). Read-only resolution answers the
     // same guidance `-Sl` does when no workspace exists.
     let read_only = matches!(privilege(inv), super::Privilege::ReadOnly);
-    let root = if read_only {
-        crate::resolve_root(false, inv.state_dir.as_deref())
-            .map_err(|e| Exit::Usage(e.message()))?
-    } else {
-        crate::resolve_workspace(inv, err)?
+    let mut preloaded = None;
+    // A standalone-target run staged its own workspace (plan W4): the probe
+    // must answer with THAT root, or `gsa -Mc --dry-run /tmp/foo/PKGBUILD`
+    // validated against the host workspace and refused `unknown reference`
+    // (round-2 audit, F-R2-C-02).
+    let ro_probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    let project = load_project(&root).map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
-    let graph = gsa_graph::Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db = RecipeDb::load(&root, graph.records())
-        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+    if read_only {
+        let root = ro_probe.map_err(|e| Exit::Usage(e.message()))?;
+        preloaded = Some(root);
+    } else if let Ok(root) = ro_probe {
+        let project = load_project(&root).map_err(|error| cmd_error(error.to_string()))?;
+        let graph = gsa_graph::Graph::build(&project.topology.records)
+            .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+        let db =
+            RecipeDb::load(&root, graph.records()).map_err(|error| cmd_error(error.to_string()))?;
+        let sel_ctx = Ctx {
+            project: &project,
+            graph: &graph,
+            db: &db,
+            user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+        };
+        preflight_selection(verb, inv, &sel_ctx, err)?;
+        preloaded = Some(root);
+    } else if let Err(crate::RootFailure::Usage(msg)) = ro_probe {
+        return Err(Exit::Usage(msg));
+    }
+
     // ── privilege gate (contract §B.10; after every usage preflight and
     //    before the first state access) ──────────────────────────────────
     if let Some(exit) = crate::privilege_gate(&inv.spelling(), privilege(inv), true, err) {
         return Err(exit);
     }
 
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
-    let state = match StateRoot::open(&state_dir) {
-        Ok(state) => state,
-        Err(error) => {
-            let _ = writeln!(err, "gsa: {error}");
-            return Ok(RC_REFUSAL);
-        }
+    let root = match preloaded {
+        Some(root) => root,
+        None => crate::resolve_workspace(inv, err)?,
     };
+    let project = load_project(&root).map_err(|error| cmd_error(error.to_string()))?;
+    let graph = gsa_graph::Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| cmd_error(error.to_string()))?;
+
+    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
+    let state =
+        StateRoot::open(&state_dir).map_err(|error| refuse_note(format!("gsa: {error}")))?;
     let ctx = MaintCtx {
         root: &root,
         project: &project,
@@ -240,7 +352,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         project: &project,
         graph: &graph,
         db: &db,
-        user_sets: select::load_user_sets(inv),
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
 
     let mut rows: Vec<Row> = Vec::new();
@@ -266,7 +378,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                         (rows, rc)
                     })
                 });
-                return Ok(finish(result, out, err, "-Md --fix"));
+                return finish(result, out);
             }
             rows.extend(gsa_maint::doctor::report(&ctx));
         }
@@ -281,9 +393,11 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                     gsa_maint::ignorepkg::prune(&ctx, &conf, apply).map(|rows| (rows, RC_OK))
                 })
             } else {
-                gsa_maint::ignorepkg::report(&ctx, &conf).map(|rows| (rows, RC_OK))
+                gsa_maint::ignorepkg::report(&ctx, &conf)
+                    .map(|rows| (rows, RC_OK))
+                    .map_err(|message| refuse_note(format!("gsa: -Mi: {message}")))
             };
-            return Ok(finish(result, out, err, "-Mi"));
+            return finish(result, out);
         }
         MaintVerb::Logs => {
             if let Some(spec) = &inv.tail {
@@ -349,25 +463,17 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                         return Err(Exit::Usage(format!("--keep wants a number (got '{spec}')")));
                     }
                 };
-                match mutating_rows(&state_dir, inv, out, err, "logs", |apply| {
-                    Ok((
-                        gsa_maint::hygiene::prune_logs(state.path(), keep, apply),
-                        RC_OK,
-                    ))
-                }) {
-                    Ok((prune_rows, prune_rc)) => {
-                        rows.extend(prune_rows);
-                        if prune_rc != RC_OK {
-                            let _ = write!(out, "{}", render_rows(&rows));
-                            return Ok(prune_rc);
-                        }
-                    }
-                    Err(message) => {
-                        if !message.is_empty() {
-                            let _ = writeln!(err, "gsa: -Ml --keep: {message}");
-                        }
-                        return Ok(RC_REFUSAL);
-                    }
+                let (prune_rows, prune_rc) =
+                    mutating_rows(&state_dir, inv, out, err, "logs", |apply| {
+                        Ok((
+                            gsa_maint::hygiene::prune_logs(state.path(), keep, apply),
+                            RC_OK,
+                        ))
+                    })?;
+                rows.extend(prune_rows);
+                if prune_rc != RC_OK {
+                    let _ = write!(out, "{}", render_rows(&rows));
+                    return Ok(prune_rc);
                 }
             } else if inv.tail.is_none() {
                 for entry in gsa_maint::hygiene::log_entries(state.path()) {
@@ -398,15 +504,10 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         MaintVerb::Mirrors => {
             // Plan first: consent is owed on the DESTROYED SET (§B.7), never
             // on the spelling. A healthy tree plans `clean` and needs none.
-            let plan = match gsa_maint::mirrors::run(&ctx, false) {
-                Ok(plan) => plan,
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: -Mm: {message}");
-                    return Ok(RC_REFUSAL);
-                }
-            };
+            let plan = gsa_maint::mirrors::run(&ctx, false)
+                .map_err(|message| refuse_note(format!("gsa: -Mm: {message}")))?;
             if !inv.dry_run {
-                if let Err(rc) = consent_to_destroy(
+                consent_to_destroy(
                     inv,
                     out,
                     err,
@@ -418,26 +519,17 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                         )
                     },
                     "mirrors",
-                ) {
-                    return Ok(rc);
-                }
+                )?;
             }
             let apply = !inv.dry_run;
             let _lock = if apply {
-                match hold_lock(&state_dir, err, "mirrors") {
-                    Ok(lock) => Some(lock),
-                    Err(rc) => return Ok(rc),
-                }
+                Some(hold_lock(&state_dir, "mirrors")?)
             } else {
                 None
             };
-            match gsa_maint::mirrors::run(&ctx, apply) {
-                Ok(plan) => rows.extend(plan),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa: -Mm: {message}");
-                    return Ok(RC_REFUSAL);
-                }
-            }
+            let applied = gsa_maint::mirrors::run(&ctx, apply)
+                .map_err(|message| refuse_note(format!("gsa: -Mm: {message}")))?;
+            rows.extend(applied);
         }
         MaintVerb::Prune(strength) => {
             let recipes: Vec<String> = if strength == 1 {
@@ -448,7 +540,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                 }
                 let selection =
                     select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
-                        .map_err(|error| Exit::Usage(cmd_error(error.to_string())))?;
+                        .map_err(|error| cmd_error(error.to_string()))?;
                 write_notes(err, &selection.notes);
                 selection
                     .listed
@@ -481,21 +573,13 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
             // their target list and stop rc 3 without --noconfirm. A plan
             // that removes nothing applies without asking.
             if strength >= 2 && !inv.dry_run {
-                let plan = match run_strength(false) {
-                    Ok((plan_rows, _)) => plan_rows,
-                    Err(message) => {
-                        let _ = writeln!(err, "gsa: {}: {message}", inv.spelling());
-                        return Ok(RC_REFUSAL);
-                    }
-                };
-                if let Err(rc) =
-                    consent_to_destroy(inv, out, err, &plan, |row| row.action == "prune", "prune")
-                {
-                    return Ok(rc);
-                }
+                let (plan, _) = run_strength(false).map_err(|message| {
+                    refuse_note(format!("gsa: {}: {message}", inv.spelling()))
+                })?;
+                consent_to_destroy(inv, out, err, &plan, |row| row.action == "prune", "prune")?;
             }
             let result = mutating_rows(&state_dir, inv, out, err, "prune", run_strength);
-            return Ok(finish(result, out, err, inv.spelling().as_str()));
+            return finish(result, out);
         }
         MaintVerb::Sets => {
             let add = has_flag(inv, "--add");
@@ -537,7 +621,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                     )
                     .map(|rows| (rows, RC_OK))
                 });
-                return Ok(finish(result, out, err, "-Ms"));
+                return finish(result, out);
             }
             match gsa_maint::sets::set_rows(&ctx, &state, &inv.targets) {
                 Ok(listed) => rows.extend(listed),
@@ -570,7 +654,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                     )
                     .map(|rows| (rows, RC_OK))
                 });
-                return Ok(finish(result, out, err, "-Mw"));
+                return finish(result, out);
             }
             match gsa_maint::sets::world_rows(&ctx, &state) {
                 Ok(listed) => rows.extend(listed),
@@ -600,7 +684,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                 let result = mutating_rows(&state_dir, inv, out, err, "history", |apply| {
                     gsa_maint::history::prune(&state, apply).map(|rows| (rows, RC_OK))
                 });
-                return Ok(finish(result, out, err, "-Mh --prune"));
+                return finish(result, out);
             }
             if inv.show.is_none() {
                 match gsa_maint::history::list_rows_with_corrupt(&state) {
@@ -611,8 +695,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                         rows.extend(listed)
                     }
                     Err(message) => {
-                        let _ = writeln!(err, "gsa: -Mh: {message}");
-                        return Ok(RC_REFUSAL);
+                        return Err(refuse_note(format!("gsa: -Mh: {message}")));
                     }
                 }
                 if rows.is_empty() {
@@ -628,8 +711,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
 /// Resolve one §C.1 reference to its recipe id (typo = usage error with
 /// nearest candidates, from the ordinary selection layer).
 fn resolve_one(ctx: &Ctx<'_>, spec: &str, err: &mut dyn Write) -> Result<String, Exit> {
-    let (found, notes) =
-        select::resolve_ref(ctx, spec, 0).map_err(|e| Exit::Usage(cmd_error(e.to_string())))?;
+    let (found, notes) = select::resolve_ref(ctx, spec, 0).map_err(|e| cmd_error(e.to_string()))?;
     write_notes(err, &notes);
     match found.first() {
         Some(&idx) => Ok(ctx.graph.record(idx).id.as_str().to_string()),
@@ -641,18 +723,13 @@ fn file_size(path: &std::path::Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-fn hold_lock(
-    state_dir: &std::path::Path,
-    err: &mut dyn Write,
-    what: &str,
-) -> Result<gsa_sched::lock::RunLock, i32> {
-    match gsa_maint::hold_run_lock(state_dir) {
-        Ok(lock) => Ok(lock),
-        Err(message) => {
-            let _ = writeln!(err, "gsa: -M {what}: {message}");
-            Err(RC_REFUSAL)
-        }
-    }
+fn refuse_note(line: impl Into<String>) -> Exit {
+    Exit::refuse_note(line)
+}
+
+fn hold_lock(state_dir: &std::path::Path, what: &str) -> Result<gsa_sched::lock::RunLock, Exit> {
+    gsa_maint::hold_run_lock(state_dir)
+        .map_err(|message| refuse_note(format!("gsa: -M {what}: {message}")))
 }
 
 /// Run one mutating verb under the gates: dry-run → plan only; otherwise
@@ -661,20 +738,16 @@ fn mutating_rows(
     state_dir: &std::path::Path,
     inv: &Invocation,
     _out: &mut dyn Write,
-    err: &mut dyn Write,
+    _err: &mut dyn Write,
     what: &str,
     f: impl FnOnce(bool) -> Result<(Vec<Row>, i32), String>,
-) -> Result<(Vec<Row>, i32), String> {
+) -> Result<(Vec<Row>, i32), Exit> {
     let apply = !inv.dry_run;
     if apply {
-        let _lock = hold_lock(state_dir, err, what).map_err(|_| {
-            // The refusal was already reported; surface as an error the
-            // finish() path will not reprint.
-            String::new()
-        })?;
-        f(true)
+        let _lock = hold_lock(state_dir, what)?;
+        f(true).map_err(|message| refuse_note(format!("gsa: -M {what}: {message}")))
     } else {
-        f(false)
+        f(false).map_err(|message| refuse_note(format!("gsa: -M {what}: {message}")))
     }
 }
 
@@ -692,7 +765,7 @@ fn consent_to_destroy(
     plan: &[Row],
     doomed: impl Fn(&Row) -> bool,
     what: &str,
-) -> Result<(), i32> {
+) -> Result<(), Exit> {
     let count = plan.iter().filter(|row| doomed(row)).count();
     if count == 0 || has_flag(inv, "--noconfirm") {
         return Ok(());
@@ -711,14 +784,17 @@ fn consent_to_destroy(
             }
         }
     }
-    let _ = writeln!(
-        err,
-        "gsa: {} {}",
-        inv.spelling(),
-        gsa_maint::CONFIRMATION_REQUIRED
-    );
-    let _ = writeln!(err, "gsa: apply it with: {command}");
-    Err(RC_REFUSAL)
+    Err(Exit::Refuse(Refusal::noted(
+        RefusalClass::StartupRefused,
+        vec![
+            format!(
+                "gsa: {} {}",
+                inv.spelling(),
+                gsa_maint::CONFIRMATION_REQUIRED
+            ),
+            format!("gsa: apply it with: {command}"),
+        ],
+    )))
 }
 
 /// The same invocation made paste-safe for a refusal: the cluster spelling,
@@ -783,24 +859,8 @@ fn render_row(row: &Row) -> String {
     }
 }
 
-fn finish(
-    result: Result<(Vec<Row>, i32), String>,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-    what: &str,
-) -> i32 {
-    match result {
-        Ok((rows, rc)) => {
-            let _ = write!(out, "{}", render_rows(&rows));
-            rc
-        }
-        Err(message) if message.is_empty() => {
-            let _ = what;
-            RC_REFUSAL
-        }
-        Err(message) => {
-            let _ = writeln!(err, "gsa: {what}: {message}");
-            RC_REFUSAL
-        }
-    }
+fn finish(result: Result<(Vec<Row>, i32), Exit>, out: &mut dyn Write) -> Result<i32, Exit> {
+    let (rows, rc) = result?;
+    let _ = write!(out, "{}", render_rows(&rows));
+    Ok(rc)
 }

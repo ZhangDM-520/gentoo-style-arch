@@ -233,6 +233,7 @@ pub enum Match {
     Agree,
     Disagree,
     Missing,
+    Unreadable,
 }
 
 /// The hash/size verification of one row (§J.4: an archive whose bytes
@@ -243,6 +244,9 @@ pub struct Verification {
     pub size: Match,
     /// What the archive's bytes actually say, when they could be read.
     pub actual: Option<(String, u64)>,
+    /// Underlying read/diverge diagnostic when the file was present-or-unknown
+    /// but unreadable (`Match::Unreadable`).
+    pub error: Option<String>,
 }
 
 impl Verification {
@@ -251,20 +255,33 @@ impl Verification {
     }
 }
 
-/// Recompute one archive's `sha256`+`size` from its bytes (one streamed
-/// pass — the size is what was hashed, and a file that changed mid-read is
-/// a divergence, never a row).
-pub fn hash_archive(path: &Path) -> Result<(String, u64), StateError> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| StateError::Io(format!("cannot read archive {}: {e}", path.display())))?;
+enum HashError {
+    NotFound,
+    Error(StateError),
+}
+
+fn hash_archive_inner(path: &Path) -> Result<(String, u64), HashError> {
+    use std::io::{ErrorKind, Read};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Err(HashError::NotFound),
+        Err(e) => {
+            return Err(HashError::Error(StateError::Io(format!(
+                "cannot read archive {}: {e}",
+                path.display()
+            ))));
+        }
+    };
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     let mut size: u64 = 0;
     loop {
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| StateError::Io(format!("cannot read archive {}: {e}", path.display())))?;
+        let n = file.read(&mut buf).map_err(|e| {
+            HashError::Error(StateError::Io(format!(
+                "cannot read archive {}: {e}",
+                path.display()
+            )))
+        })?;
         if n == 0 {
             break;
         }
@@ -273,21 +290,41 @@ pub fn hash_archive(path: &Path) -> Result<(String, u64), StateError> {
     }
     let digest = hasher.finalize();
     let sha256: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let on_disk = std::fs::metadata(path)
-        .map_err(|e| StateError::Io(format!("cannot stat archive {}: {e}", path.display())))?;
+    let on_disk = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Err(HashError::NotFound),
+        Err(e) => {
+            return Err(HashError::Error(StateError::Io(format!(
+                "cannot stat archive {}: {e}",
+                path.display()
+            ))));
+        }
+    };
     if on_disk.len() != size {
-        return Err(StateError::Diverge(format!(
+        return Err(HashError::Error(StateError::Diverge(format!(
             "{} changed while hashing (read {size} bytes, stat {}) — row not written",
             path.display(),
             on_disk.len()
-        )));
+        ))));
     }
     Ok((sha256, size))
 }
 
+/// Recompute one archive's `sha256`+`size` from its bytes (one streamed
+/// pass — the size is what was hashed, and a file that changed mid-read is
+/// a divergence, never a row).
+pub fn hash_archive(path: &Path) -> Result<(String, u64), StateError> {
+    hash_archive_inner(path).map_err(|e| match e {
+        HashError::NotFound => {
+            StateError::Io(format!("cannot read archive {}: not found", path.display()))
+        }
+        HashError::Error(err) => err,
+    })
+}
+
 /// Verify one row against its archive's current bytes.
 pub fn verify_row(row: &IndexRow) -> Verification {
-    match hash_archive(&row.archive) {
+    match hash_archive_inner(&row.archive) {
         Ok((sha256, size)) => Verification {
             hash: if sha256 == row.sha256 {
                 Match::Agree
@@ -300,11 +337,19 @@ pub fn verify_row(row: &IndexRow) -> Verification {
                 Match::Disagree
             },
             actual: Some((sha256, size)),
+            error: None,
         },
-        Err(_) => Verification {
+        Err(HashError::NotFound) => Verification {
             hash: Match::Missing,
             size: Match::Missing,
             actual: None,
+            error: None,
+        },
+        Err(HashError::Error(err)) => Verification {
+            hash: Match::Unreadable,
+            size: Match::Unreadable,
+            actual: None,
+            error: Some(err.to_string()),
         },
     }
 }
@@ -414,6 +459,44 @@ pub fn prune_instance(
 /// anything. Each row's `abi_token` derives exactly like
 /// [`register_instance`] (gsa-abi's ONE derivation, the `abi-rev=` override
 /// merged) — never a `-` placeholder a later wave would misread as a move.
+fn build_index_row(
+    recipe_id: &str,
+    archive: &PathBuf,
+    instance: u64,
+    built_at: u64,
+    abi_rev: Option<u64>,
+) -> Result<IndexRow, StateError> {
+    let info = gsa_recipe::pkginfo::read_pkginfo(archive).map_err(|e| {
+        StateError::Diverge(format!(
+            "{}: {e} — no index row without .PKGINFO truth",
+            archive.display()
+        ))
+    })?;
+    let (sha256, size) = hash_archive(archive)?;
+    // The one shared abi-token derivation (gsa-abi, §J.4): fail closed —
+    // no row without token truth, so a later wave can trust every row.
+    let token = gsa_abi::token_for_archive(archive, abi_rev).map_err(|e| {
+        StateError::Diverge(format!(
+            "{}: {e} — no index row without derived abi-token truth",
+            archive.display()
+        ))
+    })?;
+    Ok(IndexRow {
+        recipe_id: recipe_id.to_string(),
+        pkgbase: info.pkgbase,
+        pkgnames: vec![info.pkgname],
+        version: info.version,
+        archive: archive.clone(),
+        sha256,
+        size,
+        built_at,
+        abi_token: token.effective,
+        provides: info.provides,
+        vcs_baseline: "-".to_string(),
+        instance,
+    })
+}
+
 pub fn reindex_archives(
     root: &StateRoot,
     recipe_id: &str,
@@ -428,40 +511,13 @@ pub fn reindex_archives(
         if index.rows.iter().any(|r| r.archive == *archive) {
             continue;
         }
-        let info = gsa_recipe::pkginfo::read_pkginfo(archive).map_err(|e| {
-            StateError::Diverge(format!(
-                "{}: {e} — no index row without .PKGINFO truth",
-                archive.display()
-            ))
-        })?;
-        let (sha256, size) = hash_archive(archive)?;
-        // The one shared abi-token derivation (gsa-abi, §J.4): fail closed —
-        // no row without token truth, so a later wave can trust every row.
-        let token = gsa_abi::token_for_archive(archive, abi_rev).map_err(|e| {
-            StateError::Diverge(format!(
-                "{}: {e} — no index row without derived abi-token truth",
-                archive.display()
-            ))
-        })?;
         let mine = instance;
         instance += 1;
-        let row = IndexRow {
-            recipe_id: recipe_id.to_string(),
-            pkgbase: info.pkgbase,
-            pkgnames: vec![info.pkgname],
-            version: info.version,
-            archive: archive.clone(),
-            sha256,
-            size,
-            built_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            abi_token: token.effective,
-            provides: info.provides,
-            vcs_baseline: "-".to_string(),
-            instance: mine,
-        };
+        let built_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let row = build_index_row(recipe_id, archive, mine, built_at, abi_rev)?;
         store::append_json(
             &root.index_path(),
             &IndexEntry::Row { row: row.clone() },
@@ -523,35 +579,9 @@ pub fn register_instance(
     // `.PKGINFO`, hash+size come from one streamed read of the bytes.
     let mut rows = Vec::new();
     for archive in archives {
-        let info = gsa_recipe::pkginfo::read_pkginfo(archive).map_err(|e| {
-            StateError::Diverge(format!(
-                "{}: {e} — no index row without .PKGINFO truth",
-                archive.display()
-            ))
-        })?;
-        let (sha256, size) = hash_archive(archive)?;
-        // The one shared abi-token derivation (gsa-abi, §J.4): fail closed —
-        // no row without token truth, so a later wave can trust every row.
-        let token = gsa_abi::token_for_archive(archive, abi_rev).map_err(|e| {
-            StateError::Diverge(format!(
-                "{}: {e} — no index row without derived abi-token truth",
-                archive.display()
-            ))
-        })?;
-        rows.push(IndexRow {
-            recipe_id: recipe_id.to_string(),
-            pkgbase: info.pkgbase,
-            pkgnames: vec![info.pkgname],
-            version: info.version,
-            archive: archive.clone(),
-            sha256,
-            size,
-            built_at,
-            abi_token: token.effective,
-            provides: info.provides,
-            vcs_baseline: "-".to_string(),
-            instance,
-        });
+        rows.push(build_index_row(
+            recipe_id, archive, instance, built_at, abi_rev,
+        )?);
     }
     for row in &rows {
         store::append_json(
@@ -1432,5 +1462,43 @@ mod tests {
             vec![2, 1],
             "the un-tombstoned instance 1 stays live (over budget: the next sweep retries)"
         );
+    }
+
+    #[test]
+    fn verify_row_distinguishes_missing_from_unreadable() {
+        let dir = scratch("verify-unreadable");
+        let a = dir.join("loop-a");
+        let b = dir.join("loop-b");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        let missing = dir.join("absent.pkg.tar.zst");
+
+        let make_row = |path: PathBuf| IndexRow {
+            recipe_id: "leaf".to_string(),
+            instance: 1,
+            pkgbase: "leaf".to_string(),
+            pkgnames: vec!["leaf".to_string()],
+            version: "0:1.0-1".to_string(),
+            abi_token: "-".to_string(),
+            provides: Vec::new(),
+            vcs_baseline: "-".to_string(),
+            built_at: 0,
+            sha256: "0".repeat(64),
+            size: 1,
+            archive: path,
+        };
+
+        let missing_v = verify_row(&make_row(missing));
+        assert_eq!(missing_v.hash, Match::Missing);
+        assert_eq!(missing_v.size, Match::Missing);
+
+        let loop_v = verify_row(&make_row(a));
+        assert_ne!(
+            loop_v.hash,
+            Match::Missing,
+            "ELOOP unreadable path must not collapse into Match::Missing: {loop_v:?}"
+        );
+        assert!(!loop_v.agrees());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

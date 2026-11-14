@@ -15,8 +15,10 @@ use gsa_qa::QaInstalled;
 /// `LocalDb` (a fixture's fabricated `local/` tree answers through the
 /// `pacman-conf DBPath` stub, never the host's). Unreadable/absent = an
 /// empty view — those checks then report `skipped`, never a fake clean.
-fn installed_view() -> Vec<QaInstalled> {
-    let db_root = gsa_install::localdb::pacman_db_root();
+fn installed_view_for(conf: Option<&std::path::Path>) -> Vec<QaInstalled> {
+    let Ok(db_root) = gsa_install::localdb::pacman_db_root_for(conf) else {
+        return Vec::new();
+    };
     let Ok(db) = gsa_install::LocalDb::load(&db_root) else {
         return Vec::new();
     };
@@ -63,7 +65,7 @@ fn run_qa_check_inner(
     Ok(gsa_qa::seam::run_qa_check(
         args,
         &root,
-        &installed_view(),
+        &installed_view_for(None),
         out,
         _err,
     ))
@@ -75,11 +77,15 @@ fn run_qa_check_inner(
 /// report-severity check over the run's subjects with workspace-wide
 /// context, the run's own archive sets probed. `None` when no workspace is
 /// reachable from the run.
-pub fn report_lines(targets: &[String], state_flag: Option<&str>) -> Option<Vec<String>> {
+pub fn report_lines(
+    targets: &[String],
+    state_flag: Option<&str>,
+    conf: Option<&std::path::Path>,
+) -> Option<Vec<String>> {
     let root = crate::find_root_opt(state_flag)?;
     let workspace = load_workspace(&root).ok()?;
     let archives = collect_archives(&workspace.recipes, targets);
-    let installed = installed_view();
+    let installed = installed_view_for(conf);
     let input = QaInput {
         recipes: &workspace.recipes,
         targets,
@@ -89,4 +95,40 @@ pub fn report_lines(targets: &[String], state_flag: Option<&str>) -> Option<Vec<
     };
     let findings = gsa_qa::report::report_findings(&input);
     Some(gsa_qa::report::render_lines(&findings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn installed_view_respects_explicit_pacman_config_dbpath() {
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-cli-qa-conf-{}-{}",
+            std::process::id(),
+            std::thread::current()
+                .name()
+                .unwrap_or("t")
+                .replace(':', "_")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = dir.join("target-db");
+        let desc_dir = db.join("local/demo-pkg-1.0-1");
+        std::fs::create_dir_all(&desc_dir).unwrap();
+        std::fs::write(
+            desc_dir.join("desc"),
+            "%NAME%\ndemo-pkg\n\n%VERSION%\n1.0-1\n\n",
+        )
+        .unwrap();
+        std::fs::write(desc_dir.join("files"), "%FILES%\nusr/bin/demo\n\n").unwrap();
+        let conf: PathBuf = dir.join("pacman.conf");
+        std::fs::write(&conf, format!("[options]\nDBPath = {}\n", db.display())).unwrap();
+
+        let pkgs = installed_view_for(Some(&conf));
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "demo-pkg");
+        assert_eq!(pkgs[0].version, "0:1.0-1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

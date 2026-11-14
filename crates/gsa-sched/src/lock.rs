@@ -18,8 +18,14 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+
+use gsa_model::state_gate::{gate_open_with_kind, GateFailure};
+pub use gsa_model::state_gate::{
+    open_state_append, open_state_append_nofollow, open_state_file_with_uid, quarantine_foreign,
+    GateError,
+};
 
 use crate::signals::{current_uid, flock_exclusive_nonblocking, send_signal, SIGKILL};
 
@@ -92,7 +98,7 @@ pub fn acquire_run_lock_file(path: &Path, scope: &str) -> Result<RunLock, RunLoc
     // and its callers surface only the error string.
     let mut opts = OpenOptions::new();
     opts.create(true).truncate(false).write(true);
-    let file = gate_open(path, &mut opts, current_uid(), &mut std::io::stderr())
+    let file = gate_open_with_kind(path, &mut opts, current_uid(), &mut std::io::stderr())
         .map_err(|f| classify_failure(f))?;
     if !flock_exclusive_nonblocking(file.as_raw_fd()) {
         return Err(RunLockError::Busy(format!(
@@ -121,81 +127,6 @@ pub fn acquire_run_lock(state_dir: &Path) -> Result<RunLock, String> {
     try_acquire_run_lock(state_dir).map_err(|e| e.to_string())
 }
 
-/// Quarantine a wrong-owner state file as `<path>.stale.<epoch>.<pid>`
-/// (preserved, announced) — rule 19's unprivileged remedy. Returns Ok(true)
-/// when a file was quarantined.
-pub fn quarantine_foreign(path: &Path, err: &mut dyn Write) -> Result<bool, String> {
-    quarantine_foreign_kind(path, err).map_err(|(message, _kind)| message)
-}
-
-/// [`quarantine_foreign`] with the OS error kind behind a rename failure
-/// riding along (the run-lock fallback must see EACCES/EPERM as a
-/// permission failure, never as a generic refusal).
-fn quarantine_foreign_kind(
-    path: &Path,
-    err: &mut dyn Write,
-) -> Result<bool, (String, Option<std::io::ErrorKind>)> {
-    let epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let stale = PathBuf::from(format!(
-        "{}.stale.{}.{}",
-        path.display(),
-        epoch,
-        std::process::id()
-    ));
-    std::fs::rename(path, &stale).map_err(|e| {
-        let kind = e.kind();
-        (
-            format!(
-                "state file {} is not owned by the running engine user and cannot be quarantined ({e}) — move it aside as the state owner (sudo), then rerun",
-                path.display()
-            ),
-            Some(kind),
-        )
-    })?;
-    let _ = writeln!(
-        err,
-        "gsa: note: quarantined foreign-owned state file {} -> {}",
-        path.display(),
-        stale.display()
-    );
-    Ok(true)
-}
-
-/// `O_NOFOLLOW(2)`'s Linux value. Hard-coded like signals.rs's `LOCK_EX`:
-/// this tree keeps libc out of the dependency list, and Linux's `O_*` values
-/// are ABI-stable.
-const O_NOFOLLOW: i32 = 0o400000;
-
-/// Why the ownership gate refused to hand back an open state file. The split
-/// preserves the error classes callers already route: `Ownership` is the gate
-/// refusing (wrong owner, redirection), `Open` is the open itself failing.
-#[derive(Debug)]
-pub enum GateError {
-    Ownership(String),
-    Open(String),
-}
-
-impl std::fmt::Display for GateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GateError::Ownership(m) | GateError::Open(m) => f.write_str(m),
-        }
-    }
-}
-
-/// A gate failure plus the OS error kind behind it where one exists. The
-/// run-lock fallback must tell EACCES/EPERM (a state root the runner may
-/// not write) apart from every other refusal; [`GateError`]'s strings carry
-/// only the rendered message, so the kind rides along here and the public
-/// gate entry drops it.
-struct GateFailure {
-    error: GateError,
-    kind: Option<std::io::ErrorKind>,
-}
-
 /// Classify one gate failure for [`RunLockError`].
 fn classify_failure(f: GateFailure) -> RunLockError {
     let message = f.error.to_string();
@@ -203,117 +134,6 @@ fn classify_failure(f: GateFailure) -> RunLockError {
         Some(std::io::ErrorKind::PermissionDenied) => RunLockError::Permission(message),
         _ => RunLockError::Other(message),
     }
-}
-
-fn open_nofollow(path: &Path, opts: &mut OpenOptions) -> std::io::Result<File> {
-    opts.custom_flags(O_NOFOLLOW);
-    opts.open(path)
-}
-
-/// Shape an open failure as the gate's refusal: a symlinked final component
-/// is named as the redirection it is (its own remedy), everything else keeps
-/// the §J.3 state-root remedy. The re-stat is diagnostic only — the refusal
-/// itself already happened in `open(2)`, and `ErrorKind::FilesystemLoop` is
-/// still unstable. The OS error kind rides along for the run-lock fallback's
-/// permission/other distinction.
-fn open_refusal(path: &Path, e: std::io::Error) -> GateFailure {
-    let kind = e.kind();
-    let redirected = path
-        .symlink_metadata()
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
-    if redirected {
-        GateFailure {
-            error: GateError::Ownership(format!(
-                "state file {} is a symlink — the ownership gate refuses to write through it; replace it with a regular file as the state owner (sudo), then rerun",
-                path.display()
-            )),
-            kind: Some(kind),
-        }
-    } else {
-        GateFailure {
-            error: GateError::Open(format!(
-                "cannot open state file {} ({e}) — pass --state-dir PATH or set GSA_STATE_DIR",
-                path.display()
-            )),
-            kind: Some(kind),
-        }
-    }
-}
-
-fn fd_owned_by(file: &File, path: &Path, uid: u32) -> Result<bool, GateFailure> {
-    let meta = file.metadata().map_err(|e| GateFailure {
-        error: GateError::Open(format!("cannot stat {}: {e}", path.display())),
-        kind: Some(e.kind()),
-    })?;
-    Ok(meta.uid() == uid)
-}
-
-/// The write-time ownership gate (rule 19, §J.5), fd-based: the file is
-/// opened with `O_NOFOLLOW` and ownership is checked via `fstat` on that same
-/// fd, so the check and the write share one inode — no symlink redirection,
-/// no check-then-use window between gate and open. The caller gets the
-/// checked handle back and must write through it, never re-open the path.
-/// A wrong owner is quarantined and the repaired path re-verified on its own
-/// fd: quarantine is forensics, not the boundary (the rename races like any
-/// path operation), so a re-planted foreign file is refused, never adopted.
-/// Residual: `O_NOFOLLOW` guards only the final path component; parent
-/// directories are trusted as part of the runner-owned state root (§J.5).
-pub fn open_state_file_with_uid(
-    path: &Path,
-    opts: &mut OpenOptions,
-    uid: u32,
-    err: &mut dyn Write,
-) -> Result<File, GateError> {
-    gate_open(path, opts, uid, err).map_err(|f| f.error)
-}
-
-/// The gate's body with the OS error kind preserved (see [`GateFailure`]);
-/// the public entry above drops the kind, the run-lock seam classifies it.
-fn gate_open(
-    path: &Path,
-    opts: &mut OpenOptions,
-    uid: u32,
-    err: &mut dyn Write,
-) -> Result<File, GateFailure> {
-    let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
-    if fd_owned_by(&file, path, uid)? {
-        return Ok(file);
-    }
-    drop(file);
-    quarantine_foreign_kind(path, err).map_err(|(message, kind)| GateFailure {
-        error: GateError::Ownership(message),
-        kind,
-    })?;
-    let file = open_nofollow(path, opts).map_err(|e| open_refusal(path, e))?;
-    if fd_owned_by(&file, path, uid)? {
-        return Ok(file);
-    }
-    drop(file);
-    Err(GateFailure {
-        error: GateError::Ownership(format!(
-            "state file {} is still not owned by the running engine user after quarantine — move it aside as the state owner (sudo), then rerun",
-            path.display()
-        )),
-        kind: None,
-    })
-}
-
-/// The append-shaped production entry (lane logs): the checked handle every
-/// state write must use instead of opening the path again.
-pub fn open_state_append(path: &Path, err: &mut dyn Write) -> Result<File, GateError> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    open_state_file_with_uid(path, &mut opts, current_uid(), err)
-}
-
-/// The warn-only caller's open after a gate refusal (rule 19: forensics
-/// appends report and continue). Same no-symlink discipline as the gate — a
-/// refused redirection can never be recovered into its target.
-pub fn open_state_append_nofollow(path: &Path) -> std::io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    open_nofollow(path, &mut opts)
 }
 
 /// Create the state-root layout this phase owns (§J.1 subset): `logs/`,
@@ -530,46 +350,85 @@ pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     }
     let lock_path = db_path.join("db.lck");
     let _ = writeln!(out, "lock: {}", lock_path.display());
-    let Ok(meta) = std::fs::metadata(&lock_path) else {
-        let _ = writeln!(out, "status: free");
-        return 0;
+    let meta = match std::fs::metadata(&lock_path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let _ = writeln!(out, "status: free");
+            return 0;
+        }
+        Err(error) => {
+            let _ = writeln!(err, "gsa: cannot stat {}: {error}", lock_path.display());
+            let _ = writeln!(out, "status: unreadable");
+            return 1;
+        }
     };
     let ino = meta.ino();
     let dev = meta.dev();
     let mut holders: Vec<(i32, String)> = Vec::new();
-    if let Ok(proc_dir) = std::fs::read_dir("/proc") {
-        for entry in proc_dir.flatten() {
-            let pid: i32 = match entry.file_name().to_string_lossy().parse() {
-                Ok(pid) => pid,
-                Err(_) => continue,
-            };
-            let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
-                continue;
-            };
-            for fd in fds.flatten() {
-                let Ok(target) = std::fs::metadata(fd.path()) else {
-                    continue;
+    let mut proc_unreadable = false;
+    let mut skipped_fds: usize = 0;
+    match std::fs::read_dir("/proc") {
+        Ok(proc_dir) => {
+            for entry in proc_dir.flatten() {
+                let pid: i32 = match entry.file_name().to_string_lossy().parse() {
+                    Ok(pid) => pid,
+                    Err(_) => continue,
                 };
-                if target.ino() == ino && target.dev() == dev {
-                    let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
-                        .unwrap_or_default()
-                        .replace('\0', " ");
-                    holders.push((pid, cmdline.trim().to_string()));
-                    break;
+                let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+                    Ok(fds) => fds,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => {
+                        skipped_fds += 1;
+                        continue;
+                    }
+                };
+                for fd in fds.flatten() {
+                    let Ok(target) = std::fs::metadata(fd.path()) else {
+                        continue;
+                    };
+                    if target.ino() == ino && target.dev() == dev {
+                        let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                            .unwrap_or_default()
+                            .replace('\0', " ");
+                        holders.push((pid, cmdline.trim().to_string()));
+                        break;
+                    }
                 }
             }
         }
+        Err(error) => {
+            let _ = writeln!(err, "gsa: cannot read /proc: {error}");
+            proc_unreadable = true;
+        }
     }
-    if holders.is_empty() {
-        let _ = writeln!(out, "status: present-idle (no open holder)");
-    } else {
+    let rc = if !holders.is_empty() {
         let _ = writeln!(out, "status: held");
         for (pid, cmdline) in holders {
             let _ = writeln!(out, "holder: {pid} {cmdline}");
         }
-    }
+        0
+    } else if proc_unreadable || (skipped_fds > 0 && crate::signals::current_uid() == 0) {
+        let _ = writeln!(
+            out,
+            "status: unprobed (insufficient permissions to inspect /proc/*/fd)"
+        );
+        1
+    } else if skipped_fds > 0 {
+        let _ = writeln!(
+            err,
+            "gsa: note: skipped {skipped_fds} unreadable /proc/*/fd entries (not privileged to inspect foreign processes)"
+        );
+        let _ = writeln!(
+            out,
+            "status: present-idle (no visible open holder; {skipped_fds} foreign /proc/*/fd skipped)"
+        );
+        0
+    } else {
+        let _ = writeln!(out, "status: present-idle (no open holder)");
+        0
+    };
     let _ = writeln!(err, "gsa: note: db.lck is never deleted by gsa");
-    0
+    rc
 }
 
 /// Resolve pacman's database root the way makepkg does: `pacman-conf
@@ -840,6 +699,36 @@ mod tests {
             out.contains("fallback"),
             "the report must mark the guessed db root as a fallback: {out}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_probe_reports_non_notfound_stat_error_instead_of_free() {
+        let _guard = PATH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = scratch("stat-err");
+        let not_a_dir = dir.join("not-a-dir");
+        std::fs::write(&not_a_dir, "file").unwrap();
+        let saved_path = std::env::var("PATH").unwrap_or_default();
+        let path = shadow_pacman_conf(
+            &dir,
+            &format!("#!/bin/sh\necho '{}'\n", not_a_dir.display()),
+        );
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let rc = pacman_lock_probe(&mut out, &mut err);
+        std::env::set_var("PATH", path);
+        assert_ne!(
+            rc, 0,
+            "ENOTDIR on db.lck must fail instead of returning 0/free"
+        );
+        let out_str = String::from_utf8_lossy(&out);
+        assert!(
+            !out_str.contains("status: free"),
+            "ENOTDIR must never misreport status: free: {out_str}"
+        );
+        std::env::set_var("PATH", saved_path);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

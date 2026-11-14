@@ -293,3 +293,80 @@ fn doctor_scans_the_pkgdest_home_and_attributes_by_pkginfo_truth() {
         assert!(rows.iter().all(|r| r.action != "orphan-archive"));
     });
 }
+
+#[test]
+fn doctor_and_prune_do_not_tombstone_unreadable_archive_symlink_loop() {
+    let mut fx = Fixture::new("doctor-eloop");
+    fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo("alpha", &["alpha"], "1.0", "1", &[]),
+    );
+    let alpha_dir = fx.root.join("packages").join("git").join("alpha");
+    let archive = alpha_dir.join("alpha-1.0-1-any.pkg.tar.zst");
+    make_archive(&archive, "alpha", "alpha", "1.0-1");
+    let state = fx.state();
+    let mut err = Vec::new();
+    gsa_state::reindex_archives(
+        &state,
+        "alpha",
+        std::slice::from_ref(&archive),
+        None,
+        &mut err,
+    )
+    .unwrap();
+
+    // Replace archive with a symlink loop (`ELOOP`, `exists() == false`, NOT `NotFound`).
+    std::fs::remove_file(&archive).unwrap();
+    let other = alpha_dir.join("loop-other");
+    std::os::unix::fs::symlink(&other, &archive).unwrap();
+    std::os::unix::fs::symlink(&archive, &other).unwrap();
+
+    fx.with_ctx(|ctx| {
+        let rows = doctor::report(ctx);
+        assert!(
+            common::find_row(&rows, &archive.display().to_string(), "orphan-row").is_none(),
+            "unreadable ELOOP archive must NOT classify as orphan-row: {rows:?}"
+        );
+        assert!(
+            common::find_row(&rows, &archive.display().to_string(), "index-mismatch").is_some(),
+            "unreadable ELOOP archive must report mismatch/unreadable: {rows:?}"
+        );
+        doctor::fix(ctx, true).unwrap();
+    });
+    let after = BinpkgIndex::load(&state).unwrap();
+    assert_eq!(
+        after.rows.len(),
+        1,
+        "live row must NOT be tombstoned on ELOOP"
+    );
+}
+
+#[test]
+fn audit_report_surfaces_unreadable_pkgbuild() {
+    let mut fx = Fixture::new("audit-unreadable-pkgbuild");
+    fx.add_recipe(
+        "alpha",
+        "git",
+        "git",
+        "",
+        &srcinfo("alpha", &["alpha"], "1.0", "1", &[]),
+    );
+    let pkgbuild = fx.root.join("packages/git/alpha/PKGBUILD");
+    let other = fx.root.join("packages/git/alpha/pkgbuild-loop");
+
+    fx.with_ctx(|ctx| {
+        std::fs::remove_file(&pkgbuild).unwrap();
+        std::os::unix::fs::symlink(&other, &pkgbuild).unwrap();
+        std::os::unix::fs::symlink(&pkgbuild, &other).unwrap();
+        let rows = gsa_maint::audit::report(ctx);
+        assert!(
+            rows.iter().any(|r| r.subject == "toolchain-edge"
+                && r.action == "alpha"
+                && r.reason.contains("unreadable")),
+            "unreadable PKGBUILD must surface in audit::report instead of clean: {rows:?}"
+        );
+    });
+}

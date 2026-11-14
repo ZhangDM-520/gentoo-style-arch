@@ -25,6 +25,9 @@ pub enum Finding {
     Mismatch { name: String, detail: String },
     /// An index row whose archive file is gone (kind `missing-archive`).
     MissingArchive { name: String, detail: String },
+    /// An index row whose archive exists-or-unknown but could not be read
+    /// (`unreadable-archive`).
+    UnreadableArchive { name: String, detail: String },
     /// An archive in one of the caller's scan dirs with no live index row
     /// (kind `orphan-archive`).
     OrphanArchive { name: String, detail: String },
@@ -36,6 +39,9 @@ impl Finding {
             Finding::Corrupt(c) => c.render(),
             Finding::Mismatch { name, detail } => format!("hash-mismatch {name} {detail}"),
             Finding::MissingArchive { name, detail } => format!("missing-archive {name} {detail}"),
+            Finding::UnreadableArchive { name, detail } => {
+                format!("unreadable-archive {name} {detail}")
+            }
             Finding::OrphanArchive { name, detail } => format!("orphan-archive {name} {detail}"),
         }
     }
@@ -45,6 +51,7 @@ impl Finding {
             Finding::Corrupt(c) => &c.name,
             Finding::Mismatch { name, .. }
             | Finding::MissingArchive { name, .. }
+            | Finding::UnreadableArchive { name, .. }
             | Finding::OrphanArchive { name, .. } => name,
         }
     }
@@ -98,6 +105,14 @@ pub fn check(root: &StateRoot, scan_dirs: &[PathBuf]) -> Result<HealthReport, St
                 findings.push(Finding::MissingArchive {
                     name,
                     detail: format!("no file at {}", row.archive.display()),
+                });
+            }
+            (Match::Unreadable, _) | (_, Match::Unreadable) => {
+                findings.push(Finding::UnreadableArchive {
+                    name,
+                    detail: verification
+                        .error
+                        .unwrap_or_else(|| format!("unreadable archive {}", row.archive.display())),
                 });
             }
             _ => {

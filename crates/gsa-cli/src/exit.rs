@@ -134,6 +134,15 @@ impl Exit {
         Exit::Refuse(Refusal::silent(class))
     }
 
+    /// A startup refusal that emitted no record and still owes one line
+    /// (verbatim, prefix included).
+    pub(crate) fn refuse_note(line: impl Into<String>) -> Self {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![line.into()],
+        ))
+    }
+
     /// Write every line this exit still owes and return its §G.1 code.
     pub(crate) fn render(self, err: &mut dyn Write) -> i32 {
         match self {

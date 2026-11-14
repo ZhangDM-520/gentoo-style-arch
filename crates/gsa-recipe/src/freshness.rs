@@ -1249,7 +1249,8 @@ pub fn record_vcs_archive_revisions(
     // Resolve every row first (fish resolves while writing; resolving first
     // keeps the tmp+mv publish a single atomic step and never leaves a tmp).
     // The pkgbase scopes the cache lookup to this recipe's own build tree.
-    let pkgbase = recipe_pkgbase(recipe_dir);
+    let pkgbase =
+        recipe_pkgbase_checked(recipe_dir).map_err(|e| FreshnessError::Record(e.to_string()))?;
     let mut rows = Vec::new();
     for entry in &vcs_entries {
         let info = vcs_source_ref_info(entry)
@@ -1331,22 +1332,27 @@ fn scan_recipe(recipe_dir: &Path) -> Result<crate::PkgbuildScan, FreshnessError>
 /// established (the crate's read order: committed `.SRCINFO`, then the
 /// PKGBUILD scan; a dynamic value is unestablished — never guess). `None`
 /// degrades callers to the unscoped lookup, never to wrong evidence.
-pub(crate) fn recipe_pkgbase(recipe_dir: &Path) -> Option<String> {
+pub(crate) fn recipe_pkgbase_checked(recipe_dir: &Path) -> Result<Option<String>, FreshnessError> {
     let srcinfo_path = recipe_dir.join(".SRCINFO");
-    if let Ok(content) = fs::read_to_string(&srcinfo_path) {
+    if let Some(content) =
+        gsa_model::read::optional(&srcinfo_path).map_err(FreshnessError::Unestablished)?
+    {
         if let Ok(info) = parse_srcinfo(&content, &srcinfo_path.display().to_string()) {
             if let Some(base) = info.pkgbase.filter(|b| !b.is_empty()) {
-                return Some(base);
+                return Ok(Some(base));
             }
         }
     }
-    let scan = scan_recipe(recipe_dir).ok()?;
-    match scan_literal(&scan, "pkgbase").ok().flatten() {
-        Some(base) => Some(base),
-        None => match scan.vars.get("pkgbase") {
-            Some(ScanValue::Scalar(base)) if !base.is_empty() => Some(base.clone()),
-            _ => None,
-        },
+    let Some(content) = gsa_model::read::optional(&recipe_dir.join("PKGBUILD"))
+        .map_err(FreshnessError::Unestablished)?
+    else {
+        return Ok(None);
+    };
+    let scan = scan_pkgbuild(&content);
+    match scan_literal(&scan, "pkgbase") {
+        Ok(Some(base)) if !base.is_empty() => Ok(Some(base)),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
     }
 }
 
@@ -1449,10 +1455,7 @@ pub fn current_version_key(recipe_dir: &Path) -> Result<(String, String), Freshn
             "could not evaluate pkgver/pkgrel for archive discovery".to_string(),
         ));
     };
-    let pv = match epoch {
-        Some(e) if !e.is_empty() => format!("{e}:{pkgver}"),
-        _ => pkgver,
-    };
+    let pv = crate::format_epoch_pkgver(epoch.as_deref(), &pkgver);
     if pv.is_empty() || pkgrel.is_empty() {
         return Err(FreshnessError::Unestablished(
             "could not evaluate pkgver/pkgrel for archive discovery".to_string(),
@@ -1467,18 +1470,23 @@ struct ArchiveRow {
     path: PathBuf,
 }
 
-fn list_archives(recipe_dir: &Path) -> Vec<ArchiveRow> {
+fn list_archives_checked(recipe_dir: &Path) -> Result<Vec<ArchiveRow>, FreshnessError> {
     let mut rows: Vec<ArchiveRow> = Vec::new();
     // W4: the shared build-user PKGDEST plus the recipe dir (pre-W4 trees
     // and fixture stubs write there); callers filter by output-name truth.
-    let scan_dirs =
-        match gsa_model::config::load().and_then(|c| gsa_model::config::build_layout(&c)) {
-            Ok(layout) => gsa_model::config::archive_dirs(recipe_dir, &layout),
-            Err(_) => vec![recipe_dir.to_path_buf()],
-        };
+    let layout =
+        gsa_model::config::build_layout_for_run().map_err(FreshnessError::Unestablished)?;
+    let scan_dirs = gsa_model::config::archive_dirs(recipe_dir, &layout);
     for scan_dir in scan_dirs {
-        let Ok(dir) = fs::read_dir(scan_dir) else {
-            continue;
+        let dir = match fs::read_dir(&scan_dir) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(FreshnessError::Unestablished(format!(
+                    "cannot read archive directory {}: {e}",
+                    scan_dir.display()
+                )));
+            }
         };
         for entry in dir.flatten() {
             let path = entry.path();
@@ -1506,7 +1514,7 @@ fn list_archives(recipe_dir: &Path) -> Vec<ArchiveRow> {
     // mtimes still fall back to a reverse path compare, the full-line
     // tiebreak of `sort -rn`.
     rows.sort_by(|a, b| b.mtime.cmp(&a.mtime).then_with(|| b.path.cmp(&a.path)));
-    rows
+    Ok(rows)
 }
 
 /// Is the archive file name `NAME-PV-PR-<arch>.pkg.tar.zst`? Literal string
@@ -1530,16 +1538,16 @@ pub fn archive_matches_output(archive: &Path, name: &str, pv: &str, pr: &str) ->
 /// the evaluated pkgver-pkgrel, plus the state of the SET. One archive maps
 /// to exactly one output name; a same-version ARCH-flavour leftover rides
 /// along with the build's own archive instead of displacing it.
-pub fn discover_current_set(recipe_dir: &Path) -> Discovery {
+pub fn discover_current_set_checked(recipe_dir: &Path) -> Result<Discovery, String> {
     let (pv, pr) = match current_version_key(recipe_dir) {
         Ok(v) => v,
-        Err(_) => return Discovery::default(),
+        Err(_) => return Ok(Discovery::default()),
     };
     let names = match expected_output_names(recipe_dir) {
         Ok(n) => n,
-        Err(_) => return Discovery::default(),
+        Err(_) => return Ok(Discovery::default()),
     };
-    let rows = list_archives(recipe_dir);
+    let rows = list_archives_checked(recipe_dir).map_err(|e| e.to_string())?;
     let mut chosen: Vec<PathBuf> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     for name in &names {
@@ -1555,12 +1563,16 @@ pub fn discover_current_set(recipe_dir: &Path) -> Discovery {
         }
     }
     chosen.sort();
-    Discovery {
+    Ok(Discovery {
         archives: chosen,
         missing,
         established: true,
         version_key: Some(format!("{pv}-{pr}")),
-    }
+    })
+}
+
+pub fn discover_current_set(recipe_dir: &Path) -> Discovery {
+    discover_current_set_checked(recipe_dir).unwrap_or_default()
 }
 
 /// `newest_complete_archives` (fish): the archives of the highest-VERSION
@@ -1577,12 +1589,12 @@ pub fn discover_current_set(recipe_dir: &Path) -> Discovery {
 /// higher-version but partial key still reports `Partial` — a lower-version
 /// complete set must never cover for a split set cut apart by a
 /// mid-packaging SIGKILL.
-pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
+pub fn discover_newest_complete_set_checked(recipe_dir: &Path) -> Result<Discovery, String> {
     let names = match expected_output_names(recipe_dir) {
         Ok(n) => n,
-        Err(_) => return Discovery::default(),
+        Err(_) => return Ok(Discovery::default()),
     };
-    let rows = list_archives(recipe_dir);
+    let rows = list_archives_checked(recipe_dir).map_err(|e| e.to_string())?;
     let mut entries: Vec<(String, String, PathBuf)> = Vec::new(); // (key, owner, path)
     for row in &rows {
         let base = short_name(&row.path);
@@ -1626,12 +1638,12 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
         // No claim set at all (never built, or nothing mappable): every
         // expected output is missing — never an empty `missing` list, which
         // the status read as a vacuously complete set and skipped on.
-        return Discovery {
+        return Ok(Discovery {
             archives: Vec::new(),
             missing: names,
             established: true,
             version_key: None,
-        };
+        });
     }
     let mut missing = Vec::new();
     for name in &names {
@@ -1648,12 +1660,16 @@ pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
         .map(|(_, _, p)| p.clone())
         .collect();
     chosen.sort();
-    Discovery {
+    Ok(Discovery {
         archives: chosen,
         missing,
         established: true,
         version_key: Some(newest_key),
-    }
+    })
+}
+
+pub fn discover_newest_complete_set(recipe_dir: &Path) -> Discovery {
+    discover_newest_complete_set_checked(recipe_dir).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1711,6 +1727,45 @@ mod discovery_tests {
         let discovery = discover_current_set(&dir);
         assert_eq!(discovery.status(), DiscoveryStatus::Nothing);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn epoch_zero_omits_prefix_in_version_key() {
+        let dir = std::env::temp_dir().join(format!("gsa-fresh-epoch0-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".SRCINFO"),
+            "pkgbase = demo\n\tpkgver = 1.2\n\tpkgrel = 3\n\tepoch = 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("PKGBUILD"),
+            "pkgname=demo\npkgver=1.2\npkgrel=3\nepoch=0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            current_version_key(&dir).unwrap(),
+            ("1.2".into(), "3".into())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_archives_propagates_layout_error_instead_of_legacy_fallback() {
+        let dir = recipe_with_srcinfo("layout-err");
+        let prev = std::env::var_os("GSA_CONF");
+        std::env::set_var("GSA_CONF", "/nonexistent-gsa-conf-freshness.conf");
+        let res = super::discover_current_set(&dir);
+        match prev {
+            Some(v) => std::env::set_var("GSA_CONF", v),
+            None => std::env::remove_var("GSA_CONF"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            !res.established,
+            "invalid layout must not report established"
+        );
     }
 }
 

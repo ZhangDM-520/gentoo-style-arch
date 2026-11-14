@@ -64,6 +64,17 @@ impl RunHistory {
         Ok((records, read.corrupt))
     }
 
+    /// Replace `runs/history.jsonl` with exactly `records` through the
+    /// ownership gate (`F-MNT-03`).
+    pub fn compact(
+        root: &StateRoot,
+        records: &[RunRecord],
+        err: &mut dyn Write,
+    ) -> Result<(), StateError> {
+        let lines: Vec<String> = records.iter().map(wire_run).collect();
+        store::replace_lines(&root.runs_path(), &lines, err)
+    }
+
     /// The run-history file path (for tests and reports).
     pub fn path(root: &StateRoot) -> PathBuf {
         root.runs_path()

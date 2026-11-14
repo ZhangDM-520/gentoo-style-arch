@@ -12,8 +12,6 @@
 //! `runs/`); unusable lines are reported by the readers and dropped by the
 //! compaction.
 
-use std::path::PathBuf;
-
 use gsa_model::RunRecord;
 use gsa_state::{CorruptLine, RunHistory, StateRoot};
 
@@ -109,18 +107,27 @@ pub struct Unfinished {
 
 fn unfinished_runs(state: &StateRoot) -> Vec<Unfinished> {
     let held = gsa_sched::lock::run_lock_held(state.path());
+    let runs_dir = state.path().join("runs");
+    let current = std::fs::read_to_string(runs_dir.join("current"))
+        .ok()
+        .map(|s| s.trim().to_string());
     let mut runs = unfinished_dirs(state);
     for run in &mut runs {
-        // The run lock is the exact answer (the supervisor holds it for the
-        // whole run); the `run.open` pid is the fallback when the lock file
-        // is absent or unreadable (a state root seeded without one).
-        run.live = match held {
-            Some(held) => held,
-            None => {
-                run.pid
-                    .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists())
-                    == Some(true)
-            }
+        if runs_dir.join(&run.id).join("run.died").exists() {
+            run.live = false;
+            continue;
+        }
+        let pid_alive = run
+            .pid
+            .map(|pid| std::path::Path::new(&format!("/proc/{pid}")).exists());
+        // If `run.lock` is definitely free (`Some(false)`), nothing holds it;
+        // if held or unprobed, require this run's own `run.open` PID to be
+        // live (else `runs/current` match only when no PID was recorded).
+        run.live = match (held, pid_alive) {
+            (Some(false), _) => false,
+            (_, Some(alive)) => alive,
+            (Some(true), None) => current.as_deref() == Some(run.id.as_str()),
+            (None, None) => false,
         };
     }
     runs
@@ -231,7 +238,10 @@ pub fn show(state: &StateRoot, run_id: usize) -> Result<String, String> {
 /// atomically; a rewrite failure is `Err` and leaves the file untouched.
 /// `apply == false` is the dry-run plan.
 pub fn prune(state: &StateRoot, apply: bool) -> Result<Vec<Row>, String> {
-    let (records, _corrupt) = records(state)?;
+    let (records, corrupt) = records(state)?;
+    if let Some(message) = CorruptLine::refusal(&corrupt, "the run history") {
+        return Err(message);
+    }
     let total = records.len();
     let mut keep: Vec<bool> = vec![false; total];
     let mut budget = RUN_HISTORY_KEEP;
@@ -311,27 +321,21 @@ fn retire_unfinished(state: &StateRoot, apply: bool, rows: &mut Vec<Row>) -> Res
     Ok(())
 }
 
-/// Rewrite `runs/history.jsonl` with exactly the kept records, atomically
-/// (temp name in `runs/`, `rename(2)` over the store — an interrupt never
-/// leaves a half-history).
+/// Rewrite `runs/history.jsonl` with exactly the kept records through
+/// `ownership_gate` (`gsa_state::RunHistory::compact`).
 fn compact(state: &StateRoot, records: &[RunRecord], keep: &[bool]) -> Result<(), String> {
-    let path: PathBuf = state.runs_path();
-    let mut body = String::new();
-    for (idx, record) in records.iter().enumerate() {
-        if !keep[idx] {
-            continue;
-        }
-        body.push_str(&gsa_state::wire_run(record));
-        body.push('\n');
+    let kept: Vec<RunRecord> = records
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| keep.get(*idx).copied().unwrap_or(false))
+        .map(|(_, record)| record.clone())
+        .collect();
+    let mut err = Vec::new();
+    let res = gsa_state::RunHistory::compact(state, &kept, &mut err);
+    if !err.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&err));
     }
-    let tmp = path.with_file_name(format!("history.jsonl.tmp.{}", std::process::id()));
-    std::fs::write(&tmp, body)
-        .map_err(|e| format!("cannot stage the run-history compaction: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("cannot publish the run-history compaction: {e}")
-    })?;
-    Ok(())
+    res.map_err(|e| format!("cannot compact run history: {e}"))
 }
 
 #[cfg(test)]
@@ -344,5 +348,57 @@ mod tests {
         assert_eq!(recorded_range(1), "1");
         assert_eq!(recorded_range(2), "1-2");
         assert!(!recorded_range(9).contains("..="));
+    }
+
+    #[test]
+    fn unfinished_runs_does_not_mark_dead_run_live_while_another_lock_is_held() {
+        let dir = std::env::temp_dir().join(format!("gsa-hist-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("runs/old-crashed")).unwrap();
+        std::fs::write(
+            dir.join("runs/old-crashed/run.open"),
+            "pid=99999999 epoch=1\n",
+        )
+        .unwrap();
+        let _lock = gsa_sched::lock::try_acquire_run_lock(&dir).unwrap();
+        let state = StateRoot::open_readonly(&dir);
+        let found = unfinished_runs(&state);
+        assert_eq!(found.len(), 1);
+        assert!(
+            !found[0].live,
+            "a dead pid with no run.closed must not look live just because another process holds run.lock"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_refuses_corrupt_history_and_compact_refuses_symlink_target() {
+        let dir = std::env::temp_dir().join(format!("gsa-hist-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("runs")).unwrap();
+        let state = StateRoot::open_readonly(&dir);
+        std::fs::write(state.runs_path(), "not-json\n").unwrap();
+        let err = prune(&state, true).expect_err("corrupt run history must be refused by prune");
+        assert!(
+            err.contains("corrupt") || err.contains("run history"),
+            "{err}"
+        );
+
+        // Symlink protection on compaction: target file must not be overwritten.
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "untouched\n").unwrap();
+        let _ = std::fs::remove_file(state.runs_path());
+        std::os::unix::fs::symlink(&victim, state.runs_path()).unwrap();
+        let err2 =
+            compact(&state, &[], &[]).expect_err("compact must refuse symlink at history.jsonl");
+        assert!(
+            err2.contains("symlink")
+                || err2.contains("Too many")
+                || err2.contains("Ownership")
+                || err2.contains("gate"),
+            "{err2}"
+        );
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "untouched\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -439,10 +439,13 @@ fn tombstone_deleted(ctx: &MaintCtx<'_>, deleted: &[(String, PathBuf)]) -> Vec<R
             .iter()
             .filter(|r| r.recipe_id == row.recipe_id && r.instance == row.instance)
             .collect();
-        if !siblings
-            .iter()
-            .all(|r| gone.contains(r.archive.as_path()) || !r.archive.exists())
-        {
+        if !siblings.iter().all(|r| {
+            gone.contains(r.archive.as_path())
+                || matches!(
+                    std::fs::symlink_metadata(&r.archive),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound
+                )
+        }) {
             continue;
         }
         seen.insert(key.clone());
@@ -530,20 +533,15 @@ pub fn strength1(ctx: &MaintCtx<'_>, recipes: &[String], apply: bool) -> Vec<Row
     let mut targets: Vec<(String, Target)> = Vec::new();
     let mut seen = BTreeSet::new();
     for id in recipes {
-        let dir = ctx.root.join(
-            ctx.graph
-                .records()
-                .iter()
-                .find(|r| r.id.as_str() == id)
-                .map(|r| r.path.clone())
-                .unwrap_or_default(),
-        );
         let mut mine: Vec<(String, Target)> = Vec::new();
-        for target in staging_targets(&dir, false, ctx.root.to_path_buf()) {
-            mine.push((id.clone(), target));
-        }
-        for target in archive_targets(&dir, ctx.root.to_path_buf()) {
-            mine.push((id.clone(), target));
+        if let Some(record) = ctx.graph.records().iter().find(|r| r.id.as_str() == id) {
+            let dir = ctx.root.join(&record.path);
+            for target in staging_targets(&dir, false, ctx.root.to_path_buf()) {
+                mine.push((id.clone(), target));
+            }
+            for target in archive_targets(&dir, ctx.root.to_path_buf()) {
+                mine.push((id.clone(), target));
+            }
         }
         // The live per-pkgbase trees are named by the recipe's declared
         // pkgbase, else by its recipe id — the SAME fallback the build side
@@ -627,9 +625,7 @@ pub fn strength3(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
     let mut targets: Vec<(String, Target)> = Vec::new();
     let mut seen = BTreeSet::new();
     for (id, dir) in ctx.recipe_dirs() {
-        let Some(meta) = ctx.db.get(&id) else {
-            continue;
-        };
+        let meta = ctx.db.get(&id);
         let mut mine: Vec<(String, Target)> = Vec::new();
         for target in archive_targets(&dir, ctx.root.to_path_buf()) {
             mine.push((id.clone(), target));
@@ -637,16 +633,20 @@ pub fn strength3(ctx: &MaintCtx<'_>, apply: bool) -> Vec<Row> {
         for target in staging_targets(&dir, true, ctx.root.to_path_buf()) {
             mine.push((id.clone(), target));
         }
-        for target in source_targets(&dir, ctx.root, &meta, &patterns) {
-            mine.push((id.clone(), target));
-        }
-        if let Some(base) = pkgbase_of(&meta) {
-            for target in live_staging_targets(&layout, &base) {
+        if let Some(meta) = &meta {
+            for target in source_targets(&dir, ctx.root, meta, &patterns) {
                 mine.push((id.clone(), target));
             }
         }
-        if let Some(srcdest) = &srcdest {
-            for target in source_targets(srcdest, srcdest, &meta, &patterns) {
+        let base = meta
+            .as_ref()
+            .and_then(|m| pkgbase_of(m))
+            .unwrap_or_else(|| id.clone());
+        for target in live_staging_targets(&layout, &base) {
+            mine.push((id.clone(), target));
+        }
+        if let (Some(srcdest), Some(meta)) = (&srcdest, &meta) {
+            for target in source_targets(srcdest, srcdest, meta, &patterns) {
                 mine.push((id.clone(), target));
             }
         }

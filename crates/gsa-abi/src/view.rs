@@ -11,28 +11,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::provides::{provide_covers, provide_name};
-
-/// The ELF class a runtime file truth claim must match (Arch layout: the
-/// 32-bit ABI lives under `usr/lib32/` — the lib32-icu class that masked the
-/// icu .78 breakage from `gsa -Qr`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ElfClass {
-    X64,
-    X32,
-}
-
-/// The class of an owned path by its lib directory (the consumer/member
-/// path is the class hint — `usr/lib32/…` is 32-bit, everything else is
-/// the dominant 64-bit ABI).
-pub fn path_class(path: &str) -> ElfClass {
-    let p = path.strip_prefix('/').unwrap_or(path);
-    if p.starts_with("usr/lib32/") || p.starts_with("lib32/") {
-        ElfClass::X32
-    } else {
-        ElfClass::X64
-    }
-}
+use crate::provides::{provide_covers, provide_covers_as, provide_name};
+pub use gsa_model::abi::{path_class, ElfClass};
 
 /// One installed package as the ABI surfaces need it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +86,22 @@ impl InstalledView {
             .any(|pkg| pkg.name == name || pkg.provides.iter().any(|p| provide_covers(p, name)))
     }
 
+    /// Class-scoped [`Self::provides_cover`]: an auto-versioned `-32`/`-64`
+    /// provide covers only a consumer member in the same [`ElfClass`].
+    pub fn provides_cover_as(&self, dep: &str, class: ElfClass) -> bool {
+        let name = provide_name(dep);
+        if name.is_empty() {
+            return false;
+        }
+        self.pkgs.values().any(|pkg| {
+            pkg.name == name
+                || pkg
+                    .provides
+                    .iter()
+                    .any(|p| provide_covers_as(p, name, class))
+        })
+    }
+
     /// The installed packages whose name/provides cover `dep` (the provider
     /// lookup behind subscription recording).
     pub fn providers_of(&self, dep: &str) -> Vec<&InstalledPkg> {
@@ -116,10 +112,30 @@ impl InstalledView {
             .collect()
     }
 
+    /// Class-scoped [`Self::providers_of`].
+    pub fn providers_of_as(&self, dep: &str, class: ElfClass) -> Vec<&InstalledPkg> {
+        let name = provide_name(dep);
+        self.pkgs
+            .values()
+            .filter(|pkg| {
+                pkg.name == name
+                    || pkg
+                        .provides
+                        .iter()
+                        .any(|p| provide_covers_as(p, name, class))
+            })
+            .collect()
+    }
+
     /// The installed packages owning the named file (exact path or the same
     /// basename) — runtime file truth for providers that declare no soname
     /// provide (stock Arch, rule 25(b)).
     pub fn file_owners(&self, path: &str) -> Vec<&InstalledPkg> {
+        self.file_owners_as(path, path_class(path))
+    }
+
+    /// Class-scoped [`Self::file_owners`]: only owned files in `class` match.
+    pub fn file_owners_as(&self, path: &str, class: ElfClass) -> Vec<&InstalledPkg> {
         let normalized = path.strip_prefix('/').unwrap_or(path);
         let base = normalized.rsplit('/').next().unwrap_or("");
         self.pkgs
@@ -127,7 +143,8 @@ impl InstalledView {
             .filter(|pkg| {
                 pkg.files.iter().any(|f| {
                     let f = f.strip_prefix('/').unwrap_or(f);
-                    f == normalized || f.rsplit('/').next() == Some(base)
+                    path_class(f) == class
+                        && (f == normalized || f.rsplit('/').next() == Some(base))
                 })
             })
             .collect()

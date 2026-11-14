@@ -168,7 +168,7 @@ pub const FLAGS: &[FlagSpec] = &[
         name: "no-build-dir-prompt",
         description: "never ask where the build cache should live",
         takes_value: false,
-        families: &[Family::S, Family::B, Family::U],
+        families: &[Family::S, Family::B],
     },
     FlagSpec {
         name: "no-register-ignorepkg",
@@ -310,7 +310,7 @@ pub const FLAGS: &[FlagSpec] = &[
     },
     FlagSpec {
         name: "show",
-        description: "which side-car rows to show (-Mb)",
+        description: "which run record to show (-Mh)",
         takes_value: true,
         families: &[Family::M],
     },
@@ -443,7 +443,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         family: Family::S,
         letter: 'u',
-        terminal: true,
+        terminal: false,
         description: "update the stale set with no sync pass",
     },
     ActionSpec {
@@ -608,6 +608,8 @@ pub struct Invocation {
     /// `--no-build-dir-prompt`: resolve the build root silently from the
     /// layers instead of asking on a TTY (the pre-prompt behaviour).
     pub no_build_dir_prompt: bool,
+    /// `--no-register-ignorepkg`: skip dynamic IgnorePkg registration cleanly.
+    pub no_register_ignorepkg: bool,
     /// `--allow-broken-rustc`: skip the rustc sanity probe entirely (§B.8;
     /// escape hatch for runs that compile no Rust).
     pub allow_broken_rustc: bool,
@@ -889,6 +891,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         no_sync: false,
         build_dir: None,
         no_build_dir_prompt: false,
+        no_register_ignorepkg: false,
         allow_broken_rustc: false,
         standalone_root: None,
         standalone_tokens: Vec::new(),
@@ -1000,16 +1003,15 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     inv.allow_broken_rustc = true;
                     inv.deferred_flags.push("--allow-broken-rustc".to_string());
                 }
-                "no-register-ignorepkg"
-                | "noconfirm"
-                | "quiet"
-                | "verbose"
-                | "fix"
-                | "prune"
-                | "backfill"
-                | "add"
-                | "remove"
-                | "register-ignorepkg" => {
+                "no-register-ignorepkg" => {
+                    if value.is_some() {
+                        return Err(format!("flag '--{name}' takes no value"));
+                    }
+                    inv.no_register_ignorepkg = true;
+                    inv.deferred_flags.push(format!("--{name}"));
+                }
+                "noconfirm" | "quiet" | "verbose" | "fix" | "prune" | "backfill" | "add"
+                | "remove" | "register-ignorepkg" => {
                     if value.is_some() {
                         return Err(format!("flag '--{name}' takes no value"));
                     }
@@ -1049,8 +1051,18 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     // `command:` value (§H.2 forbids it): the continuation
                     // would advertise an unreplayable command and the
                     // machine block would break. Refuse at the flag.
-                    if matches!(name, "state-dir" | "build-dir" | "config")
-                        && value.contains(['\n', '\r'])
+                    if matches!(
+                        name,
+                        "state-dir"
+                            | "build-dir"
+                            | "config"
+                            | "vcs-skip-tolerance"
+                            | "toolchain"
+                            | "prefetch-ahead"
+                            | "lanes"
+                            | "jobs"
+                            | "intensity"
+                    ) && value.contains(['\n', '\r'])
                     {
                         return Err(format!(
                             "flag '--{name}' must be a single line (the run record restates it on one)"
@@ -1601,5 +1613,31 @@ mod tests {
         let inv = parse_ok(&["-Sl", "fix..stuff", "../pkg.tar.zst"]);
         assert!(inv.ranges.is_empty(), "{:?}", inv.ranges);
         assert_eq!(inv.targets, vec!["fix..stuff", "../pkg.tar.zst"]);
+    }
+
+    #[test]
+    fn su_accepts_build_modifiers_and_show_prompt_help_rosters_match_contract() {
+        for cluster in ["-Suf", "-Suc", "-Syuf", "-Syuc"] {
+            let inv = parse_ok(&[cluster]);
+            assert_eq!(inv.action, Some('u'));
+            assert!(!inv.modifiers.is_empty());
+        }
+        assert_eq!(
+            flag_spec("no-build-dir-prompt").unwrap().families,
+            &[Family::S, Family::B]
+        );
+        let show_desc = flag_spec("show").unwrap().description;
+        assert!(show_desc.contains("-Mh"), "{show_desc}");
+    }
+
+    #[test]
+    fn mirrored_value_flags_reject_newlines() {
+        for flag in ["--toolchain", "--vcs-skip-tolerance", "--prefetch-ahead"] {
+            let err = parse_err(&["-B", flag, "bad\nvalue", "mesa-git"]);
+            assert!(
+                err.contains("must be a single line"),
+                "{flag} allowed newline: {err}"
+            );
+        }
     }
 }

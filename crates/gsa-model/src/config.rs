@@ -165,13 +165,17 @@ pub fn build_root_with_source(cfg: &GsaConfig) -> Result<(PathBuf, &'static str)
     // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
     // here, so no downstream seam has to re-derive it (blind review,
     // 2026-11-11).
-    let mut root = resolved.value;
-    if !root.is_absolute() {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
-        root = cwd.join(root);
-    }
+    let root = absolutize_root(resolved.value, "the build root")?;
     Ok((root, resolved.source))
+}
+
+fn absolutize_root(path: PathBuf, label: &str) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("cannot resolve {label} '{}': {e}", path.display()))?;
+    Ok(cwd.join(path))
 }
 
 /// Pin the run's build root (contract §J.2). Called once, by the CLI, before
@@ -508,16 +512,23 @@ pub fn resolve_srcdest() -> Option<PathBuf> {
 /// [`resolve_srcdest`] plus the rung that decided it; `"no SRCDEST"` only
 /// when no rung could answer (no `srcdest` key AND no resolvable build-user
 /// home for the built-in).
+pub fn resolve_srcdest_checked() -> Result<(Option<PathBuf>, &'static str), String> {
+    let cfg = load()?;
+    let home = build_user_home().ok();
+    resolve_srcdest_for(&cfg, home.as_deref())
+}
+
 pub fn resolve_srcdest_with_source() -> (Option<PathBuf>, &'static str) {
     let cfg = load().unwrap_or_default();
     let home = build_user_home().ok();
-    let (value, source) = resolve_srcdest_from(&cfg, home.as_deref());
-    (value, source)
+    resolve_srcdest_from(&cfg, home.as_deref())
 }
 
-/// The pure precedence seam for [`resolve_srcdest`] (testable without the
-/// process environment or the filesystem).
-fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
+/// The precedence ladder alone, no filesystem work: the configured value or
+/// the build user's built-in `~/.gsa-src`. ONE ladder — the absolute-path
+/// check and the pure seam below both read it (round-2 audit, F-R2-A-06: the
+/// fallback arms were copied, so the two ladders could drift).
+fn srcdest_candidate(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
     match resolve_opt(&[("gsa.conf srcdest", cfg.srcdest.clone())]) {
         Some(resolved) => (Some(resolved.value), resolved.source),
         None => match home {
@@ -527,6 +538,24 @@ fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf
     }
 }
 
+fn resolve_srcdest_for(
+    cfg: &GsaConfig,
+    home: Option<&Path>,
+) -> Result<(Option<PathBuf>, &'static str), String> {
+    let (value, source) = srcdest_candidate(cfg, home);
+    match value {
+        Some(value) => Ok((Some(absolutize_root(value, "the source cache")?), source)),
+        None => Ok((None, source)),
+    }
+}
+
+/// The pure precedence seam for [`resolve_srcdest`] (testable without the
+/// process environment or the filesystem). An un-absolutizable root answers
+/// with the raw value; the build path's own absolute-path check names it.
+fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf>, &'static str) {
+    resolve_srcdest_for(cfg, home).unwrap_or_else(|_| srcdest_candidate(cfg, home))
+}
+
 /// Load every auto-read layer, user over system over built-ins. Missing files
 /// are fine (the layer simply contributes nothing); malformed files fail loud.
 /// `GSA_CONF` (fixture/hermetic control, like `GSA_STATE_DIR`) replaces the
@@ -534,15 +563,13 @@ fn resolve_srcdest_from(cfg: &GsaConfig, home: Option<&Path>) -> (Option<PathBuf
 /// directory resolution with one directory, which is what a fixture needs so
 /// the host's `/etc/gsa` can never leak into the battery.
 pub fn load() -> Result<GsaConfig, String> {
-    if let Ok(path) = std::env::var("GSA_CONF") {
-        if !path.is_empty() {
-            let home = build_user_home()?;
-            // An explicitly named file is a CLAIM, not an optional layer: a
-            // misspelt path used to contribute nothing and the run silently
-            // proceeded against the built-in directories (blind review,
-            // 2026-11-11: `GSA_CONF=/typo.conf gsa -Sl` listed the store).
-            return read_layer_required(Path::new(&path), &home);
-        }
+    if let Some(path) = nonempty(std::env::var("GSA_CONF").ok().as_deref()) {
+        let home = build_user_home()?;
+        // An explicitly named file is a CLAIM, not an optional layer: a
+        // misspelt path used to contribute nothing and the run silently
+        // proceeded against the built-in directories (blind review,
+        // 2026-11-11: `GSA_CONF=/typo.conf gsa -Sl` listed the store).
+        return read_layer_required(Path::new(path), &home);
     }
     let home = build_user_home()?;
     let layers = conf_layers_with(std::env::var("GSA_CONF_DIR").ok().as_deref(), &home);
@@ -726,12 +753,7 @@ pub fn resolve_state_dir_from(
     // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
     // here, so no downstream seam has to re-derive it (blind review,
     // 2026-11-11).
-    let mut root = resolved.value;
-    if !root.is_absolute() {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
-        root = cwd.join(root);
-    }
+    let root = absolutize_root(resolved.value, "the state root")?;
     Ok((root, resolved.source))
 }
 
@@ -755,7 +777,7 @@ pub fn recipe_root(cfg: &GsaConfig) -> Result<PathBuf, String> {
             ))
         },
     )?;
-    Ok(resolved.value)
+    absolutize_root(resolved.value, "the recipe root")
 }
 
 /// The pure precedence seam for [`recipe_root`] (testable without touching
@@ -768,19 +790,7 @@ pub fn recipe_root_from(
     let resolved = resolve(&recipe_tiers(env, cfg), || {
         Ok((default_recipe_root(home), "the built-in default"))
     })?;
-    // A relative root is legal (`--state-dir state` next to the workspace is
-    // a common spelling and `tests/gsa-sched-v2` §7 pins it), but every
-    // consumer must see an ABSOLUTE path: the PACMAN shim is handed to
-    // makepkg, which runs with the recipe's cwd, and a relative shim path
-    // there is "An unknown error has occurred" (2026-10-14). Normalize ONCE,
-    // here, so no downstream seam has to re-derive it (blind review,
-    // 2026-11-11).
-    let mut root = resolved.value;
-    if !root.is_absolute() {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("cannot resolve the state root '{}': {e}", root.display()))?;
-        root = cwd.join(root);
-    }
+    let root = absolutize_root(resolved.value, "the recipe root")?;
     Ok((root, resolved.source))
 }
 
@@ -857,6 +867,27 @@ pub fn create_owned_dir(dir: &Path) -> Result<(), String> {
         })?;
     }
     Ok(())
+}
+
+/// Normalize a path handed to a child running in a recipe directory: resolve
+/// `.` / `..` / cwd into an absolute path (`std::path::absolute`) instead of
+/// resolving relative to the child's cwd.
+pub fn absolute_for_child(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Find the recipe repository root by walking upward from `start` until
+/// `config/topology.conf` exists.
+pub fn find_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        if dir.join("config").join("topology.conf").is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1203,5 +1234,67 @@ mod tests {
             "{WORKSPACE_HINT}"
         );
         assert!(WORKSPACE_HINT.contains("sudo gsa -Sy"), "{WORKSPACE_HINT}");
+    }
+
+    #[test]
+    fn relative_recipe_and_srcdest_paths_normalize_to_absolute() {
+        let cfg = GsaConfig {
+            recipe_dir: Some(PathBuf::from("rel/recipes")),
+            srcdest: Some(PathBuf::from("rel/src")),
+            ..GsaConfig::default()
+        };
+        let prev = std::env::var_os("GSA_RECIPES_DIR");
+        std::env::remove_var("GSA_RECIPES_DIR");
+        let resolved_recipe = recipe_root(&cfg).unwrap();
+        match prev {
+            Some(v) => std::env::set_var("GSA_RECIPES_DIR", v),
+            None => std::env::remove_var("GSA_RECIPES_DIR"),
+        }
+        assert!(
+            resolved_recipe.is_absolute(),
+            "recipe_root must be absolute, got {}",
+            resolved_recipe.display()
+        );
+        let (resolved_srcdest, _) = resolve_srcdest_from(&cfg, Some(&home()));
+        let resolved_srcdest = resolved_srcdest.unwrap();
+        assert!(
+            resolved_srcdest.is_absolute(),
+            "resolve_srcdest_from must be absolute, got {}",
+            resolved_srcdest.display()
+        );
+    }
+
+    #[test]
+    fn whitespace_gsa_conf_is_treated_as_unset() {
+        let dir = std::env::temp_dir().join(format!("gsa-conf-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev_conf = std::env::var_os("GSA_CONF");
+        let prev_dir = std::env::var_os("GSA_CONF_DIR");
+        std::env::set_var("GSA_CONF", "   ");
+        std::env::set_var("GSA_CONF_DIR", &dir);
+        let loaded = load();
+        match prev_conf {
+            Some(v) => std::env::set_var("GSA_CONF", v),
+            None => std::env::remove_var("GSA_CONF"),
+        }
+        match prev_dir {
+            Some(v) => std::env::set_var("GSA_CONF_DIR", v),
+            None => std::env::remove_var("GSA_CONF_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(loaded.is_ok(), "whitespace GSA_CONF failed: {loaded:?}");
+    }
+
+    #[test]
+    fn resolve_srcdest_checked_surfaces_missing_explicit_conf() {
+        let prev_conf = std::env::var_os("GSA_CONF");
+        std::env::set_var("GSA_CONF", "/nonexistent-gsa-conf-for-test.conf");
+        let res = resolve_srcdest_checked();
+        match prev_conf {
+            Some(v) => std::env::set_var("GSA_CONF", v),
+            None => std::env::remove_var("GSA_CONF"),
+        }
+        assert!(res.is_err(), "expected error on missing GSA_CONF: {res:?}");
     }
 }

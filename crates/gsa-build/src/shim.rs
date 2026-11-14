@@ -13,6 +13,7 @@
 //! ever shell syntax, so spaces break nothing and `$(…)`/`;`/newlines can
 //! never become code execution in the shim.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The shim path under the state root. A fixture or run without it (Phase 2
@@ -39,7 +40,19 @@ fn shell_single_quote(value: &str) -> String {
 /// it is (its baked paths never change for one state root).
 pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
     let path = shim_path(state_dir);
-    if path.is_file() {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create(true);
+    let mut file = gsa_model::state_gate::open_state_file_with_uid(
+        &path,
+        &mut opts,
+        gsa_model::state_gate::current_uid(),
+        &mut std::io::stderr(),
+    )
+    .map_err(|e| e.to_string())?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+    if meta.len() > 0 {
         return Ok(path);
     }
     let mutex = shell_single_quote(&mutex_path(state_dir).display().to_string());
@@ -67,11 +80,14 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
          exit \"$rc\"\n",
         mutex = mutex
     );
-    std::fs::write(&path, body).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    file.write_all(body.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    file.flush()
+        .map_err(|e| format!("cannot flush {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        file.set_permissions(std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("cannot chmod {}: {e}", path.display()))?;
     }
     Ok(path)
@@ -173,5 +189,24 @@ mod tests {
         assert_eq!(shell_single_quote("a b"), "'a b'");
         assert_eq!(shell_single_quote("a'b"), r"'a'\''b'");
         assert_eq!(shell_single_quote("$(reboot); x"), "'$(reboot); x'");
+    }
+
+    #[test]
+    fn shim_gate_refuses_symlink_and_never_clobbers_target() {
+        let dir = std::env::temp_dir().join(format!("gsa-shim-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        let target = dir.join("victim");
+        std::fs::write(&target, "untouched\n").unwrap();
+        let shim = shim_path(&dir);
+        std::os::unix::fs::symlink(&target, &shim).unwrap();
+
+        let err = ensure_pacman_shim(&dir).unwrap_err();
+        assert!(
+            err.contains("symlink") || err.contains("ownership"),
+            "symlink refusal expected, got: {err}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

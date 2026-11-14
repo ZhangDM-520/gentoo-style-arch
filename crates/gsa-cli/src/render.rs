@@ -731,7 +731,9 @@ fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String
         SupEvent::PrefetchWarning(message) => (format!("⚠ {message}"), Role::Warn),
         // A view heartbeat, never a message (the TTY dashboard redraws on
         // it) — it renders empty in BOTH vocabularies.
-        SupEvent::Tick => return String::new(),
+        SupEvent::Tick | SupEvent::Activated { .. } | SupEvent::Reopened { .. } => {
+            return String::new()
+        }
     };
     format!("{}\n", style::paint(role, &line))
 }
@@ -815,7 +817,9 @@ fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> Stri
         // A view heartbeat, never a message: empty in BOTH vocabularies, so
         // a machine stream gains nothing per tick (early return — the frame
         // below terminates real lines only).
-        SupEvent::Tick => return String::new(),
+        SupEvent::Tick | SupEvent::Activated { .. } | SupEvent::Reopened { .. } => {
+            return String::new()
+        }
     };
     format!("{line}\n")
 }

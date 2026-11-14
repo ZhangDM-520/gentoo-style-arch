@@ -57,6 +57,7 @@ extern "C" {
     #[link_name = "write"]
     fn write_byte(fd: i32, buf: *const std::ffi::c_void, count: usize) -> isize;
     fn pipe(fds: *mut i32) -> i32;
+    fn close(fd: i32) -> i32;
     fn flock(fd: i32, op: i32) -> i32;
     fn getuid() -> u32;
     fn fork() -> i32;
@@ -216,10 +217,29 @@ pub fn first_signal() -> i32 {
     FIRST_SIGNAL.load(Ordering::SeqCst)
 }
 
-/// The read end of the self-pipe; the owner blocks on it and forwards each
-/// byte as a signal event.
+/// Guard that tears down the self-pipe write end and resets signal handlers
+/// on drop so the forwarding thread sees EOF instead of leaking per run.
+pub struct SignalGuard {
+    write_fd: i32,
+}
+
+impl Drop for SignalGuard {
+    fn drop(&mut self) {
+        reset_signal_handlers();
+        let _ = PIPE_WRITE.compare_exchange(self.write_fd, -1, Ordering::SeqCst, Ordering::SeqCst);
+        if self.write_fd >= 0 {
+            unsafe {
+                close(self.write_fd);
+            }
+        }
+    }
+}
+
+/// The read end of the self-pipe plus its teardown guard; moving `read` into
+/// the forwarder thread leaves `guard` scoped to the run.
 pub struct SignalPipe {
     pub read: std::fs::File,
+    pub guard: SignalGuard,
 }
 
 /// The handler address for `signal(2)`: fn item → fn pointer → address (a
@@ -261,13 +281,22 @@ pub fn received_signal_at_ns() -> u64 {
 pub static TEST_SIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Install handlers for SIGHUP/SIGTERM/SIGINT and return the self-pipe read
-/// end. The handlers are process-global (one supervisor per process).
+/// end alongside its teardown guard. Resets the process-global receipt counters
+/// for the fresh run.
 pub fn install_handlers() -> io::Result<SignalPipe> {
     let mut fds = [-1i32; 2];
     if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    PIPE_WRITE.store(fds[1], Ordering::SeqCst);
+    SIGNAL_COUNT.store(0, Ordering::SeqCst);
+    FIRST_SIGNAL.store(0, Ordering::SeqCst);
+    FIRST_SIGNAL_AT_NS.store(0, Ordering::SeqCst);
+    let prev = PIPE_WRITE.swap(fds[1], Ordering::SeqCst);
+    if prev >= 0 {
+        unsafe {
+            close(prev);
+        }
+    }
     for sig in [SIGHUP, SIGTERM, SIGINT] {
         unsafe {
             signal(sig, handler_addr());
@@ -275,7 +304,10 @@ pub fn install_handlers() -> io::Result<SignalPipe> {
     }
     // fds[0] is the read end; owned as a File for the reader thread.
     let read = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-    Ok(SignalPipe { read })
+    Ok(SignalPipe {
+        read,
+        guard: SignalGuard { write_fd: fds[1] },
+    })
 }
 
 #[cfg(test)]
@@ -309,6 +341,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let pipe = install_handlers().expect("handlers install");
+        let _signal_guard = pipe.guard;
         std::thread::spawn(move || {
             let _ = send_signal(std::process::id() as i32, SIGTERM);
         });
@@ -319,5 +352,15 @@ mod tests {
         assert_eq!(buf[0] as i32, SIGTERM);
         assert_eq!(first_signal(), SIGTERM);
         assert!(signal_count() >= 1);
+
+        // Dropping the SignalGuard closes the write end (EOF for reader) and
+        // a fresh install starts with zeroed counters.
+        drop(_signal_guard);
+        let mut eof = [0u8; 1];
+        assert_eq!(read.read(&mut eof).expect("eof read"), 0);
+        let pipe2 = install_handlers().expect("reinstall");
+        assert_eq!(first_signal(), 0);
+        assert_eq!(signal_count(), 0);
+        drop(pipe2);
     }
 }

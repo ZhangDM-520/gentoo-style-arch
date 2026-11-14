@@ -169,10 +169,11 @@ pub enum Rank {
 
 /// The output names a recipe declares without committed `.SRCINFO`: the
 /// PKGBUILD's own `pkgname` (scalar or split array), else the recipe
-/// directory's final component. Never empty for a directory with a name.
-fn declared_names(recipe_dir: &Path) -> Vec<String> {
+/// directory's final component. An absent PKGBUILD falls back to the directory
+/// name; an unreadable PKGBUILD propagates `Err` (`F-INS-09`).
+fn declared_names(recipe_dir: &Path) -> Result<Vec<String>, String> {
     let pkgbuild = recipe_dir.join("PKGBUILD");
-    if let Ok(text) = std::fs::read_to_string(&pkgbuild) {
+    if let Some(text) = gsa_model::read::optional(&pkgbuild)? {
         let scan = gsa_recipe::scan_pkgbuild(&text);
         let names = match scan.vars.get("pkgname") {
             Some(gsa_recipe::ScanValue::Scalar(name)) => vec![name.clone()],
@@ -189,13 +190,13 @@ fn declared_names(recipe_dir: &Path) -> Vec<String> {
             .filter(|name| !name.is_empty())
             .collect();
         if !names.is_empty() {
-            return names;
+            return Ok(names);
         }
     }
-    recipe_dir
+    Ok(recipe_dir
         .file_name()
         .map(|name| vec![name.to_string_lossy().into_owned()])
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 /// Discover one recipe's best-ranked archive set. Archives are matched by
@@ -204,7 +205,7 @@ fn declared_names(recipe_dir: &Path) -> Vec<String> {
 /// version, newest mtime on a version tie, mtime order whenever `vercmp`
 /// cannot rank — never string order). An archive whose `.PKGINFO`
 /// cannot be read is NOT a candidate here; the decision seam reports it per
-/// rule 25(h) (`skip unreadable-pkginfo` / `refuse discover-failed`).
+/// rule 25(h) + rule 71 (`refuse unreadable-pkginfo` / `refuse discover-failed`).
 pub fn discover_recipe(recipe_dir: &Path) -> Result<RecipeArchives, String> {
     discover_recipe_ranked(recipe_dir, Rank::Version)
 }
@@ -242,7 +243,7 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
         // "every readable archive in the scan set", which was this recipe's
         // own tree before the shared PKGDEST — with a shared cache it claims
         // the whole cache and refuses as `mixed-versions` (2026-11-11).
-        expected = declared_names(recipe_dir);
+        expected = declared_names(recipe_dir)?;
     }
 
     // The chosen archive per expected pkgname, matched by the archive's own
@@ -262,20 +263,40 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
     let mut unreadable: Vec<(PathBuf, String)> = Vec::new();
     let mut scanned = false;
     for scan_dir in &scan_dirs {
-        let Ok(entries) = std::fs::read_dir(scan_dir) else {
-            continue;
+        let entries = match std::fs::read_dir(scan_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "cannot read archive dir {}: {error}",
+                    scan_dir.display()
+                ));
+            }
         };
         scanned = true;
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
+            // Only a DIRECTORY is not an archive. A symlink loop, a dangling
+            // link or an unreadable file answers `is_file()` false, and
+            // skipping those as "absent" stood the damaged-archive report
+            // down (rule 71; round-2 audit, F-R2-B-04).
+            //
+            // `!is_dir()` alone would also admit FIFOs, sockets and device
+            // nodes: opening a writer-less FIFO BLOCKS forever, hanging the
+            // whole plan. So the entry must be a regular file or a symlink
+            // that resolves to one — and one whose `stat` FAILS (dangling
+            // link, loop, EACCES) still proceeds, because that is exactly
+            // the damaged archive the report must name.
             if !name.ends_with(".pkg.tar.zst") {
                 continue;
+            }
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if !meta.is_file() {
+                    continue;
+                }
             }
             let pkginfo = match read_pkginfo(&path) {
                 Ok(pkginfo) => pkginfo,
@@ -688,6 +709,14 @@ fn qa_refusals(
 ) -> Vec<DecisionRow> {
     let mut recipes: Vec<gsa_qa::QaRecipe> = Vec::new();
     let mut recipe_id = String::new();
+    // The committed `.SRCINFO` is the SECOND NAME AUTHORITY (rule 9) for
+    // `stale-ignorepkg` whether or not the recipe was DISCOVERED: an
+    // operator-named archive path's neighbour is still the recipe those
+    // bytes claim to come from, and that is the only thing the check can
+    // compare. `recipe_trusted` gates the PKGBUILD "is instrumented"
+    // SHORTCUT (a scan bypass), never a read that only produces refusal
+    // rows — gating this one let a direct `-U <archive>` slot an
+    // undeclared name into IgnorePkg (round-2 audit, F-R2-B-01).
     if let Some(dir) = candidate.recipe_dir.as_deref() {
         recipe_id = dir
             .file_name()
@@ -810,21 +839,80 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     } else {
         &collapsed
     };
-    // The transaction set: every name this plan would install — the
-    // coverage side of the ABI gate.
-    let tx_names: Vec<String> = parsed
+    // Resolve `.SRCINFO` names and park membership BEFORE computing
+    // `tx_names` / `ShippedBytes` (`F-INS-06`, `F-INS-08`): `tx_names` is
+    // built from `.PKGINFO` alone and parked candidates are excluded, so
+    // neither a neighbour `.SRCINFO` nor a parked candidate can pollute
+    // `in_tx` or shipped-byte resolution.
+    struct Meta<'a> {
+        src_err: Option<String>,
+        name_chain: Vec<String>,
+        subject: String,
+        parked_reason: Option<String>,
+        candidate: &'a Candidate,
+        pkginfo: Option<Pkginfo>,
+    }
+    let mut metas: Vec<Meta<'_>> = Vec::with_capacity(candidates.len());
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let pkginfo = parsed[idx].clone();
+        let mut name_chain: Vec<String> = Vec::new();
+        if let Some(info) = &pkginfo {
+            name_chain.push(info.pkgbase.clone());
+            name_chain.push(info.pkgname.clone());
+        }
+        // The committed `.SRCINFO` is read as a NAME AUTHORITY for every
+        // candidate that sits beside one (rule 9's second authority), the
+        // direct `-U <archive>` case included: `recipe_trusted` says only
+        // that the neighbour PKGBUILD's "instrumented" declaration may skip
+        // the payload scan, which is a different question from which names
+        // this archive's recipe declares (round-2 audit, F-R2-B-01).
+        let src_err = match recipe_srcinfo_names(candidate.recipe_dir.as_deref()) {
+            Ok(src_names) => {
+                for name in src_names {
+                    if !name_chain.contains(&name) {
+                        name_chain.push(name);
+                    }
+                }
+                None
+            }
+            Err(error) => Some(error),
+        };
+        let subject = name_chain
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "-".to_string());
+        let parked_reason = if src_err.is_none() {
+            ctx.parks
+                .iter()
+                .find(|(name, _)| name_chain.iter().any(|n| n == name))
+                .map(|(_, reason)| reason.clone())
+        } else {
+            None
+        };
+        metas.push(Meta {
+            src_err,
+            name_chain,
+            subject,
+            parked_reason,
+            candidate,
+            pkginfo,
+        });
+    }
+
+    // The transaction set: every non-parked candidate this plan would install
+    // — the coverage side of the ABI gate (`F-INS-08`).
+    let tx_names: Vec<String> = metas
         .iter()
-        .flatten()
+        .filter(|m| m.src_err.is_none() && m.parked_reason.is_none())
+        .filter_map(|m| m.pkginfo.as_ref())
         .flat_map(|p| [p.pkgbase.clone(), p.pkgname.clone()])
         .collect();
-    // Shipped bytes of the set: the NEEDED probe's resolution source (b)
-    // (rule 25(b)/(e)). Only gate-1-surviving candidates are indexed — an
-    // unreadable-`.PKGINFO` archive is never probed and never transacts.
-    let archives: Vec<&Path> = candidates
+    // Shipped bytes of the non-parked set (`F-INS-08`): only non-parked,
+    // gate-1-surviving candidates supply bytes at transaction time.
+    let archives: Vec<&Path> = metas
         .iter()
-        .zip(&parsed)
-        .filter(|(_, info)| info.is_some())
-        .map(|(c, _)| c.archive.as_path())
+        .filter(|m| m.src_err.is_none() && m.parked_reason.is_none() && m.pkginfo.is_some())
+        .map(|m| m.candidate.archive.as_path())
         .collect();
     let shipped = gates::ShippedBytes::collect(&archives)?;
 
@@ -843,55 +931,33 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         .collect();
 
     let mut plans: Vec<CandidatePlan> = Vec::new();
-    for (idx, candidate) in candidates.iter().enumerate() {
-        let pkginfo = parsed[idx].clone();
-        let mut name_chain: Vec<String> = Vec::new();
-        if let Some(info) = &pkginfo {
-            name_chain.push(info.pkgbase.clone());
-            name_chain.push(info.pkgname.clone());
-        }
-        // A broken committed metadata read must refuse: answering "no names"
-        // would narrow the chain and skip every lookup those names reach.
-        let src_names = match recipe_srcinfo_names(candidate.recipe_dir.as_deref()) {
-            Ok(names) => names,
-            Err(error) => {
-                let subject = name_chain
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "-".to_string());
-                plans.push(CandidatePlan {
-                    candidate: candidate.clone(),
-                    pkginfo,
-                    rows: vec![row(
-                        &subject,
-                        Decision::Refuse,
-                        format!("discover-failed {error}"),
-                    )],
-                });
-                continue;
-            }
-        };
-        for name in &src_names {
-            if !name_chain.contains(name) {
-                name_chain.push(name.clone());
-            }
-        }
-        let subject = name_chain
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "-".to_string());
+    for meta in metas {
+        let candidate = meta.candidate;
+        let pkginfo = meta.pkginfo;
+        let name_chain = meta.name_chain;
+        let subject = meta.subject;
 
-        // Parked subjects stand down before anything else: never probed,
-        // never installed (§E.3 `parked`).
-        if let Some((_, reason)) = ctx
-            .parks
-            .iter()
-            .find(|(name, _)| name_chain.iter().any(|n| n == name))
-        {
+        // A broken trusted metadata read must refuse (`F-INS-06`).
+        if let Some(error) = meta.src_err {
             plans.push(CandidatePlan {
                 candidate: candidate.clone(),
                 pkginfo,
-                rows: vec![row(&subject, Decision::Parked, reason.clone())],
+                rows: vec![row(
+                    &subject,
+                    Decision::Refuse,
+                    format!("discover-failed {error}"),
+                )],
+            });
+            continue;
+        }
+
+        // Parked subjects stand down before anything else: never probed,
+        // never installed (§E.3 `parked`).
+        if let Some(reason) = meta.parked_reason {
+            plans.push(CandidatePlan {
+                candidate: candidate.clone(),
+                pkginfo,
+                rows: vec![row(&subject, Decision::Parked, reason)],
             });
             continue;
         }
@@ -965,7 +1031,27 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                 .as_deref()
                 .map(|dir| dir.join("PKGBUILD").is_file())
                 .unwrap_or(false);
-        if !recipe_known || gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
+        let pgo_scan = if !recipe_known {
+            true
+        } else {
+            match gates::pgo_instrumented_recipe(candidate.recipe_dir.as_deref()) {
+                Ok(flag) => flag,
+                Err(error) => {
+                    rows.push(row(
+                        &info.pkgbase,
+                        Decision::Refuse,
+                        format!("pgo-unreadable {archive} ({error})"),
+                    ));
+                    plans.push(CandidatePlan {
+                        candidate: candidate.clone(),
+                        pkginfo: Some(info),
+                        rows,
+                    });
+                    continue;
+                }
+            }
+        };
+        if pgo_scan {
             match gsa_recipe::pkginfo::pgo_hits(&candidate.archive) {
                 Err(_) => {
                     rows.push(row(
@@ -1030,7 +1116,8 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         // link dangling (blind review, 2026-11-11). The fence fires only when
         // this archive actually moves or ships a soname: a plain install on a
         // host with one damaged DB entry is unaffected.
-        let moves_sonames = !shipped_sonames.is_empty()
+        let moves_sonames = !drift.is_empty()
+            || !shipped_sonames.is_empty()
             || info
                 .provides
                 .iter()
@@ -1247,6 +1334,20 @@ pub fn install_built_package(
             )],
             None,
         ));
+    }
+    if !discovered.unreadable.is_empty() {
+        let rows = discovered
+            .unreadable
+            .iter()
+            .map(|(path, error)| {
+                row(
+                    "-",
+                    Decision::Refuse,
+                    format!("unreadable-pkginfo {} ({error})", path.display()),
+                )
+            })
+            .collect();
+        return Ok((rows, None));
     }
 
     let ctx = DecisionContext {
@@ -1565,7 +1666,7 @@ mod tests {
         let scalar = root.join("scalar-recipe");
         std::fs::create_dir_all(&scalar).unwrap();
         std::fs::write(scalar.join("PKGBUILD"), "pkgname=widget\npkgver=1\n").unwrap();
-        assert_eq!(declared_names(&scalar), names(&["widget"]));
+        assert_eq!(declared_names(&scalar).unwrap(), names(&["widget"]));
 
         let split = root.join("split-recipe");
         std::fs::create_dir_all(&split).unwrap();
@@ -1575,7 +1676,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            declared_names(&split),
+            declared_names(&split).unwrap(),
             names(&["qt-thing", "qt-thing-tools"])
         );
 
@@ -1583,7 +1684,7 @@ mod tests {
         // and it is never empty (an empty expectation is the bug).
         let bare = root.join("bare-recipe");
         std::fs::create_dir_all(&bare).unwrap();
-        assert_eq!(declared_names(&bare), names(&["bare-recipe"]));
+        assert_eq!(declared_names(&bare).unwrap(), names(&["bare-recipe"]));
 
         std::fs::remove_dir_all(&root).ok();
     }

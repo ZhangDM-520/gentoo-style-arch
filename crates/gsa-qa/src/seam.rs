@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use crate::input::{collect_archives, load_workspace, QaInput, QaInstalled};
+use crate::input::{collect_archives_checked, load_workspace, QaInput, QaInstalled};
 use crate::{registry, Scope, Severity};
 
 /// The seam's rc classes (contract §G): **0** — the check ran (report
@@ -68,10 +68,20 @@ pub fn run_qa_check(
         }
     }
 
+    for (id, reason) in &workspace.unlintable {
+        let _ = writeln!(err, "qa-check: unlintable {id}: {reason}");
+    }
+
     // Scope-shaped input: an archive-scope check gets the workspace's built
     // archive sets (bounded to the focus); everything else needs none.
     let archives = match handle.scope() {
-        Scope::Archive => collect_archives(&workspace.recipes, &targets),
+        Scope::Archive => match collect_archives_checked(&workspace.recipes, &targets, err) {
+            Ok(archives) => archives,
+            Err(message) => {
+                let _ = writeln!(err, "gsa: {message}");
+                return 2;
+            }
+        },
         Scope::Recipe | Scope::InstalledDb | Scope::Topology => Vec::new(),
     };
     let input = QaInput {

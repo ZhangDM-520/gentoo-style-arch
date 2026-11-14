@@ -2,9 +2,10 @@
 //! `--qa-check` seam, the install gate, the report surface), so every check
 //! is a pure function and the registry stays host-I/O-free.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use gsa_recipe::pkginfo::{read_pkginfo, version_rank, Pkginfo};
+use gsa_recipe::pkginfo::{read_pkginfo, version_rank, Pkginfo, PkginfoError};
 use gsa_recipe::{parse_srcinfo_rows, SrcinfoRows};
 
 /// One workspace recipe as the QA checks see it: its id and directory plus
@@ -105,7 +106,9 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, String> {
     for record in &project.topology.records {
         let dir = root.join(&record.path);
         let srcinfo = dir.join(".SRCINFO");
-        let Ok(content) = std::fs::read_to_string(&srcinfo) else {
+        let Some(content) = gsa_model::read::optional(&srcinfo)
+            .map_err(|e| format!("cannot read committed metadata {}: {e}", srcinfo.display()))?
+        else {
             unlintable.push((
                 record.id.as_str().to_string(),
                 format!(
@@ -135,13 +138,16 @@ pub fn load_workspace(root: &Path) -> Result<Workspace, String> {
 }
 
 /// Collect the built archives to probe for the target recipes (or every
-/// loaded recipe when `targets` is empty): the newest archive per expected
-/// output name, matched by the archive's own `.PKGINFO` truth (rule 11 —
-/// never a glob-all fallback), and only for COMPLETE sets (fish
-/// `list_split_pkgs`: a partial set is excluded entirely — a subset is never
-/// probed). The install-run report surface enumerates only the run's recipes
-/// (bounded cost); the full-workspace probe is the `--qa-check` seam's job.
-pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchive> {
+/// loaded recipe when `targets` is empty) across W4 shared `PKGDEST` and
+/// each recipe directory: the newest archive per expected output name,
+/// matched by `.PKGINFO`, and only for complete sets. Fails loud on layout
+/// or directory-read errors and warns on damaged candidate archives.
+pub fn collect_archives_checked(
+    recipes: &[QaRecipe],
+    targets: &[String],
+    warn: &mut dyn std::io::Write,
+) -> Result<Vec<QaArchive>, String> {
+    let layout = gsa_model::config::build_layout_for_run()?;
     let mut out = Vec::new();
     for recipe in recipes {
         if !targets.is_empty() && !targets.iter().any(|t| t == &recipe.id) {
@@ -149,30 +155,58 @@ pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchi
         }
         let expected = recipe.rows.outputs();
         let mut by_name: Vec<(String, std::time::SystemTime, PathBuf, Pkginfo)> = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&recipe.dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
+        let mut damaged: Vec<PathBuf> = Vec::new();
+        for scan_dir in gsa_model::config::archive_dirs(&recipe.dir, &layout) {
+            let entries = match std::fs::read_dir(&scan_dir) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "cannot read archive dir {}: {error}",
+                        scan_dir.display()
+                    ));
+                }
             };
-            if !name.ends_with(".pkg.tar.zst") {
-                continue;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // Order matters (rule 71): a DIRECTORY is not an archive, but
+                // a symlink loop, a dangling link or an unreadable file is not
+                // ABSENT either — `is_file()` answers false for all of them,
+                // so only `is_dir()` may skip, and `read_pkginfo` below gets
+                // the last word on the rest (round-2 audit, F-R2-B-04).
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if !name.ends_with(".pkg.tar.zst") || path.is_dir() {
+                    continue;
+                }
+                let pkginfo = match read_pkginfo(&path) {
+                    Ok(pkginfo) => pkginfo,
+                    Err(error) => {
+                        let ours = expected.is_empty()
+                            || expected.iter().any(|want| {
+                                name.strip_prefix(want.as_str())
+                                    .is_some_and(|rest| rest.starts_with('-'))
+                            });
+                        if ours && matches!(error, PkginfoError::Io(_)) {
+                            let _ = writeln!(
+                                warn,
+                                "gsa: warning: unreadable archive {}: {error}",
+                                path.display()
+                            );
+                            damaged.push(path);
+                        }
+                        continue;
+                    }
+                };
+                if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
+                    continue;
+                }
+                let mtime = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                by_name.push((pkginfo.pkgname.clone(), mtime, path, pkginfo));
             }
-            let Ok(pkginfo) = read_pkginfo(&path) else {
-                continue;
-            };
-            if !expected.is_empty() && !expected.contains(&pkginfo.pkgname) {
-                continue;
-            }
-            let mtime = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            by_name.push((pkginfo.pkgname.clone(), mtime, path, pkginfo));
         }
         // Version-ranked, the same order install discovery uses (the
         // wrong-skip fix): `vercmp` decides, version ties break to the
@@ -180,6 +214,13 @@ pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchi
         // — never string order. The mtime presort keeps ties deterministic.
         by_name.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
         by_name.sort_by(|a, b| version_rank(&a.3.version, &b.3.version));
+        for path in damaged {
+            out.push(QaArchive {
+                recipe_id: recipe.id.clone(),
+                path,
+                pkginfo: None,
+            });
+        }
         // Complete set only: every expected name must answer (a recipe with
         // no expectations at all takes whatever is readable).
         if !expected.is_empty() {
@@ -211,5 +252,18 @@ pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchi
             }
         }
     }
-    out
+    Ok(out)
+}
+
+/// Convenience wrapper for callers without an error sink (legacy callers and
+/// registry unit tests).
+pub fn collect_archives(recipes: &[QaRecipe], targets: &[String]) -> Vec<QaArchive> {
+    let mut stderr = std::io::stderr();
+    match collect_archives_checked(recipes, targets, &mut stderr) {
+        Ok(archives) => archives,
+        Err(error) => {
+            let _ = writeln!(stderr, "gsa: warning: {error}");
+            Vec::new()
+        }
+    }
 }

@@ -27,7 +27,13 @@ pub enum Loaded {
 pub fn load(path: &Path) -> Loaded {
     match std::fs::read_to_string(path) {
         Ok(text) => Loaded::Present(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Loaded::Absent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if std::fs::symlink_metadata(path).is_ok() {
+                Loaded::Broken(format!("cannot read {}: {error}", path.display()))
+            } else {
+                Loaded::Absent
+            }
+        }
         Err(error) => Loaded::Broken(format!("cannot read {}: {error}", path.display())),
     }
 }

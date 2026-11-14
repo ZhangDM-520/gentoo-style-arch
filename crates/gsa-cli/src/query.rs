@@ -168,11 +168,13 @@ pub fn query_probe(
                     Match::Agree => "agree",
                     Match::Disagree => "disagree",
                     Match::Missing => "unrecorded",
+                    Match::Unreadable => "unreadable",
                 };
                 let size = match verification.size {
                     Match::Agree => "agree",
                     Match::Disagree => "disagree",
                     Match::Missing => "unrecorded",
+                    Match::Unreadable => "unreadable",
                 };
                 let meta_agrees = row.pkgbase == info.pkgbase
                     && row.pkgnames.contains(&info.pkgname)
@@ -639,13 +641,13 @@ fn installed_table(rows: &[InstalledRow], terminal: usize) -> String {
         rows.iter().map(f).max().unwrap_or(0).min(cap)
     };
     let layout = Layout {
-        name: widest(&|row| row.name.chars().count(), NAME_CAP).max(1),
-        version: widest(&|row| row.version.chars().count(), VERSION_CAP),
+        name: widest(&|row| style::visible_width(&row.name), NAME_CAP).max(1),
+        version: widest(&|row| style::visible_width(&row.version), VERSION_CAP),
         built: widest(
             &|row| {
                 row.side_car
                     .as_ref()
-                    .map(|side_car| side_car.built.chars().count())
+                    .map(|side_car| style::visible_width(&side_car.built))
                     .unwrap_or(0)
             },
             BUILT_CAP,
@@ -812,18 +814,31 @@ pub fn query_search(inv: &Invocation, out: &mut dyn Write) -> Result<(), String>
     for pkg in db.packages() {
         let desc = pkg.desc.clone().unwrap_or_default();
         if matches(&inv.targets, &[pkg.name.clone(), desc.clone()]) {
-            writeln!(
-                out,
-                "{} {}",
-                style::styled(style::Role::Bold, pkg.name.clone()),
-                style::styled(style::Role::Dim, pkg.version.clone())
-            )
-            .map_err(|e| e.to_string())?;
-            writeln!(out, "    {}", style::styled(style::Role::Dim, desc))
-                .map_err(|e| e.to_string())?;
+            write_search_entry(out, &pkg.name, &pkg.version, &desc)?;
         }
     }
     Ok(())
+}
+
+fn write_search_entry(
+    out: &mut dyn Write,
+    name: &str,
+    version: &str,
+    desc: &str,
+) -> Result<(), String> {
+    writeln!(
+        out,
+        "{} {}",
+        style::styled(style::Role::Bold, style::sanitize_data(name)),
+        style::styled(style::Role::Dim, style::sanitize_data(version))
+    )
+    .map_err(|e| e.to_string())?;
+    writeln!(
+        out,
+        "    {}",
+        style::styled(style::Role::Dim, style::sanitize_data(desc))
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn matches(patterns: &[String], haystacks: &[String]) -> bool {
@@ -876,7 +891,7 @@ pub fn query_info(
                 if db.get(token).is_some() {
                     installed_only.push(token.clone());
                 } else {
-                    return Err(crate::cmd_error(error.to_string()));
+                    return Err(error.to_string());
                 }
             }
         }
@@ -1291,5 +1306,46 @@ mod table_tests {
         // Tail truncation keeps the head: the cut line still starts the
         // version with its epoch and upstream series.
         assert!(long.contains("0:2.0"), "{long:?}");
+    }
+
+    #[test]
+    fn wide_glyphs_in_installed_table_respect_cell_widths() {
+        let rows = vec![
+            row("plain-pkg", "1.0-1", Some(("ab", "1.0-1", 1))),
+            row("あいうえおかきくけこ", "1.0-1", Some(("cd", "1.0-1", 1))),
+        ];
+        let table = installed_table(&rows, 40);
+        let line_widths = widths(&table);
+        assert!(
+            line_widths.iter().all(|width| *width <= 40),
+            "wide glyphs overflowed 40 cols: {line_widths:?}\n{table}"
+        );
+        assert_eq!(
+            line_widths
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            1,
+            "table is not rectangular: {line_widths:?}\n{table}"
+        );
+    }
+
+    #[test]
+    fn query_search_sanitizes_package_fields() {
+        let mut out = Vec::new();
+        write_search_entry(
+            &mut out,
+            "pkg\x1b[31m-evil",
+            "1.0\r\n2",
+            "desc\x1b(B\twith\nescapes\x1b[2J",
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("\x1b[31m") && !text.contains("\x1b[2J"));
+        assert!(!text.contains("\x1b(B") && !text.contains('\r'));
+        assert_eq!(text.lines().count(), 2, "{text:?}");
+        assert!(text.contains("pkg-evil 1.0 2"), "{text:?}");
+        assert!(text.contains("desc with escapes"), "{text:?}");
     }
 }

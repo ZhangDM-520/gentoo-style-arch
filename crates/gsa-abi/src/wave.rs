@@ -87,10 +87,15 @@ pub struct WaveMember {
     pub basis: MemberBasis,
 }
 
-/// One provider's rebuild wave.
+/// One provider's rebuild wave (or merged set of overlapping waves).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wave {
-    pub provider: String,
+    /// Every provider whose move merged into this wave, PRIMARY FIRST. A
+    /// wave is one transaction, so a caller that needs "the provider" of a
+    /// member must read this whole set: `stage_swap` lands all of them, and
+    /// a reader that only took the first one split a merged wave across two
+    /// transactions (round-2 audit, F-R2-B-02).
+    pub providers: Vec<String>,
     /// Seeds ∪ transitive consumers of seeds, canonical build order.
     pub members: Vec<WaveMember>,
     /// `abi=should` batch members noted but not forced (plan §4.3).
@@ -257,6 +262,9 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         // world is unknown (`installed: None`), fail closed and keep the
         // refusal.
         for row in subs.for_provider(provider) {
+            if !row.has_token() {
+                continue;
+            }
             let consumer = canon(recipe_of_name, &row.consumer);
             if direct_consumers
                 .iter()
@@ -385,7 +393,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
             }
         }
         let wave = Wave {
-            provider: provider.to_string(),
+            providers: vec![provider.to_string()],
             members: known,
             coupled_noted: noted,
             fallback,
@@ -415,34 +423,54 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
     plan
 }
 
-/// Waves sharing a member are ONE wave (one pass, one transaction): merge
-/// them provider-wise so no archive can land in two transactions.
+/// Waves that share any identity — a member or a provider on EITHER side,
+/// including the cross-role cases (one wave's provider is another's member,
+/// or the two share a provider) — are ONE wave (one pass, one transaction):
+/// merge them to a transitive fixpoint and retain every merged provider so
+/// [`stage_swap`] lands all archives together.
 fn merge_overlapping(waves: &mut Vec<Wave>) {
-    let mut merged: Vec<Wave> = Vec::new();
-    for wave in waves.drain(..) {
-        let members: BTreeSet<&str> = wave.members.iter().map(|m| m.id.as_str()).collect();
-        let Some(target) = merged.iter_mut().find(|w| {
-            w.members.iter().any(|m| members.contains(m.id.as_str())) || w.provider == wave.provider
-        }) else {
-            merged.push(wave);
-            continue;
-        };
-        let mut seen: BTreeSet<String> = target.members.iter().map(|m| m.id.clone()).collect();
-        for member in wave.members {
-            if seen.insert(member.id.clone()) {
-                target.members.push(member);
+    /// Members ∪ providers, the overlap predicate's whole input.
+    fn identities(w: &Wave) -> BTreeSet<String> {
+        let mut set: BTreeSet<String> = w.members.iter().map(|m| m.id.clone()).collect();
+        set.extend(w.providers.iter().cloned());
+        set
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut merged: Vec<Wave> = Vec::new();
+        for mut wave in waves.drain(..) {
+            let wave_ids = identities(&wave);
+            let target = merged
+                .iter_mut()
+                .find(|w| !identities(w).is_disjoint(&wave_ids));
+            let Some(target) = target else {
+                merged.push(wave);
+                continue;
+            };
+            for p in wave.providers.drain(..) {
+                if !target.providers.contains(&p) {
+                    target.providers.push(p);
+                }
             }
-        }
-        for noted in wave.coupled_noted {
-            if !target.coupled_noted.contains(&noted) {
-                target.coupled_noted.push(noted);
+            let mut seen: BTreeSet<String> = target.members.iter().map(|m| m.id.clone()).collect();
+            for member in wave.members {
+                if seen.insert(member.id.clone()) {
+                    target.members.push(member);
+                }
             }
+            for noted in wave.coupled_noted {
+                if !target.coupled_noted.contains(&noted) {
+                    target.coupled_noted.push(noted);
+                }
+            }
+            target.fallback = target.fallback || wave.fallback;
+            changed = true;
         }
-        target.fallback = target.fallback || wave.fallback;
+        *waves = merged;
     }
     // Canonical build order is lost by merging; keep members in wave order
     // (the caller re-sorts against the graph when it matters).
-    *waves = merged;
 }
 
 /// The staged-swap transaction plan (docs/plans/plan-native-pm.md §4.5): one
@@ -466,6 +494,14 @@ pub fn stage_swap(waves: &[Wave], archive_of: &dyn Fn(&str) -> Option<PathBuf>) 
     for wave in waves {
         let mut group: Vec<PathBuf> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
+        let providers: Vec<&str> = wave.providers.iter().map(String::as_str).collect();
+        for provider in &providers {
+            if let Some(archive) = archive_of(provider) {
+                if !group.contains(&archive) {
+                    group.push(archive);
+                }
+            }
+        }
         for member in &wave.members {
             match archive_of(&member.id) {
                 Some(archive) => {
@@ -476,18 +512,12 @@ pub fn stage_swap(waves: &[Wave], archive_of: &dyn Fn(&str) -> Option<PathBuf>) 
                 None => missing.push(member.id.clone()),
             }
         }
-        // The provider itself rides its own wave when it has an archive.
-        if let Some(archive) = archive_of(&wave.provider) {
-            if !group.contains(&archive) {
-                group.insert(0, archive);
-            }
-        }
         if !missing.is_empty() {
             for member in &missing {
                 plan.refusals.push(DecisionRow {
                     subject: member.clone(),
                     decision: Decision::Refuse,
-                    reason: format!("abi-consumer-uncovered {}", wave.provider),
+                    reason: format!("abi-consumer-uncovered {}", providers.join(",")),
                 });
             }
             continue;
@@ -900,7 +930,7 @@ mod tests {
     fn staged_swap_is_one_transaction_per_wave_and_refuses_under_coverage() {
         use std::path::PathBuf;
         let wave = Wave {
-            provider: "p".to_string(),
+            providers: vec!["p".to_string()],
             members: vec![
                 WaveMember {
                     id: "c1".to_string(),
@@ -941,5 +971,163 @@ mod tests {
             plan.refusals[0].render(),
             "c2 refuse abi-consumer-uncovered p"
         );
+    }
+
+    #[test]
+    fn plan_waves_ignores_placeholder_tokens_for_ungraphed_subscribers() {
+        use crate::{InstalledPkg, Subscription};
+        let records = [record("p", &[], &[]), record("direct", &["p"], &[])];
+        let graph = gsa_graph::Graph::build(&records).unwrap();
+        let mut subs = Subscriptions::empty();
+        // Direct consumer carries a current token; ungraphed subscriber carries '-' placeholder.
+        subs.upsert(Subscription {
+            consumer: "direct".to_string(),
+            version: "1".to_string(),
+            provider: "p".to_string(),
+            token: "tok-new".to_string(),
+        });
+        subs.upsert(Subscription {
+            consumer: "orphan-sub".to_string(),
+            version: "1".to_string(),
+            provider: "p".to_string(),
+            token: crate::records::NO_TOKEN.to_string(),
+        });
+        let movement = TokenMove {
+            provider: "p".to_string(),
+            old: None,
+            current: BTreeSet::from(["tok-new".to_string()]),
+            changed_provides: Vec::new(),
+        };
+        let installed = InstalledView::new([InstalledPkg {
+            name: "orphan-sub".to_string(),
+            version: "1".to_string(),
+            provides: Vec::new(),
+            depends: Vec::new(),
+            files: Vec::new(),
+        }]);
+        let plan = plan_waves(&WaveInputs {
+            graph: &graph,
+            subs: &subs,
+            moves: &[movement],
+            installed: Some(&installed),
+            planned: &BTreeSet::new(),
+            recipe_of_name: &BTreeMap::new(),
+        });
+        assert!(
+            plan.waves.is_empty() && plan.uncovered.is_empty(),
+            "NO_TOKEN placeholder row must never read as a token move: waves={:?} uncovered={:?}",
+            plan.waves,
+            plan.uncovered
+        );
+    }
+
+    #[test]
+    fn merge_overlapping_reaches_transitive_fixpoint() {
+        let mut waves = vec![
+            Wave {
+                providers: vec!["p1".to_string()],
+                members: vec![WaveMember {
+                    id: "c1".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                providers: vec!["p3".to_string()],
+                members: vec![WaveMember {
+                    id: "c2".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                providers: vec!["p2".to_string()],
+                members: vec![
+                    WaveMember {
+                        id: "c1".to_string(),
+                        basis: MemberBasis::Recorded,
+                    },
+                    WaveMember {
+                        id: "c2".to_string(),
+                        basis: MemberBasis::Recorded,
+                    },
+                ],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+        ];
+        merge_overlapping(&mut waves);
+        assert_eq!(
+            waves.len(),
+            1,
+            "overlapping chain [p1(c1), p3(c2), p2(c1,c2)] must merge to fixpoint: {waves:?}"
+        );
+        assert_eq!(waves[0].providers, vec!["p1", "p2", "p3"]);
+        let archives = BTreeMap::from([
+            ("p1".to_string(), PathBuf::from("/a/p1.pkg.tar.zst")),
+            ("p2".to_string(), PathBuf::from("/a/p2.pkg.tar.zst")),
+            ("p3".to_string(), PathBuf::from("/a/p3.pkg.tar.zst")),
+            ("c1".to_string(), PathBuf::from("/a/c1.pkg.tar.zst")),
+            ("c2".to_string(), PathBuf::from("/a/c2.pkg.tar.zst")),
+        ]);
+        let swap = stage_swap(&waves, &|id| archives.get(id).cloned());
+        assert_eq!(swap.transactions.len(), 1);
+        assert_eq!(
+            swap.transactions[0].len(),
+            5,
+            "all merged providers + members must land together"
+        );
+    }
+
+    #[test]
+    fn merge_overlapping_joins_across_roles() {
+        // One wave's PROVIDER is another wave's MEMBER. The old predicate
+        // compared members to members and providers to providers only, so
+        // these two waves stayed apart and `stage_swap` emitted the same
+        // archive in two transactions (round-2 audit, F-R2-B-02).
+        let mut waves = vec![
+            Wave {
+                providers: vec!["a".to_string()],
+                members: vec![WaveMember {
+                    id: "mid".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+            Wave {
+                providers: vec!["mid".to_string()],
+                members: vec![WaveMember {
+                    id: "leaf".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            },
+        ];
+        merge_overlapping(&mut waves);
+        assert_eq!(
+            waves.len(),
+            1,
+            "a cross-role overlap is one wave: {waves:?}"
+        );
+        assert_eq!(waves[0].providers, vec!["a", "mid"]);
+        let ids: Vec<&str> = waves[0].members.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["mid", "leaf"]);
+
+        let archives = BTreeMap::from([
+            ("a".to_string(), PathBuf::from("/a/a.pkg.tar.zst")),
+            ("mid".to_string(), PathBuf::from("/a/mid.pkg.tar.zst")),
+            ("leaf".to_string(), PathBuf::from("/a/leaf.pkg.tar.zst")),
+        ]);
+        let swap = stage_swap(&waves, &|id| archives.get(id).cloned());
+        assert_eq!(
+            swap.transactions.len(),
+            1,
+            "the repeated archive must ride ONE transaction"
+        );
+        assert_eq!(swap.transactions[0].len(), 3);
     }
 }

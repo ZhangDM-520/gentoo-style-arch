@@ -801,8 +801,11 @@ is a configuration error named by the strict loader. User sets live in two
 places and resolve as their **union** (2026-10-28, I5): the kv store's
 `set:*` keys (the runtime copy `gsa -Ms --add`/`--remove` edits) and the
 committed `config/sets/` files; members are deduped, existence is tracked per
-source so an empty committed set still resolves, and a kv read failure degrades
-to the committed half (never a selection failure). Group membership comes from
+source so an empty committed set still resolves, and a kv read failure is a
+startup refusal (rc 3, `startup-refused`, 2026-11-14, round-2 audit
+F-R2-C-06) — never a degradation to the committed half: the surviving rows are
+not the whole selection, and `AGENTS.md` rule 71 forbids presenting a broken
+read as absence. Group membership comes from
 the topology record only (`docs/architecture.md`); it is never inferred from
 directory names. The `build-tools` band (members dispatch before other ready
 packages, never over build-order edges) and core-runs-alone are scheduler
@@ -1006,8 +1009,8 @@ subject (§H.2, same date).
 | Decision | Meaning |
 | --- | --- |
 | `install` | the archive clears every gate and joins the transaction |
-| `skip` | deliberately not transacted, with a named reason — `already-current` (checked mode: exact version installed with an install date not older than the archive), `not-newer` (checked mode: the installed version is strictly newer than the archive, ordered by `vercmp`; a checked `-U`/`-S` never downgrades and `-Uf`/`-Sf` is the escape hatch — added 2026-11-11), `skip-built`/`freshness-waived`/`abi-provider-waived` installs of a skipped build (the archive still installs), `unreadable-pkginfo` (excluded from discovery, never probed — `AGENTS.md` rule 25(h)) |
-| `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `abi-stock-pinner` (an out-of-tree package pins the moving provide exactly — 2026-10-14 amendment: named here as the code emits it, `gsa-abi::rows::abi_refusal_rows`), `partial-set`, `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
+| `skip` | deliberately not transacted, with a named reason — `already-current` (checked mode: exact version installed with an install date not older than the archive), `not-newer` (checked mode: the installed version is strictly newer than the archive, ordered by `vercmp`; a checked `-U`/`-S` never downgrades and `-Uf`/`-Sf` is the escape hatch — added 2026-11-11), `skip-built`/`freshness-waived`/`abi-provider-waived` installs of a skipped build (the archive still installs) |
+| `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `abi-stock-pinner` (an out-of-tree package pins the moving provide exactly — 2026-10-14 amendment: named here as the code emits it, `gsa-abi::rows::abi_refusal_rows`), `partial-set`, `unreadable-pkginfo` (rule 25(h) + rule 71: unreadable archive metadata never becomes a clean skip — added 2026-11-14), `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
 | `noop` | nothing to do and that is not a failure — `empty-list` under `-Ua` |
 | `parked` | **new**: the package is parked — `waits-on-failed` (cone-stop) or `waits-on-deferred` / a deferral reason (`anchoring-refused`, `upstream-unverified`, `source-unfetchable`). The seam neither installs nor refuses; the row records the park |
 
@@ -1615,6 +1618,28 @@ ABI moves derivation cannot see (LLVM C++ ABI snapshots, Qt private API —
 build time and in the installed-ABI record at install time. **Signed indexes
 are deferred** (owner decision); the index is tamper-evident only through
 content hashes.
+
+*Amendment (2026-11-14, a damaged JSONL store is a refusal that names its
+repair).* The three append-only stores (`index/binpkg.jsonl`,
+`runs/history.jsonl`, `kv/kv.jsonl`) share one reader
+(`gsa_state::store::read_json`). A line that does not parse is **reported,
+never folded as fact**: the surviving rows are not the whole truth, so the
+reader refuses (rule 71) rather than answering from a prefix — the reader
+hands back the offenders and each surface renders them as `corrupt-row <store>
+<name> line <n>: <detail>`. One refusal, `CorruptLine::refusal`, is the only
+wording.
+
+An **unterminated final line** is the one damage the engine can locate
+exactly: it never formed a row, so the bytes before it are the complete
+prefix. For that case alone the refusal names the repair —
+`truncate -s <keep-bytes> <path>` — because every verb builds the same context
+first, so a refusal that named no remedy left the store unrepairable *by the
+engine's own verbs* (round-3 audit, STD-R3-02). The engine **applies
+nothing**: a store deliberately cut with `truncate -s 70%` is textually
+identical to a torn tail, so the repair stays a human decision, and an
+interior corrupt row (a complete line that does not parse) offers no
+truncation at all — that would delete good rows. Applying the named offset
+loses no row and the store reads clean afterwards.
 
 ### J.5 Write-time ownership (rule 19)
 

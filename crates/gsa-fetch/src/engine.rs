@@ -63,17 +63,7 @@ pub fn disk_free_min_gib() -> u64 {
 
 /// Find the recipe repository: walk up from `start` until
 /// `config/topology.conf` exists (same rule as `gsa-build::find_root`).
-pub fn find_root(start: &Path) -> Option<PathBuf> {
-    let mut dir = start.to_path_buf();
-    loop {
-        if dir.join("config").join("topology.conf").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
+pub use gsa_model::config::find_root;
 
 /// The shared source cache (SRCDEST) makepkg downloads into. Resolution
 /// mirrors makepkg's lookup as closely as shell-free code may: the
@@ -152,15 +142,6 @@ pub fn failing_files(output: &str) -> Vec<String> {
 }
 
 /// Was this failure a verification (integrity) failure rather than a
-/// transport failure? makepkg's summary marker, used only to pick the
-/// advisory reason key. C-locale by construction (`LC_ALL=C` at the spawn):
-/// makepkg gettext-translates the summary prose.
-pub fn is_verify_failure(output: &str) -> bool {
-    output.contains("did not pass the validity check")
-        || output.contains("Integrity checks")
-        || !failing_files(output).is_empty()
-}
-
 /// One `makepkg --verifysource` attempt.
 #[derive(Clone, Debug)]
 pub struct Attempt {
@@ -169,20 +150,24 @@ pub struct Attempt {
 }
 
 /// Quarantine one cached file: rename `<name>` to `<name>.gsa-bad-<ts>` in
-/// the shared source cache (owner decision 4). Returns the new path, or
-/// `None` when the file is not in the cache (nothing to move — never a
-/// recipe-directory move).
-pub fn quarantine_file(cache: &Path, name: &str) -> Option<PathBuf> {
+/// the shared source cache (owner decision 4). Returns `Ok(None)` when the
+/// file is absent from the cache (nothing to move — never a recipe-directory
+/// move) or propagates rename I/O failures so callers report them loudly.
+pub fn quarantine_file(cache: &Path, name: &str) -> std::io::Result<Option<PathBuf>> {
     let from = cache.join(name);
-    if !from.is_file() {
-        return None;
+    match std::fs::symlink_metadata(&from) {
+        Ok(meta) if !meta.is_dir() => {}
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
     }
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let to = cache.join(format!("{name}.gsa-bad-{ts}"));
-    std::fs::rename(&from, &to).ok().map(|_| to)
+    std::fs::rename(&from, &to)?;
+    Ok(Some(to))
 }
 
 /// Signature companions makepkg fetches beside a source file (the PGP
@@ -195,18 +180,29 @@ pub fn signature_companions(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Quarantine the named files and their signature companions. Returns the
-/// moved names (loud caller-side detail).
-pub fn quarantine_bad_files(cache: &Path, names: &[String]) -> Vec<String> {
-    let mut moved = Vec::new();
+/// Quarantine outcomes: moved filenames and any filesystem errors observed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QuarantineOutcome {
+    pub moved: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// Quarantine the named files and their signature companions. Returns both
+/// moved filenames and any rename/stat errors so failures are surfaced loudly.
+pub fn quarantine_bad_files(cache: &Path, names: &[String]) -> QuarantineOutcome {
+    let mut outcome = QuarantineOutcome::default();
     for name in names {
         for candidate in std::iter::once(name.clone()).chain(signature_companions(name)) {
-            if quarantine_file(cache, &candidate).is_some() {
-                moved.push(candidate);
+            match quarantine_file(cache, &candidate) {
+                Ok(Some(_)) => outcome.moved.push(candidate),
+                Ok(None) => {}
+                Err(error) => outcome
+                    .errors
+                    .push(format!("cannot quarantine {candidate}: {error}")),
             }
         }
     }
-    moved
+    outcome
 }
 
 /// Everything one fetch recipe run produced.
@@ -238,6 +234,17 @@ pub fn run_fetch_attempts(
     mut attempt: impl FnMut() -> Attempt,
     delay_s: u64,
 ) -> FetchReport {
+    run_fetch_attempts_checked(pkg, cache, || Ok(attempt()), delay_s)
+}
+
+/// Checked variant of [`run_fetch_attempts`] where `Err(diag)` represents a
+/// permanent setup/spawn failure that fails fast without sleeping or retrying.
+pub fn run_fetch_attempts_checked(
+    pkg: &str,
+    cache: Option<&Path>,
+    mut attempt: impl FnMut() -> Result<Attempt, String>,
+    delay_s: u64,
+) -> FetchReport {
     let start = Instant::now();
     let mut notes: Vec<String> = Vec::new();
     let mut quarantined: Vec<String> = Vec::new();
@@ -248,7 +255,14 @@ pub fn run_fetch_attempts(
 
     while attempts < 6 {
         attempts += 1;
-        let att = attempt();
+        let att = match attempt() {
+            Ok(att) => att,
+            Err(diag) => {
+                notes.push(diag);
+                hard_failure = Some(REASON_EVAL_FAILED);
+                break;
+            }
+        };
         if att.ok {
             let reason = if quarantined.is_empty() {
                 if attempts > 1 {
@@ -288,17 +302,18 @@ pub fn run_fetch_attempts(
         // decision 4).
         match cache {
             Some(cache) => {
-                let moved = quarantine_bad_files(cache, &named);
-                if moved.is_empty() {
+                let outcome = quarantine_bad_files(cache, &named);
+                notes.extend(outcome.errors);
+                if outcome.moved.is_empty() {
                     notes.push(format!(
-                        "cannot quarantine {} (not in the shared source cache) — the wall stands until it is removed",
+                        "cannot quarantine {} (not quarantined from shared source cache) — the wall stands until it is removed",
                         named.join(", ")
                     ));
                     hard_failure = Some(REASON_VERIFY_FAILED);
                     break;
                 }
-                notes.push(format!("quarantined {}", moved.join(", ")));
-                quarantined.extend(moved);
+                notes.push(format!("quarantined {}", outcome.moved.join(", ")));
+                quarantined.extend(outcome.moved);
             }
             None => {
                 notes.push(format!(
@@ -346,8 +361,16 @@ pub(crate) fn verifysource_command(recipe_dir: &Path) -> Result<Command, String>
     let toolchain =
         gsa_model::toolchain::override_value().unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT);
     let layout = gsa_model::config::build_layout_for_run()?;
-    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
-        cmd.env("GSA_LANE_SRCDEST", srcdest);
+    match gsa_model::config::resolve_srcdest_checked()?.0 {
+        Some(srcdest) => {
+            let abs = gsa_model::config::absolute_for_child(&srcdest);
+            cmd.env("SRCDEST", &abs);
+            cmd.env("GSA_LANE_SRCDEST", abs);
+        }
+        None => {
+            cmd.env_remove("SRCDEST");
+            cmd.env_remove("GSA_LANE_SRCDEST");
+        }
     }
     let conf = gsa_model::makepkg_conf::install(&layout.root, toolchain)?;
     cmd.arg("--config").arg(conf);
@@ -355,32 +378,28 @@ pub(crate) fn verifysource_command(recipe_dir: &Path) -> Result<Command, String>
 }
 
 /// One real `makepkg --verifysource` attempt in the recipe directory
-/// (contract §D.1 / owner decision 2). The makepkg child is a build-side
-/// command (W1 privilege isolation): under a privileged run it runs as the
-/// build user, like every other makepkg invocation.
+/// (contract §D.1 / owner decision 2), distinguishing setup/spawn errors from
+/// makepkg verification/transport failures so permanent setup errors fail fast.
+pub fn try_makepkg_verifysource(recipe_dir: &Path) -> Result<Attempt, String> {
+    let mut command = verifysource_command(recipe_dir)
+        .map_err(|message| format!("cannot configure makepkg: {message}"))?;
+    let output = command
+        .output()
+        .map_err(|error| format!("cannot run makepkg: {error}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(Attempt {
+        ok: output.status.success(),
+        output: text,
+    })
+}
+
 pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
-    let mut command = match verifysource_command(recipe_dir) {
-        Ok(command) => command,
-        Err(message) => {
-            return Attempt {
-                ok: false,
-                output: format!("cannot configure makepkg: {message}"),
-            }
-        }
-    };
-    let output = command.output();
-    match output {
-        Ok(output) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            Attempt {
-                ok: output.status.success(),
-                output: text,
-            }
-        }
-        Err(error) => Attempt {
+    match try_makepkg_verifysource(recipe_dir) {
+        Ok(att) => att,
+        Err(message) => Attempt {
             ok: false,
-            output: format!("cannot run makepkg: {error}"),
+            output: message,
         },
     }
 }
@@ -389,16 +408,8 @@ pub fn makepkg_verifysource(recipe_dir: &Path) -> Attempt {
 /// decision 3), then the disk floor (owner decision 6), then the pipeline.
 /// Never touches pacman or sudo; writes only the shared source cache.
 pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult {
-    let recipe_dir = match recipe_dir_for(pkg, root) {
-        Ok(dir) => dir,
-        Err(why) => {
-            let _ = writeln!(err, "gsa-fetch: {pkg}: {why}");
-            return FetchResult::new(pkg, FetchVerdict::Failed, 0, REASON_EVAL_FAILED)
-                .expect("pkg is validated by the caller");
-        }
-    };
-    let meta = match meta_for(pkg, root) {
-        Ok(meta) => meta,
+    let (recipe_dir, meta) = match recipe_dir_and_meta(pkg, root) {
+        Ok(pair) => pair,
         Err(why) => {
             let _ = writeln!(err, "gsa-fetch: {pkg}: {why}");
             return FetchResult::new(pkg, FetchVerdict::Failed, 0, REASON_EVAL_FAILED)
@@ -429,7 +440,14 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
         );
         return skip;
     }
-    let cache = resolve_srcdest();
+    let cache = match gsa_model::config::resolve_srcdest_checked() {
+        Ok((cache, _)) => cache,
+        Err(why) => {
+            let _ = writeln!(err, "gsa-fetch: {pkg}: configuration error: {why}");
+            return FetchResult::new(pkg, FetchVerdict::Failed, 0, REASON_EVAL_FAILED)
+                .expect("pkg is validated by the caller");
+        }
+    };
     let floor_probe = cache.clone().unwrap_or_else(|| recipe_dir.clone());
     if !disk_floor_ok(&floor_probe) {
         let _ = writeln!(
@@ -440,10 +458,10 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
         return FetchResult::new(pkg, FetchVerdict::Skipped, 0, REASON_DISK_FLOOR)
             .expect("pkg is validated by the caller");
     }
-    let report = run_fetch_attempts(
+    let report = run_fetch_attempts_checked(
         pkg,
         cache.as_deref(),
-        || makepkg_verifysource(&recipe_dir),
+        || try_makepkg_verifysource(&recipe_dir),
         fetch_retry_delay_s(),
     );
     for note in &report.quarantined {
@@ -467,6 +485,24 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
         }
     }
     result
+}
+
+fn recipe_dir_and_meta(
+    pkg: &str,
+    root: &Path,
+) -> Result<(PathBuf, gsa_recipe::RecipeMeta), String> {
+    let project = gsa_topo::load_project(root).map_err(|e| format!("configuration error: {e}"))?;
+    let record = project
+        .topology
+        .get(pkg)
+        .ok_or_else(|| format!("unknown recipe '{pkg}'"))?;
+    let db = gsa_recipe::RecipeDb::load(root, std::slice::from_ref(record))
+        .map_err(|e| format!("recipe metadata error: {e}"))?;
+    let meta = db
+        .get(pkg)
+        .map(|meta| (*meta).clone())
+        .ok_or_else(|| format!("recipe metadata missing for '{pkg}'"))?;
+    Ok((root.join(&record.path), meta))
 }
 
 /// The recipe directory of one topology id (read-only).
@@ -517,11 +553,7 @@ pub fn run_fetch_job(args: &[String], err: &mut dyn Write) -> i32 {
         return 2;
     }
     let pkg = &args[0];
-    if pkg.is_empty()
-        || !pkg
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
-    {
+    if gsa_model::RecipeId::new(pkg).is_err() {
         let _ = writeln!(
             err,
             "gsa --fetch-job: package '{pkg}' is not a valid recipe id"
@@ -593,9 +625,10 @@ ERROR: One or more files did not pass the validity check!
         let cache = scratch("quarantine");
         std::fs::write(cache.join("bad.tar.gz"), b"corrupt").unwrap();
         std::fs::write(cache.join("bad.tar.gz.sig"), b"sig").unwrap();
-        let moved = quarantine_bad_files(&cache, &["bad.tar.gz".to_string()]);
-        assert!(moved.contains(&"bad.tar.gz".to_string()));
-        assert!(moved.contains(&"bad.tar.gz.sig".to_string()));
+        let outcome = quarantine_bad_files(&cache, &["bad.tar.gz".to_string()]);
+        assert!(outcome.moved.contains(&"bad.tar.gz".to_string()));
+        assert!(outcome.moved.contains(&"bad.tar.gz.sig".to_string()));
+        assert!(outcome.errors.is_empty());
         assert!(
             !cache.join("bad.tar.gz").exists(),
             "bad file left at final name"
@@ -612,8 +645,23 @@ ERROR: One or more files did not pass the validity check!
     #[test]
     fn quarantine_of_an_absent_file_is_a_no_op() {
         let cache = scratch("quarantine-absent");
-        assert!(quarantine_file(&cache, "missing.tar.gz").is_none());
+        assert!(quarantine_file(&cache, "missing.tar.gz").unwrap().is_none());
         std::fs::remove_dir_all(&cache).ok();
+    }
+
+    #[test]
+    fn quarantine_surfaces_rename_and_stat_io_errors() {
+        // A regular file acting as `cache` returns ENOTDIR on `symlink_metadata(cache/x)`.
+        let base = scratch("quarantine-io-err");
+        let file_as_cache = base.join("not-a-dir");
+        std::fs::write(&file_as_cache, "file").unwrap();
+        let outcome = quarantine_bad_files(&file_as_cache, &["bad.tar.gz".to_string()]);
+        assert!(outcome.moved.is_empty());
+        assert!(
+            !outcome.errors.is_empty(),
+            "ENOTDIR quarantine failure must be reported loudly, not swallowed"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
@@ -777,7 +825,7 @@ ERROR: One or more files did not pass the validity check!
 
     #[test]
     fn verifysource_command_pins_the_c_locale_and_keeps_the_constant_argv() {
-        // The failure prose `failing_files`/`is_verify_failure` parse is
+        // The failure prose `failing_files` parses is
         // gettext-translated by makepkg; the spawn must pin it to C.
         let cmd = verifysource_command(Path::new("/nonexistent-recipe-dir"))
             .expect("a resolvable layout is the fixture's premise");
@@ -858,5 +906,127 @@ ERROR: One or more files did not pass the validity check!
                 "{reason} collides with the lane vocabulary"
             );
         }
+    }
+
+    #[test]
+    fn verifysource_command_absolutizes_srcdest_and_overrides_inherited_env() {
+        struct EnvGuard {
+            vars: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for (k, v) in self.vars.drain(..) {
+                    match v {
+                        Some(val) => std::env::set_var(k, val),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+
+        let dir = scratch("srcdest-env");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let conf = dir.join("gsa.conf");
+        std::fs::write(&conf, "srcdest = rel-fetch-src\n").unwrap();
+
+        let _guard = EnvGuard {
+            vars: vec![
+                ("GSA_CONF", std::env::var_os("GSA_CONF")),
+                ("HOME", std::env::var_os("HOME")),
+                ("SRCDEST", std::env::var_os("SRCDEST")),
+                ("GSA_BUILD_DIR", std::env::var_os("GSA_BUILD_DIR")),
+            ],
+        };
+        std::env::set_var("HOME", &home);
+        std::env::set_var("GSA_CONF", &conf);
+        std::env::set_var("GSA_BUILD_DIR", dir.join("cache"));
+        std::env::set_var("SRCDEST", "/tmp/inherited-fetch-leak");
+
+        let cmd_set = verifysource_command(&dir).expect("layout resolves");
+        std::fs::write(&conf, "# unset\n").unwrap();
+        let cmd_home_default = verifysource_command(&dir).expect("layout resolves");
+        drop(_guard);
+
+        let expected = std::path::absolute("rel-fetch-src").unwrap();
+        let src_val = cmd_set
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("SRCDEST"))
+            .and_then(|(_, v)| v.map(PathBuf::from));
+        let lane_src_val = cmd_set
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("GSA_LANE_SRCDEST"))
+            .and_then(|(_, v)| v.map(PathBuf::from));
+        assert_eq!(src_val.as_ref(), Some(&expected));
+        assert_eq!(lane_src_val.as_ref(), Some(&expected));
+        let default_src = cmd_home_default
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("SRCDEST"))
+            .and_then(|(_, v)| v.map(PathBuf::from));
+        assert_eq!(
+            default_src.as_ref(),
+            Some(&std::path::absolute(home.join(".gsa-src")).unwrap())
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn setup_error_fails_fast_without_transport_sleep_and_keeps_diagnostic() {
+        let dir = scratch("setup-fail-fast");
+        let recipe = dir.join("packages/git/demo");
+        std::fs::create_dir_all(&recipe).unwrap();
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        std::fs::write(
+            dir.join("config/topology.conf"),
+            "demo|packages/git/demo|git|\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("config/build-defaults.conf"), "").unwrap();
+        std::fs::write(dir.join("config/abi-exclusions.conf"), "").unwrap();
+        std::fs::write(
+            recipe.join("PKGBUILD"),
+            "pkgname=demo\npkgver=1\npkgrel=1\nsource=('https://example.invalid/a.tar.gz')\nsha256sums=('abc')\n",
+        )
+        .unwrap();
+        // Force a setup failure inside verifysource_command (GSA_BUILD_DIR pointing to a regular file).
+        let bad_build = dir.join("bad-build-file");
+        std::fs::write(&bad_build, "not-a-dir").unwrap();
+        let conf = dir.join("gsa.conf");
+        std::fs::write(&conf, "# valid conf\n").unwrap();
+        let saved_conf = std::env::var_os("GSA_CONF");
+        let saved_build = std::env::var_os("GSA_BUILD_DIR");
+        let saved_delay = std::env::var_os("_GSA_FETCH_RETRY_S");
+        std::env::set_var("GSA_CONF", &conf);
+        std::env::set_var("GSA_BUILD_DIR", &bad_build);
+        std::env::set_var("_GSA_FETCH_RETRY_S", "0");
+
+        let mut err = Vec::new();
+        let result = fetch_recipe("demo", &dir, &mut err);
+
+        match saved_conf {
+            Some(v) => std::env::set_var("GSA_CONF", v),
+            None => std::env::remove_var("GSA_CONF"),
+        }
+        match saved_build {
+            Some(v) => std::env::set_var("GSA_BUILD_DIR", v),
+            None => std::env::remove_var("GSA_BUILD_DIR"),
+        }
+        match saved_delay {
+            Some(v) => std::env::set_var("_GSA_FETCH_RETRY_S", v),
+            None => std::env::remove_var("_GSA_FETCH_RETRY_S"),
+        }
+
+        let text = String::from_utf8_lossy(&err);
+        let attempt_count = text.matches("attempt ").count();
+        assert_eq!(result.verdict, FetchVerdict::Failed);
+        assert!(
+            attempt_count <= 1,
+            "permanent setup error must not retry as transport: {text}"
+        );
+        assert!(
+            text.contains("cannot configure makepkg"),
+            "setup diagnostic must be surfaced, got: {text}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

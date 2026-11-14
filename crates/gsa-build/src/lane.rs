@@ -39,9 +39,25 @@ use crate::makepkg::check_flag_payload;
 /// The topology id charset asserted at the seam's producer side (a drifted
 /// identity must never reach the wire).
 fn valid_pkg(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+    gsa_model::RecipeId::new(s).is_ok()
+}
+
+fn publish_lane_result(
+    pkg: &str,
+    code: LaneOutcome,
+    dur: u64,
+    reason: &str,
+    result_path: &Path,
+    err: &mut dyn Write,
+) -> i32 {
+    let result = LaneResult::new(pkg, code, dur, reason).unwrap();
+    match codec::publish(result_path, &result) {
+        Ok(()) => code.code(),
+        Err(message) => {
+            let _ = writeln!(err, "gsa --lane-job: {message}");
+            LaneOutcome::Lost.code()
+        }
+    }
 }
 
 /// The lane's state root (contract §J.3): `--state-dir` is supervisor-side;
@@ -147,14 +163,28 @@ fn usage(message: &str, err: &mut dyn Write) -> i32 {
 /// attributed back to the interrupt.
 fn settle_pending_receipt(pkg: &str, result_path: &Path, err: &mut dyn Write) -> Option<i32> {
     let (code, reason) = received_interrupt(signals::received_signal())?;
-    let result = LaneResult::new(pkg, code, 0, reason).unwrap();
-    match codec::publish(result_path, &result) {
-        Ok(()) => Some(code.code()),
-        Err(message) => {
-            let _ = writeln!(err, "gsa --lane-job: {message}");
-            Some(LaneOutcome::Lost.code())
-        }
+    Some(publish_lane_result(pkg, code, 0, reason, result_path, err))
+}
+
+/// Spawn a child with a `pre_exec` atomic signal-receipt check so any teardown
+/// signal delivered between `spawn_at_ns` and `exec(2)` aborts cleanly before
+/// launching `makepkg`.
+pub(crate) fn spawn_gated(
+    cmd: &mut std::process::Command,
+    signal_pending: fn() -> bool,
+) -> std::io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    // Safety: `signal_pending` only loads atomics; returning an OS error
+    // without allocating avoids any post-fork unsafe allocations.
+    unsafe {
+        cmd.pre_exec(move || {
+            if signal_pending() {
+                return Err(std::io::Error::from_raw_os_error(4)); // EINTR
+            }
+            Ok(())
+        });
     }
+    cmd.spawn()
 }
 
 /// `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` — the lane child.
@@ -248,15 +278,14 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
             // §J.3: a state root that cannot be resolved is fatal for the
             // lane — never a silent fallback to another root.
             let _ = writeln!(err, "gsa --lane-job: {message}");
-            let result =
-                LaneResult::new(pkg, LaneOutcome::Failed, 0, "state-dir-unusable").unwrap();
-            return match codec::publish(&result_path, &result) {
-                Ok(()) => LaneOutcome::Failed.code(),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa --lane-job: {message}");
-                    LaneOutcome::Lost.code()
-                }
-            };
+            return publish_lane_result(
+                pkg,
+                LaneOutcome::Failed,
+                0,
+                "state-dir-unusable",
+                &result_path,
+                err,
+            );
         }
     };
 
@@ -280,14 +309,7 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
         } else {
             reason
         };
-        let result = LaneResult::new(pkg, LaneOutcome::Parked, 0, &reason).unwrap();
-        return match codec::publish(&result_path, &result) {
-            Ok(()) => LaneOutcome::Parked.code(),
-            Err(message) => {
-                let _ = writeln!(err, "gsa --lane-job: {message}");
-                LaneOutcome::Lost.code()
-            }
-        };
+        return publish_lane_result(pkg, LaneOutcome::Parked, 0, &reason, &result_path, err);
     }
 
     // ── per-package log (contract §J.1/§K.1: under the state root) ───────
@@ -310,15 +332,14 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
                         "gsa --lane-job: cannot write build log {}: {error}",
                         log_path.display()
                     );
-                    let result =
-                        LaneResult::new(pkg, LaneOutcome::Failed, 0, "log-unwritable").unwrap();
-                    match codec::publish(&result_path, &result) {
-                        Ok(()) => return LaneOutcome::Failed.code(),
-                        Err(message) => {
-                            let _ = writeln!(err, "gsa --lane-job: {message}");
-                            return LaneOutcome::Lost.code();
-                        }
-                    }
+                    return publish_lane_result(
+                        pkg,
+                        LaneOutcome::Failed,
+                        0,
+                        "log-unwritable",
+                        &result_path,
+                        err,
+                    );
                 }
             }
         }
@@ -333,15 +354,14 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
         Err(message) => {
             let _ = writeln!(err, "gsa --lane-job: {message}");
             let _ = writeln!(&log, "gsa --lane-job: {message}");
-            let result =
-                LaneResult::new(pkg, LaneOutcome::Failed, 0, "toolchain-ambiguous").unwrap();
-            return match codec::publish(&result_path, &result) {
-                Ok(()) => LaneOutcome::Failed.code(),
-                Err(message) => {
-                    let _ = writeln!(err, "gsa --lane-job: {message}");
-                    LaneOutcome::Lost.code()
-                }
-            };
+            return publish_lane_result(
+                pkg,
+                LaneOutcome::Failed,
+                0,
+                "toolchain-ambiguous",
+                &result_path,
+                err,
+            );
         }
     };
     let _ = writeln!(&log, "gsa --lane-job: {}", selected.log_line());
@@ -358,15 +378,14 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
                 // reports success.
                 let _ = writeln!(err, "gsa --lane-job: {message}");
                 let _ = writeln!(&log, "gsa --lane-job: {message}");
-                let result =
-                    LaneResult::new(pkg, LaneOutcome::Failed, 0, "layout-unusable").unwrap();
-                return match codec::publish(&result_path, &result) {
-                    Ok(()) => LaneOutcome::Failed.code(),
-                    Err(message) => {
-                        let _ = writeln!(err, "gsa --lane-job: {message}");
-                        LaneOutcome::Lost.code()
-                    }
-                };
+                return publish_lane_result(
+                    pkg,
+                    LaneOutcome::Failed,
+                    0,
+                    "layout-unusable",
+                    &result_path,
+                    err,
+                );
             }
         };
     // A decided family configures its DRIVER too, unless the recipe names one
@@ -406,7 +425,7 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     // the group, targets the straggler alone; anything it leaves behind dies
     // with the grace SIGKILL sweep. Then reap and classify as ever.
     let spawn_at_ns = signals::monotonic_ns();
-    let status = match cmd.spawn() {
+    let status = match spawn_gated(&mut cmd, || signals::received_signal() != 0) {
         Ok(mut child) => Some(loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -439,6 +458,11 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
             }
         }),
         Err(error) => {
+            // If `pre_exec` aborted spawn because a teardown signal arrived
+            // between `spawn_at_ns` and `exec(2)`, settle as interrupted.
+            if let Some(rc) = settle_pending_receipt(pkg, &result_path, err) {
+                return rc;
+            }
             // The build never started: that is makepkg-run failure, not a
             // lost child (a spawn error has no pid to tear down or reap).
             let _ = writeln!(err, "gsa --lane-job: cannot run makepkg: {error}");
@@ -456,14 +480,7 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
         None => (LaneOutcome::Failed, "build-failed".to_string()),
     };
 
-    let result = LaneResult::new(pkg, code, dur, &reason).unwrap();
-    match codec::publish(&result_path, &result) {
-        Ok(()) => code.code(),
-        Err(message) => {
-            let _ = writeln!(err, "gsa --lane-job: {message}");
-            LaneOutcome::Lost.code()
-        }
-    }
+    publish_lane_result(pkg, code, dur, &reason, &result_path, err)
 }
 
 /// The `--lane-job` result file a supervisor hands a lane (the shape the
@@ -603,5 +620,26 @@ mod tests {
             classify_wait(Ok(std::process::ExitStatus::from_raw(signals::SIGKILL)), 0),
             (LaneOutcome::Failed, "build-killed-by-signal-9".to_string())
         );
+    }
+
+    #[test]
+    fn spawn_gated_aborts_before_exec_when_signal_is_pending() {
+        let dir = std::env::temp_dir().join(format!("gsa-lane-preexec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("ran");
+
+        let mut blocked = std::process::Command::new("/bin/sh");
+        blocked.arg("-c").arg(format!("touch {}", marker.display()));
+        let err = spawn_gated(&mut blocked, || true).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(4));
+        assert!(!marker.exists(), "child must not exec when signal pending");
+
+        let mut allowed = std::process::Command::new("/bin/sh");
+        allowed.arg("-c").arg(format!("touch {}", marker.display()));
+        let status = spawn_gated(&mut allowed, || false).unwrap().wait().unwrap();
+        assert!(status.success());
+        assert!(marker.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -144,9 +144,7 @@ impl std::error::Error for CodecError {}
 
 /// The topology id charset (a drifted identity must never reach the wire).
 fn valid_pkg(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+'))
+    gsa_model::RecipeId::new(s).is_ok()
 }
 
 fn has_control(s: &str) -> bool {

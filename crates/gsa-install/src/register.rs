@@ -240,6 +240,8 @@ fn lock_has_live_holder(lock: &Path) -> bool {
     };
     let ino = meta.ino();
     let dev = meta.dev();
+    let lock_uid = meta.uid();
+    let self_uid = gsa_model::state_gate::current_uid();
     let Ok(proc_dir) = std::fs::read_dir("/proc") else {
         // Cannot scan: treat as held (do not proceed on unproven idleness).
         return true;
@@ -251,8 +253,22 @@ fn lock_has_live_holder(lock: &Path) -> bool {
         if pid == std::process::id() as i32 {
             continue;
         }
-        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
-            continue;
+        let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+            Ok(fds) => fds,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                // Non-root processes cannot read root-owned `/proc/<pid>/fd`.
+                // When inspecting a lock file whose owner owns this unreadable
+                // process (or when running as root), fail closed rather than
+                // falsely declaring a live root transaction's lock stale.
+                let proc_uid = entry.metadata().ok().map(|m| m.uid());
+                if self_uid == 0
+                    || (lock_uid != self_uid && (proc_uid == Some(lock_uid) || proc_uid.is_none()))
+                {
+                    return true;
+                }
+                continue;
+            }
         };
         for fd in fds.flatten() {
             if let Ok(target) = std::fs::metadata(fd.path()) {
@@ -288,6 +304,17 @@ pub enum StalePolicy {
 /// wait for it to finish" for a lock nobody held — advice that never
 /// terminates (blind-review 2026-11-11, data-center-ops).
 pub fn wait_for_db_lock(db_root: &Path, on_stale: StalePolicy) -> Result<(), String> {
+    wait_for_db_lock_for(db_root, on_stale, "register-ignorepkg")
+}
+
+/// [`wait_for_db_lock`] parameterized by caller context (`"register-ignorepkg"`
+/// vs `"install-transaction"`), so transaction timeouts never misattribute to
+/// IgnorePkg registration (`F-QA-03`).
+pub fn wait_for_db_lock_for(
+    db_root: &Path,
+    on_stale: StalePolicy,
+    caller: &str,
+) -> Result<(), String> {
     let lock = db_root.join("db.lck");
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut waiting = false;
@@ -316,7 +343,7 @@ pub fn wait_for_db_lock(db_root: &Path, on_stale: StalePolicy) -> Result<(), Str
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "register-ignorepkg: {} is still held after 300s — refusing to install unregistered package name(s)",
+                "{caller}: {} is still held after 300s — refusing to proceed",
                 lock.display()
             ));
         }

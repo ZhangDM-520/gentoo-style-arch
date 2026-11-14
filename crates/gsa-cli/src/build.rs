@@ -15,12 +15,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gsa_abi::{plan_waves, Subscriptions, TokenMove, WaveInputs};
 use gsa_fetch::candidacy::{classify as classify_candidacy, FetchCandidacy};
 use gsa_graph::Graph;
-use gsa_install::localdb::{pacman_db_root, pacman_db_root_for, LocalDb};
+use gsa_install::localdb::{pacman_db_root_for, LocalDb};
 use gsa_install::{preflight_installs, DecideMode, InstallRun};
 use gsa_model::{Group, OutcomeRow, PlanAction, PlanRow, RecipeId, RowStatus, RunOutcome};
 use gsa_recipe::toolchain;
@@ -114,25 +114,47 @@ fn run_build_with(
             "selection is mandatory: a build never starts without a selection".to_string(),
         ));
     }
-    // ── workspace, topology, selection (usage class: rc 2) ────────────────
-    // A standalone-target run staged its own workspace (plan W4); the rest
-    // discover the recipe workspace as before.
-    let root = crate::resolve_workspace(inv, err)?;
-    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db =
-        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv),
+    // ── syntactic budget checks (§G.1): argv/env only, no workspace ──────
+    preflight_budget_syntax(inv)?;
+
+    // ── read-only workspace probe, then the usage preflight (§B.10, §G.1) ─
+    // Everything the argv can be wrong about answers rc 2 BEFORE the
+    // privilege gate and BEFORE any store fetch or state write. A standalone
+    // target staged its own workspace (plan W4); otherwise the probe is
+    // read-only (`fetch: false`) and a host with no workspace yet preflights
+    // nothing, so the gate answers rc 3 instead of dying in an unprivileged
+    // state write (round-2 audit, F-R2-C-01).
+    let mut draft: Option<select::SelectionDraft> = None;
+    let probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─────────
-    let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-        .map_err(|error| error.into_exit())?;
-    crate::write_notes(err, draft.notes());
+    match probe {
+        Ok(root) => {
+            let project =
+                gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+            let graph = Graph::build(&project.topology.records)
+                .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+            let db = RecipeDb::load(&root, graph.records())
+                .map_err(|error| Exit::Usage(error.to_string()))?;
+            let ctx = Ctx {
+                project: &project,
+                graph: &graph,
+                db: &db,
+                user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+            };
+            // ── usage preflight: resolve the selection (§G.1 rc 2 class) ─
+            let resolved = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, resolved.notes());
+            draft = Some(resolved);
+            let _ = resolve_budget(inv, &project, 0).map_err(Exit::Usage)?;
+        }
+        Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
+    }
+    let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
+    let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
@@ -143,6 +165,32 @@ fn run_build_with(
     ) {
         return Err(exit);
     }
+
+    // ── the run's workspace (§B.10): a mutating run may fetch the store ───
+    let root = crate::resolve_workspace(inv, err)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+    };
+    // The draft resolved against the probe stands: the probe already reached
+    // this root (a fetch only happens when the probe found none), so the
+    // notes are printed exactly once.
+    let draft = match draft {
+        Some(draft) => draft,
+        None => {
+            let draft = select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                .map_err(|error| error.into_exit())?;
+            crate::write_notes(err, draft.notes());
+            draft
+        }
+    };
 
     // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
     //    (rc 3) before any interactive input is rendered or consumed ──────
@@ -227,8 +275,6 @@ fn run_build_with(
     for warning in &warnings {
         let _ = writeln!(err, "{warning}");
     }
-    // ── fetch-ahead (owner decision 1): default-on, `--no-prefetch` opt-out ─
-    let prefetch_ahead = resolve_prefetch(inv).map_err(Exit::Usage)?;
 
     // ── startup refusals (§G.1 rc 3) ─────────────────────────────────────
     // Under-coverage (§E.3): a wave member the topology cannot build —
@@ -394,7 +440,6 @@ fn run_build_with(
         }
     }
     // 2. the version-sync + freshness pass (one pass, canonical order).
-    let cfg = prepare::pass_config(inv).map_err(Exit::Usage)?;
     for line in &cfg.notes {
         let _ = writeln!(err, "gsa: note: {line}");
     }
@@ -484,10 +529,7 @@ fn run_build_with(
             let state_dir = state_dir.clone();
             let conf = inv.config.as_ref().map(PathBuf::from);
             let pacman_args = inv.pacman_args.clone().unwrap_or_default();
-            let register_ignorepkg = !inv
-                .deferred_flags
-                .iter()
-                .any(|f| f == "--no-register-ignorepkg");
+            let register_ignorepkg = !inv.no_register_ignorepkg;
             let order = build_order_ids(&graph, &ids);
             // Settled-lane ledger for `later_after_settled`: the hook fires
             // per settled lane, so this is the run's landed set.
@@ -623,32 +665,39 @@ fn run_build_with(
                             }
                         }
                         if baselines_ok {
-                            let source = std::fs::read_to_string(recipe_dir.join("PKGBUILD"))
-                                .unwrap_or_default();
+                            let pkgbuild = recipe_dir.join("PKGBUILD");
                             let declared = toolchains.get(pkg).copied().flatten();
-                            let selected = gsa_recipe::toolchain::select(
-                                pkg,
-                                gsa_model::toolchain::override_value(),
-                                declared,
-                                &source,
-                            )
-                            .map(|selected| selected.toolchain)
-                            .unwrap_or(
-                                gsa_model::toolchain::override_value()
-                                    .or(declared)
-                                    .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT),
-                            );
-                            match gsa_recipe::toolchain::build_identity(selected) {
-                                Ok(identity) => {
-                                    if let Err(error) = gsa_recipe::toolchain::write_marker(
-                                        &state_dir, pkg, &identity,
-                                    ) {
-                                        notes.push(format!("toolchain marker: {pkg}: {error}"));
+                            let selected = std::fs::read_to_string(&pkgbuild)
+                                .map_err(|error| {
+                                    format!("cannot read {}: {error}", pkgbuild.display())
+                                })
+                                .and_then(|source| {
+                                    gsa_recipe::toolchain::select(
+                                        pkg,
+                                        gsa_model::toolchain::override_value(),
+                                        declared,
+                                        &source,
+                                    )
+                                    .map(|selected| selected.toolchain)
+                                    .map_err(|error| error.to_string())
+                                });
+                            match selected {
+                                Ok(selected) => match gsa_recipe::toolchain::build_identity(selected)
+                                {
+                                    Ok(identity) => {
+                                        if let Err(error) = gsa_recipe::toolchain::write_marker(
+                                            &state_dir, pkg, &identity,
+                                        ) {
+                                            notes.push(format!("toolchain marker: {pkg}: {error}"));
+                                        }
                                     }
+                                    Err(error) => notes.push(format!(
+                                        "toolchain marker: {pkg}: cannot determine the {selected} build identity ({error})"
+                                    )),
+                                },
+                                Err(error) => {
+                                    notes.push(format!("toolchain marker: {pkg}: {error}"))
                                 }
-                                Err(error) => notes.push(format!(
-                                    "toolchain marker: {pkg}: cannot determine the {selected} build identity ({error})"
-                                )),
                             }
                         }
                     }
@@ -858,7 +907,11 @@ fn run_build_with(
     // install decisions, which the one decision seam made (rule 20).
     let qa = if is_install_run {
         let qa_targets: Vec<String> = ids.iter().map(|id| id.as_str().to_string()).collect();
-        crate::qa::report_lines(&qa_targets, inv.state_dir.as_deref())
+        crate::qa::report_lines(
+            &qa_targets,
+            inv.state_dir.as_deref(),
+            inv.config.as_deref().map(Path::new),
+        )
     } else {
         None
     };
@@ -905,11 +958,9 @@ fn record_toolchain(
             continue;
         };
         let dir = root.join(&graph.record(idx).path);
-        families.insert(prepare::selected_toolchain(
-            id.as_str(),
-            graph.record(idx),
-            &dir,
-        ));
+        if let Ok(family) = prepare::selected_toolchain(id.as_str(), graph.record(idx), &dir) {
+            families.insert(family);
+        }
     }
     match families.len() {
         0 => (None, None),
@@ -1132,25 +1183,61 @@ pub fn run_update(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) ->
     exit::render(run_update_inner(inv, out, err), err)
 }
 
+pub(crate) fn load_installed_db_for_update(conf: Option<&Path>) -> Result<LocalDb, Exit> {
+    let db_root = pacman_db_root_for(conf).map_err(|message| {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {message}")],
+        ))
+    })?;
+    LocalDb::load(&db_root).map_err(|message| {
+        Exit::Refuse(Refusal::noted(
+            RefusalClass::StartupRefused,
+            vec![format!("gsa: {message}")],
+        ))
+    })
+}
+
 fn run_update_inner(
     inv: &Invocation,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<i32, Exit> {
-    let root = crate::resolve_workspace(inv, err)?;
-    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
-    let graph = Graph::build(&project.topology.records)
-        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
-    let db =
-        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
-    let ctx = Ctx {
-        project: &project,
-        graph: &graph,
-        db: &db,
-        user_sets: select::load_user_sets(inv),
+    preflight_budget_syntax(inv)?;
+
+    // ── read-only probe + usage preflight, then the gate (§B.10, §G.1) ───
+    // `-Su --dry-run` must not clone the store or create the state root, and
+    // a host with no workspace preflights nothing — the gate answers rc 3
+    // (round-2 audit, F-R2-C-01).
+    let mut preflight: Option<select::Selection> = None;
+    let probe = match &inv.standalone_root {
+        Some(root) => Ok(root.clone()),
+        None => crate::resolve_root(false, inv.state_dir.as_deref()),
     };
-    let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
-    crate::write_notes(err, &selection.notes);
+    match probe {
+        Ok(root) => {
+            let project =
+                gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+            let graph = Graph::build(&project.topology.records)
+                .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+            let db = RecipeDb::load(&root, graph.records())
+                .map_err(|error| Exit::Usage(error.to_string()))?;
+            let ctx = Ctx {
+                project: &project,
+                graph: &graph,
+                db: &db,
+                user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+            };
+            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
+            crate::write_notes(err, &selection.notes);
+            let _ = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
+            preflight = Some(selection);
+        }
+        Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
+        Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
+    }
+    let _ = resolve_prefetch(inv).map_err(Exit::Usage)?;
+    let _ = prepare::pass_config(inv).map_err(Exit::Usage)?;
 
     // ── privilege gate (contract §B.10; after every usage preflight) ─────
     if let Some(exit) = crate::privilege_gate(
@@ -1162,18 +1249,52 @@ fn run_update_inner(
         return Err(exit);
     }
 
+    // ── the run's workspace: a mutating run may fetch the store ──────────
+    let root = crate::resolve_workspace_for_run(inv, err)?;
+    let project = gsa_topo::load_project(&root).map_err(|error| Exit::Usage(error.to_string()))?;
+    let graph = Graph::build(&project.topology.records)
+        .map_err(|error| Exit::Usage(format!("config/topology.conf: {error}")))?;
+    let db =
+        RecipeDb::load(&root, graph.records()).map_err(|error| Exit::Usage(error.to_string()))?;
+    let ctx = Ctx {
+        project: &project,
+        graph: &graph,
+        db: &db,
+        user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
+    };
+    let selection = match preflight {
+        Some(selection) => selection,
+        None => {
+            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
+            crate::write_notes(err, &selection.notes);
+            selection
+        }
+    };
+
+    let mut resolved_inv = inv.clone();
+    if !resolved_inv.dry_run {
+        crate::builddir::resolve(&mut resolved_inv, err)?;
+    }
+
     let ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
-    let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
+    let state_dir =
+        gsa_state::resolve_state_root(resolved_inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
     // ── 1. the `-Sy` phase (`gsa -Syu` only — H9: `gsa -Su` updates with no
     //    sync pass). A dry run never rewrites recipes, so it runs no sync at
     //    all; the routing below owns the rc classes.
-    if inv.sync_first && !inv.no_sync && !inv.dry_run {
+    if resolved_inv.sync_first && !resolved_inv.no_sync && !resolved_inv.dry_run {
         let srcdest = gsa_model::config::resolve_srcdest();
         let phase = prepare::sync_phase(&root, &graph, &selection, srcdest.as_deref(), out, err);
-        if let Some(exit) = after_sync_phase(inv, &selection, &state_dir, out, err, &phase, || {
-            resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b)
-        }) {
+        if let Some(exit) = after_sync_phase(
+            &resolved_inv,
+            &selection,
+            &state_dir,
+            out,
+            err,
+            &phase,
+            || resolve_budget(&resolved_inv, &project, selection.listed.len()).map(|(b, _)| b),
+        ) {
             return Err(exit);
         }
     }
@@ -1182,7 +1303,7 @@ fn run_update_inner(
     // The installed record is the reference point whenever one exists: an
     // archive whose install was refused must stay stale, or the update
     // disappears from this verb for good.
-    let installed = LocalDb::load(&pacman_db_root()).map_err(Exit::Usage)?;
+    let installed = load_installed_db_for_update(resolved_inv.config.as_deref().map(Path::new))?;
     let stale: Vec<RecipeId> = prepare::stale_set(&root, &graph, &db, &installed, &ids)
         .into_iter()
         .map(|row| row.id)
@@ -1203,9 +1324,13 @@ fn run_update_inner(
         }];
         let run_outcome = RunOutcome::compute(&outcomes, inv.fail_fast, false, false);
         let mut record = record::build_run_record(
-            inv,
-            &inv.targets,
-            &inv.ranges,
+            // §H.2's `command:` scalar must name the roots the run actually
+            // resolved — `builddir::resolve` may have replaced `--build-dir`
+            // with the interactively chosen one above (round-2 audit,
+            // F-R2-C-04).
+            &resolved_inv,
+            &resolved_inv.targets,
+            &resolved_inv.ranges,
             None,
             plan,
             vec![subject],
@@ -1228,19 +1353,23 @@ fn run_update_inner(
     }
 
     // ── 3. build+install the stale set through the normal pipeline ───────
-    let mut update_inv = inv.clone();
+    let mut update_inv = resolved_inv.clone();
     update_inv.targets = stale.iter().map(|id| id.as_str().to_string()).collect();
     update_inv.ranges = Vec::new();
-    if !inv.sync_first {
+    if !resolved_inv.dry_run {
+        // `builddir::resolve` already ran once above for the update pass.
+        update_inv.no_build_dir_prompt = true;
+    }
+    if !resolved_inv.sync_first {
         // `-Su` (H9): the pipeline must not sneak a sync in through its
         // pre-dispatch pass — the committed versions build as-is.
         update_inv.no_sync = true;
     }
-    if inv.dry_run {
+    if resolved_inv.dry_run {
         // The dry run's typed exit owns its rc (a declined prompt is rc 3).
         return plan_only(&ctx, &update_inv, &project, &root, out, err);
     }
-    let mode = if inv.modifiers.contains(&'f') {
+    let mode = if resolved_inv.modifiers.contains(&'f') {
         DecideMode::Force
     } else {
         DecideMode::Checked
@@ -1356,21 +1485,54 @@ fn resolve_budget(
 /// comes back WITH the value — a clamp warning must name the spelling that
 /// answered, and re-deriving it from the environment would be a second ladder
 /// for one setting (rule 73).
+/// The argv/env half of the budget ladder, checkable with NO workspace:
+/// `--lanes 0` is a usage error on every host, and answering it after the
+/// workspace probe made a workspace-less host report the privilege refusal
+/// (rc 3) instead (round-2 audit, F-R2-C-01). The project-default rung needs
+/// the project and stays in [`resolve_budget`]. Both rungs come from
+/// [`argv_or_env_override`], so the flag/env spellings exist once (rule 73).
+fn preflight_budget_syntax(inv: &Invocation) -> Result<(), Exit> {
+    for (flag, raw, env_name) in [
+        ("--lanes", inv.lanes.as_deref(), "GSA_LANES"),
+        ("--jobs", inv.jobs.as_deref(), "GSA_JOBS"),
+    ] {
+        argv_or_env_override(flag, raw, env_name).map_err(Exit::Usage)?;
+    }
+    Ok(())
+}
+
+/// The two rungs a host can answer with before any configuration is read:
+/// the flag, else its `GSA_*` env twin (contract §B.8: a flag beats its env
+/// twin). `Ok(None)` means neither answered, so the caller falls through to
+/// its own default rung. This is the ONE place the argv/env pair is spelled —
+/// the syntax preflight and the budget resolution both call it, so a renamed
+/// flag cannot drift between validation and use (rule 73).
+fn argv_or_env_override(
+    flag: &str,
+    raw: Option<&str>,
+    env_name: &str,
+) -> Result<Option<(Override, String)>, String> {
+    if let Some(raw) = raw {
+        let value = Override::parse(raw).map_err(|e| format!("{flag}: {e}"))?;
+        return Ok(Some((value, flag.to_string())));
+    }
+    if let Ok(raw) = std::env::var(env_name) {
+        if !raw.is_empty() {
+            let value = Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"))?;
+            return Ok(Some((value, env_name.to_string())));
+        }
+    }
+    Ok(None)
+}
+
 fn override_value(
     flag: Option<&str>,
     env_name: &str,
     conf: &str,
 ) -> Result<(Override, String), String> {
     let name = env_name.trim_start_matches("GSA_").to_ascii_lowercase();
-    if let Some(raw) = flag {
-        let value = Override::parse(raw).map_err(|e| format!("--{name}: {e}"))?;
-        return Ok((value, format!("--{name}")));
-    }
-    if let Ok(raw) = std::env::var(env_name) {
-        if !raw.is_empty() {
-            let value = Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"))?;
-            return Ok((value, env_name.to_string()));
-        }
+    if let Some(answer) = argv_or_env_override(&format!("--{name}"), flag, env_name)? {
+        return Ok(answer);
     }
     let value =
         Override::parse(conf.trim()).map_err(|e| format!("config/build-defaults.conf: {e}"))?;
@@ -1725,13 +1887,15 @@ pub(crate) fn wave_check(
     });
     for wave in &plan.waves {
         for member in &wave.members {
-            let _ = writeln!(
-                out,
-                "abi-wave {} {} {}",
-                wave.provider,
-                member.id,
-                member.basis.wire()
-            );
+            for provider in &wave.providers {
+                let _ = writeln!(
+                    out,
+                    "abi-wave {} {} {}",
+                    provider,
+                    member.id,
+                    member.basis.wire()
+                );
+            }
         }
     }
     for row in plan.refusal_rows() {
@@ -2038,6 +2202,7 @@ mod tests {
             no_sync: false,
             build_dir: None,
             no_build_dir_prompt: false,
+            no_register_ignorepkg: false,
             allow_broken_rustc: false,
             standalone_root: None,
             standalone_tokens: Vec::new(),
@@ -2276,5 +2441,34 @@ mod tests {
             .collect();
         let built = build_order_ids(&graph, &listed_ids);
         assert_eq!(later_after(&built, "provider"), order(&["consumer"]));
+    }
+
+    #[test]
+    fn load_installed_db_for_update_honors_config_and_refuses_missing_db() {
+        let dir = scratch("update-db-conf");
+        let db = dir.join("custom-db");
+        let pkg = db.join("local/demo-1.0-1");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("desc"), "%NAME%\ndemo\n\n%VERSION%\n1.0-1\n\n").unwrap();
+        let conf = dir.join("pacman.conf");
+        std::fs::write(&conf, format!("[options]\nDBPath = {}\n", db.display())).unwrap();
+
+        let loaded = super::load_installed_db_for_update(Some(&conf))
+            .expect("custom --config DBPath loads cleanly");
+        assert!(loaded.packages().iter().any(|p| p.name == "demo"));
+
+        let missing_conf = dir.join("missing.conf");
+        let err = super::load_installed_db_for_update(Some(&missing_conf))
+            .expect_err("missing --config must refuse");
+        assert!(
+            matches!(
+                err,
+                crate::exit::Exit::Refuse(ref r)
+                    if r.class == crate::exit::RefusalClass::StartupRefused
+            ),
+            "missing --config must return StartupRefused (rc 3)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

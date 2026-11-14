@@ -218,18 +218,12 @@ impl SourceEntry {
     /// git checkout, and testing the raw entry would misclassify it as a
     /// tarball and then refuse the build.
     pub fn vcs(&self) -> Option<VcsProtocol> {
-        let url = self.url()?;
-        for (prefix, proto) in [
-            ("git+", VcsProtocol::Git),
-            ("svn+", VcsProtocol::Svn),
-            ("hg+", VcsProtocol::Hg),
-            ("bzr+", VcsProtocol::Bzr),
-        ] {
-            if url.starts_with(prefix) {
-                return Some(proto);
-            }
+        match crate::freshness::scheme_vcs(self.url()?)? {
+            crate::VcsKind::Git => Some(VcsProtocol::Git),
+            crate::VcsKind::Svn => Some(VcsProtocol::Svn),
+            crate::VcsKind::Hg => Some(VcsProtocol::Hg),
+            crate::VcsKind::Bzr => Some(VcsProtocol::Bzr),
         }
-        None
     }
 
     /// The name `makepkg` gives the entry — what a checksum array describes:
@@ -618,18 +612,22 @@ done
 exit 0
 "##;
 
+pub fn pkgbuild_pkgver_rhs_checked(recipe_dir: &Path) -> std::io::Result<Option<String>> {
+    let text = fs::read_to_string(recipe_dir.join("PKGBUILD"))?;
+    for line in text.lines() {
+        if let Some(rhs) = line.strip_prefix("pkgver=") {
+            return Ok(Some(rhs.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 /// Raw text of the first top-level `pkgver=` assignment, unevaluated. `None`
 /// when the recipe has no such line (a `pkgver()` function, which the sync
 /// paths skip — inserting a literal would OVERRIDE `pkgver()` and pin the
 /// version, defeating dev-branch tracking).
 pub fn pkgbuild_pkgver_rhs(recipe_dir: &Path) -> Option<String> {
-    let text = fs::read_to_string(recipe_dir.join("PKGBUILD")).ok()?;
-    for line in text.lines() {
-        if let Some(rhs) = line.strip_prefix("pkgver=") {
-            return Some(rhs.to_string());
-        }
-    }
-    None
+    pkgbuild_pkgver_rhs_checked(recipe_dir).ok().flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1134,7 @@ pub fn refresh_package_srcinfo(recipe_dir: &Path) -> SrcinfoRefresh {
         .arg("--printsrcinfo")
         .arg("--dir")
         .arg(recipe_dir)
+        .env("GIT_CONFIG_COUNT", "0")
         .output()
     {
         Ok(o) => o,
@@ -2033,12 +2032,14 @@ pub fn snapshot_pkgver_at(
     }
     // The evaluator is the recipe's own code (arbitrary shell), so it runs as
     // the build user like every other recipe evaluation (§ privilege).
+    let eval_pkgdir = scratch.join("eval-pkgdir");
     let out = gsa_model::privilege::build_command("bash")
         .arg("-c")
         .arg(PKGVER_EVAL_SCRIPT)
         .arg("_")
         .arg(&srcdir)
         .arg(recipe_dir)
+        .arg(&eval_pkgdir)
         .output()
         .map_err(|e| SnapshotRefusal::PkgverEvaluationFailed {
             detail: format!("bash: {e}"),
@@ -2063,7 +2064,7 @@ pub fn snapshot_pkgver_at(
 const PKGVER_EVAL_SCRIPT: &str = r#"
 srcdir=$1
 startdir=$2
-pkgdir=$2/.gsa-pkgver-eval
+pkgdir=$3
 export srcdir startdir pkgdir
 mkdir -p "$pkgdir" || exit 1
 cd "$startdir" || exit 1
@@ -2098,6 +2099,10 @@ pub fn sync_snapshot(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
+    let stable_root = repo_root.join("packages").join("stable");
+    if recipe_dir.starts_with(&stable_root) {
+        return SyncReport::nochange(pkg, NoChangeReason::NotStableStaged);
+    }
     // Absent EVIDENCE defers (retry when the mirror is there); a defective
     // RECIPE refuses. Folding the two would make one un-fetched mirror abort
     // a full-set `-Sy` (rc 3) instead of parking the recipe, and would hide a
@@ -2453,6 +2458,47 @@ mod tests {
             toml_str_value("k = unquoted", "k").as_deref(),
             Some("unquoted")
         );
+    }
+
+    #[test]
+    fn bare_git_scheme_entry_is_classified_as_vcs() {
+        let entry = super::SourceEntry::new("git://host/repo.git#commit=abc1234");
+        assert_eq!(entry.vcs(), Some(super::VcsProtocol::Git));
+        assert!(!super::PKGVER_EVAL_SCRIPT.contains(".gsa-pkgver-eval"));
+    }
+
+    #[test]
+    fn sync_snapshot_never_touches_packages_stable() {
+        let dir = std::env::temp_dir().join(format!("gsa-sync-stable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stable_recipe = dir.join("packages/stable/demo");
+        std::fs::create_dir_all(&stable_recipe).unwrap();
+        let pkgbuild = stable_recipe.join("PKGBUILD");
+        std::fs::write(
+            &pkgbuild,
+            "pkgname=demo\npkgver=1\npkgrel=1\nsource=('git+https://example.com/a.git#commit=abc1234')\n",
+        )
+        .unwrap();
+        let report = super::sync_snapshot(&stable_recipe, &dir, &dir, "2026-11-01");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            matches!(report.outcome, super::SyncOutcome::NoChange { .. }),
+            "expected NoChange on packages/stable, got {:?}",
+            report.outcome
+        );
+    }
+
+    #[test]
+    fn pkgbuild_pkgver_rhs_checked_propagates_io_error_instead_of_none() {
+        let dir = std::env::temp_dir().join(format!("gsa-pkgver-io-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = super::pkgbuild_pkgver_rhs_checked(&dir).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        std::fs::create_dir_all(dir.join("PKGBUILD")).unwrap();
+        let err_dir = super::pkgbuild_pkgver_rhs_checked(&dir).unwrap_err();
+        assert_ne!(err_dir.kind(), std::io::ErrorKind::NotFound);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3775,6 +3821,7 @@ pub fn anchor_sums(
     let upd = match gsa_model::privilege::build_command("updpkgsums")
         .arg(&staged)
         .current_dir(&info.dir)
+        .env("GIT_CONFIG_COUNT", "0")
         .output()
     {
         Ok(o) => o,
@@ -4264,8 +4311,22 @@ pub fn sync_arch(
     // pkgver()-driven PKGBUILDs have NO stable pkgver= line — inserting one
     // would OVERRIDE pkgver() and pin the version to the repo release,
     // defeating dev tracking. Skip them.
-    if pkgbuild_pkgver_rhs(recipe_dir).is_none() {
-        return SyncReport::nochange(pkg, NoChangeReason::PkgverFunction);
+    match pkgbuild_pkgver_rhs_checked(recipe_dir) {
+        Ok(Some(_)) => {}
+        Ok(None) => return SyncReport::nochange(pkg, NoChangeReason::PkgverFunction),
+        Err(e) => {
+            return SyncReport {
+                pkg,
+                outcome: SyncOutcome::Refused {
+                    class: RefusalClass::EvalFailure,
+                    message: format!("cannot read {}/PKGBUILD — {e}", recipe_dir.display()),
+                    restored: RestoreStatus::NothingToRestore,
+                },
+                anchor: None,
+                rows: Vec::new(),
+                log: Vec::new(),
+            };
+        }
     }
 
     let pkgnames = match pkgbuild_array_checked(recipe_dir, "pkgname") {
@@ -4694,7 +4755,24 @@ pub fn sync_arch(
                     log,
                 };
             }
-            AnchorOutcome::NothingToDo => (None, Vec::new()),
+            AnchorOutcome::NothingToDo => {
+                let srcinfo = refresh_package_srcinfo(recipe_dir);
+                if srcinfo.failed() {
+                    log.push(format!("{pkgbase}:{}", srcinfo.witness_suffix()));
+                }
+                let rows = if pkgver_changed {
+                    vec![DispositionRow::VersionSynced {
+                        pkg: pkgbase.clone(),
+                        old: old.clone(),
+                        new: new.clone(),
+                        provider: provider.label(),
+                        srcinfo,
+                    }]
+                } else {
+                    Vec::new()
+                };
+                (None, rows)
+            }
         }
     };
 
@@ -4945,10 +5023,24 @@ pub fn sync_nvchecker(
         _ => {}
     }
 
-    if pkgbuild_pkgver_rhs(recipe_dir).is_none()
-        || !fs::read_to_string(recipe_dir.join("PKGBUILD"))
-            .map(|t| t.lines().any(|l| l.starts_with("pkgrel=")))
-            .unwrap_or(false)
+    let pkgbuild_text = match fs::read_to_string(recipe_dir.join("PKGBUILD")) {
+        Ok(t) => t,
+        Err(e) => {
+            return SyncReport {
+                pkg,
+                outcome: SyncOutcome::Refused {
+                    class: RefusalClass::EvalFailure,
+                    message: format!("cannot read {}/PKGBUILD — {e}", recipe_dir.display()),
+                    restored: RestoreStatus::NothingToRestore,
+                },
+                anchor: None,
+                rows: Vec::new(),
+                log: Vec::new(),
+            };
+        }
+    };
+    if !pkgbuild_text.lines().any(|l| l.starts_with("pkgver="))
+        || !pkgbuild_text.lines().any(|l| l.starts_with("pkgrel="))
     {
         return SyncReport {
             pkg,
@@ -5307,7 +5399,22 @@ pub fn sync_nvchecker(
         }
         AnchorOutcome::NothingToDo => {
             tx.keep();
-            finish(Vec::new(), log, None)
+            let srcinfo = refresh_package_srcinfo(recipe_dir);
+            if srcinfo.failed() {
+                log.push(format!("{pkgbase}:{}", srcinfo.witness_suffix()));
+            }
+            let rows = if pkgver_changed {
+                vec![DispositionRow::VersionSynced {
+                    pkg: pkgbase.clone(),
+                    old: old.clone(),
+                    new: new.clone(),
+                    provider: provider.label(),
+                    srcinfo,
+                }]
+            } else {
+                Vec::new()
+            };
+            finish(rows, log, None)
         }
     }
 }
