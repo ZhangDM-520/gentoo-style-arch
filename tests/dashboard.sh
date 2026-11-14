@@ -802,5 +802,29 @@ EOF
     hasnt 'expansion=consumers'
     [ "$(plan_rows)" = parkA ] || fail "--leaf parkA listed [$(plan_rows)], want [parkA]: $out"
 
+    # P8 — a range SLICES the expanded listing (§C.3), so the expansion row
+    # must describe the plan the range leaves, never the pre-range closure:
+    # "added 1 of 2" beside `packages=1` claims an expansion the plan does
+    # not contain (§C.3's own counters are the assertion surface here — no
+    # prose wording is pinned beyond the kv frame).
+    # Anchor 1 of parkA's closure is parkA itself, so the surviving row came
+    # from the REQUEST and the row is silent; anchor 2 is its consumer, so
+    # the row says 1 added of the 1 row that will run. Both are derived from
+    # the fixture's own graph (parkB consumes parkA), never pinned counts.
+    prose -B --dry-run parkA 1..1
+    [ "$rc" = 0 ] || fail "the range run parkA 1..1 exited $rc: $out"
+    has 'INFO build-order verb=dry_run packages=1'
+    [ "$(plan_rows)" = parkA ] || fail "range parkA 1..1 listed [$(plan_rows)], want [parkA]: $out"
+    hasnt 'expansion=consumers'
+    prose -B --dry-run parkA 2..2
+    [ "$rc" = 0 ] || fail "the range run parkA 2..2 exited $rc: $out"
+    # Anchor 2 is the consumer; parkA itself rejoins through §C.3's
+    # missing-prerequisite seam (it is not installed in this fixture's DB),
+    # which is NOT consumer expansion — the denominator stays the ranged
+    # selection's one row, and the plan carries the prerequisite too.
+    has 'INFO selection expansion=consumers added=1 of=1'
+    [ "$(plan_rows)" = "parkA parkB" ] \
+        || fail "range parkA 2..2 listed [$(plan_rows)], want [parkA parkB] (consumer plus its missing prerequisite): $out"
+
     printf 'prose rendering fixture: PASS (§I.4 naming, record agreement, rendering surfaces)\n'
 )

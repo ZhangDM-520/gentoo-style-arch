@@ -797,15 +797,24 @@ $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
             fail "-Mh --prune must remove a died run's directory"
 
         # ── state override (§J.3): flag beats env; env alone relocates ──
+        # The relocation is proven by WHICH store the read answers from, not
+        # by a directory a read creates: since I1-ivy-2 a report verb never
+        # writes the state root (§B.10 read-only), so seeding the env root
+        # with the recorded history is what discriminates the two roots.
         export GSA_STATE_DIR="$fixture/g/env-state"
+        /usr/bin/sudo -n mkdir -p "$fixture/g/env-state/runs"
+        /usr/bin/sudo -n cp "$state/runs/history.jsonl" "$fixture/g/env-state/runs/history.jsonl"
         run_engine "$ws" -Mh --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "the flag-override read is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        [ ! -e "$fixture/g/env-state" ] ||
-            fail "--state-dir must beat GSA_STATE_DIR (§J.3): the env root was created"
         run_engine "$ws" -Mh
         [ "$FIXTURE_RC" = 0 ] || fail "the env-override read is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
-        [ -d "$fixture/g/env-state/runs" ] ||
-            fail "GSA_STATE_DIR must relocate the state root (§J.3)"
+        # Both roots hold the same two recorded runs, so the relocation shows
+        # where else: point the env root at ONE run and the listing must shrink.
+        /usr/bin/sudo -n sh -c "head -n 1 \"$state/runs/history.jsonl\" >\"$fixture/g/env-state/runs/history.jsonl\""
+        run_engine "$ws" -Mh
+        [ "$FIXTURE_RC" = 0 ] || fail "the env-override read is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$(printf '%s\n' "$FIXTURE_OUTPUT" | wc -l)" = 1 ] ||
+            fail "GSA_STATE_DIR must relocate the state root (§J.3): the listing read $state instead of the env root: $FIXTURE_OUTPUT"
         unset GSA_STATE_DIR
         assert_varlib_unchanged
 

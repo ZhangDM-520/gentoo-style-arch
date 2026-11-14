@@ -1028,6 +1028,11 @@ pub(crate) fn plan_only(
     )
     .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
+    // The expansion rows describe THIS selection, so both halves are read
+    // from it before prerequisites and the ABI wave extend the plan: those
+    // additions are not consumer expansion, and the note's denominator is
+    // the selection the expansion was measured on (§C.3).
+    let expansion_basis = selection.listed.len();
     // resolve() owns its typed usage exit; the plan's rc is the run's (§H.2).
     if let Err(exit) = crate::builddir::resolve(inv, err) {
         return Ok(exit.render(err));
@@ -1079,9 +1084,10 @@ pub(crate) fn plan_only(
         let _ = writeln!(err, "{warning}");
     }
     let _intensity = budget.intensity;
-    // The note counts the POST-PROMPT closure: the prompt filters the
-    // selection before the ordinary pipeline runs (§C.4), so its drops are
-    // not consumer expansion and not part of the selected count.
+    // The note counts the rows the selection CARRIES: the §C.4 prompt filters
+    // it before the ordinary pipeline runs and a §C.3 range slices the
+    // expanded listing, so neither drop is consumer expansion and both leave
+    // the denominator as the surviving row count.
     let expansion_added = selection.expansion_added;
     let _ = write!(
         out,
@@ -1089,7 +1095,7 @@ pub(crate) fn plan_only(
         render::render_plan_prose(
             &selection.listed,
             expansion_added,
-            selection.seeds.len() + expansion_added,
+            expansion_basis,
             inv.leaf,
             true
         )
@@ -2162,10 +2168,6 @@ mod tests {
                 .collect(),
             closure_size: ids.len(),
             expansion_added: 0,
-            seeds: ids
-                .iter()
-                .map(|id| RecipeId::new(*id).expect("fixture id"))
-                .collect(),
             notes: Vec::new(),
         }
     }

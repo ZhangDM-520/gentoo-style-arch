@@ -162,12 +162,12 @@ pub struct Selection {
     /// Size of the unfiltered closure — the anchor space a range addresses
     /// and wave additions anchor after.
     pub closure_size: usize,
-    /// How many closure members came from consumer expansion beyond the
-    /// seeds (0 for `--leaf`). Measured on the POST-PROMPT closure — the
-    /// §C.4 prompt filters the selection before the ordinary pipeline runs.
+    /// How many listed members came from consumer expansion beyond the seeds
+    /// (0 for `--leaf`). Measured over the ROWS THE SELECTION CARRIES — the
+    /// post-prompt, post-range listed set — never the pre-range closure: a
+    /// range slices an already-expanded listing (§C.3), so counting the
+    /// closure would report an expansion the plan does not contain.
     pub expansion_added: usize,
-    /// The seed recipes the selection resolved to (deduplicated).
-    pub seeds: Vec<RecipeId>,
     /// Announced substitutions (case-variant ids, package names), for stderr.
     pub notes: Vec<String>,
 }
@@ -657,10 +657,18 @@ impl SelectionDraft {
         let seed_vec: Vec<usize> = merged.into_iter().collect();
 
         let closure: Vec<usize> = closure_of(ctx, &seed_vec, leaf);
-        let expansion_added = closure.len().saturating_sub(seed_vec.len());
-        let listed: Vec<(usize, RecipeId)> = closure
+        let seed_set: BTreeSet<usize> = seed_vec.iter().copied().collect();
+        // Expansion is counted over the rows the selection ENDS UP carrying,
+        // so it is derived after the range filter below (a range slices the
+        // expanded listing, §C.3). `closure` keeps the graph index beside the
+        // anchor and id for exactly that measurement.
+        let closure_rows: Vec<(usize, usize, RecipeId)> = closure
             .iter()
-            .map(|&idx| (anchor_of[&idx], ctx.graph.record(idx).id.clone()))
+            .map(|&idx| (anchor_of[&idx], idx, ctx.graph.record(idx).id.clone()))
+            .collect();
+        let listed: Vec<(usize, RecipeId)> = closure_rows
+            .iter()
+            .map(|(anchor, _, id)| (*anchor, id.clone()))
             .collect();
 
         ensure_selection_nonempty(&listed)?;
@@ -669,11 +677,10 @@ impl SelectionDraft {
             return Ok(Selection {
                 listed,
                 closure_size,
-                expansion_added,
-                seeds: seed_vec
+                expansion_added: closure_rows
                     .iter()
-                    .map(|&i| ctx.graph.record(i).id.clone())
-                    .collect(),
+                    .filter(|(_, idx, _)| !seed_set.contains(idx))
+                    .count(),
                 notes,
             });
         }
@@ -713,19 +720,27 @@ impl SelectionDraft {
                 chosen.insert(i);
             }
         }
-        let listed: Vec<(usize, RecipeId)> = listed
+        let kept: Vec<(usize, usize, RecipeId)> = closure_rows
             .into_iter()
-            .filter(|(anchor, _)| chosen.contains(&(*anchor as u32)))
+            .filter(|(anchor, _, _)| chosen.contains(&(*anchor as u32)))
+            .collect();
+        let listed: Vec<(usize, RecipeId)> = kept
+            .iter()
+            .map(|(anchor, _, id)| (*anchor, id.clone()))
             .collect();
         ensure_selection_nonempty(&listed)?;
+        // The expansion the REMAINING rows account for, never the pre-range
+        // closure's: `added=N of=M` must describe the plan beside it (§C.3's
+        // "ranges index the selection after expansion" — a sliced closure is
+        // no longer an expansion of the request).
+        let expansion_added = kept
+            .iter()
+            .filter(|(_, idx, _)| !seed_set.contains(idx))
+            .count();
         Ok(Selection {
             listed,
             closure_size,
             expansion_added,
-            seeds: seed_vec
-                .iter()
-                .map(|&i| ctx.graph.record(i).id.clone())
-                .collect(),
             notes,
         })
     }

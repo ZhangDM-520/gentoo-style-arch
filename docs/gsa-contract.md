@@ -882,6 +882,19 @@ reversed range is a usage error. Group runs may cross
 groups through consumers (`-S @git` may add `app` consumers via `glib2-git`);
 the union of multiple targets/groups is deduplicated before sorting.
 
+*Amendment (2026-11-14, the announced expansion describes the surviving
+rows).* The plan's `selection expansion=consumers added=N of=M` row (and the
+human `consumer expansion added N of the M selected packages` sentence) counts
+over the rows the selection **carries** — after the §C.4 prompt filter and
+after a §C.3 range slice — never the pre-range closure. A range selects members
+of an already-expanded listing, so reporting the closure's expansion beside a
+sliced plan claimed an expansion the plan did not contain (`added=318 of=652`
+next to `packages=5`). Additions that are not consumer expansion — a §C.3
+missing build-order prerequisite, an ABI wave member (§E.3) — never enter
+either number. Pinned by `tests/dashboard.sh` §P8 in both directions (a range
+whose survivor is a seed is silent; one whose survivor is a consumer reports
+`added=1 of=1`).
+
 ### C.4 The `app` prompt and `app-cluster` rows
 
 An `@app` build or `--dry-run` on a TTY prompts to multi-select before the
