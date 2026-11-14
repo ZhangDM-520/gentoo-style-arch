@@ -303,7 +303,7 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         }
 
         // Term 3: coupled batches (abi=must same-pass; abi=should noted).
-        // The batches are anchor-derived (docs/maintainer-guide.md
+        // The batches are anchor-derived (gsa-recipe docs/maintainer-guide.md
         // "Updating coupled stacks"), so a touch pulls the Touched
         // anchor's batch only — never another anchor's subtree — and each
         // member's own tag decides its treatment (E2).

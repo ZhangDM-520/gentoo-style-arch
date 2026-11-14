@@ -1637,7 +1637,7 @@ fn pre_settle(plan: &crate::prepare::NodePlan) -> Option<PreSettle> {
 /// Anchor-derived coupled batches with at least two selected members
 /// (contract §I.1 open decision 1: a failed member parks its batch mates
 /// with reason `coupled-batch`). Each batch is ONE anchor's rebuild set
-/// (docs/maintainer-guide.md "Updating coupled stacks"), so a failure parks
+/// (gsa-recipe docs/maintainer-guide.md "Updating coupled stacks"), so a failure parks
 /// only its own batch's mates — never mates of an unrelated stack (E2).
 fn build_batches(graph: &Graph<'_>, selection: &Selection) -> Vec<Vec<usize>> {
     let mut node_of: HashMap<&str, usize> = HashMap::new();

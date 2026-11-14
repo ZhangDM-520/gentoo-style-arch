@@ -472,7 +472,7 @@ run_engine() {
 # run_engine_user WORKSPACE [ARG...] — the same, as a PLAIN unprivileged user
 # (no sudo): the §B.10 gate tests (an unprivileged mutation must refuse rc 3;
 # reads pass untouched) and build-user-only verbs such as `-Mm`, which must
-# never run under a root supervisor (docs/source-sharing.md). Everything else
+# never run under a root supervisor (gsa-recipe docs/source-sharing.md). Everything else
 # goes through run_engine.
 run_engine_user() {
     rr2_invoke user "$@"

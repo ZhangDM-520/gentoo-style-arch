@@ -644,7 +644,7 @@ $FIXTURE_OUTPUT"
 )
 
 # ─── B5/B6. anchored batches: one batch per anchor, never one per severity ──
-# The promise's shape (docs/maintainer-guide.md "Updating coupled stacks":
+# The promise's shape (gsa-recipe docs/maintainer-guide.md "Updating coupled stacks":
 # "every abi-tagged package that transitively depends on a selected anchor";
 # config/topology.conf: "a batch anchor is an abi=must package with no
 # abi-tagged dependency") in two INDEPENDENT stacks — llvm-git→rust-git and

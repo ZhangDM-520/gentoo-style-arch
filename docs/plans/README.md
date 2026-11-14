@@ -17,7 +17,6 @@ provenance, not specification: the authoritative interface is
 | `2026-11-12-host-critical-abi.md` | Host-critical ABI swaps: classifying a stranded install consumer apart from an inert one, and naming the remedy (companion facts: `2026-11-12-host-critical-abi-research.md`) |
 | `2026-11-12-per-recipe-snapshot-boundary.md` | **QUEUED enhancement.** A per-recipe snapshot cutoff checked as a provider/consumer *relationship* instead of one global Monday instant; companion evidence and the measured boundary table in `2026-11-12-per-recipe-snapshot-boundary-research.md` |
 | `2026-11-13-consumer-expansion-install-aware-research.md` | Whether consumer auto-expansion should skip roster packages that are installed nowhere: `linked_consumers` iterates the installed view only, so the ABI guarantee is vacuous for an absent package — but both such recipes today are terminal leaves, so a shipped filter must be consumer-aware and must run *after* the ABI wave |
-| `2026-11-14-campaign-closeout-runbook.md` | The close-out runbook: finish the roster build, verify built-AND-installed, swap `openssl` and run `pacman -Syu`, settle and push the recipe and engine edits, consolidate the external audit, reconcile the queue. Seven tasks with stopping criteria, nine global constraints, six failure modes |
 
 Rules for these files:
 
@@ -29,9 +28,22 @@ Rules for these files:
   Each record's header is the only mutable part: it carries the archive note,
   the `pre-split-2026-11` tag that holds the pre-retirement text, and the
   location.
-- **Do not delete one to "clean up".** The deletion test: removing a record
-  would leave ~100 citations pointing at nothing and move the design rationale
-  nowhere, so it earns its place in the tree.
+- **Do not delete one to "clean up".** Measured 2026-11-14 over the tracked
+  tree, the four records carry **148 citation lines** — 46/47/25/30 for
+  `plan.md`, `plan-native-pm.md`, `plan-gsa-isolation.md` and
+  `plan-gentoo-qol.md` — of which **75** come from `crates/` and many name a
+  section designator for that record (`§N`, or a `W#`/`M#` work item), so a
+  deletion breaks compilation comments and contract paragraphs rather than
+  moving the rationale somewhere. Every cited anchor currently resolves; none
+  dangles. Re-measure rather than trust the number (each record's own body and
+  this index are excluded; sibling cross-citations are counted):
+
+  ```sh
+  for p in plan plan-native-pm plan-gsa-isolation plan-gentoo-qol; do
+      git grep -In -E "(^|[^A-Za-z0-9_-])(docs/plans/)?$p\.md" \
+          -- '*.rs' '*.sh' '*.md' ":!docs/plans/$p.md" ':!docs/plans/README.md'
+  done | wc -l                                  # 148; pipe to `grep -c '^crates/'` for 75
+  ```
 
 `tests/memory-layout.sh` gates the layout: the memory files must exist, the
 retired docs must stay retired, and a live citation of a retired path fails the

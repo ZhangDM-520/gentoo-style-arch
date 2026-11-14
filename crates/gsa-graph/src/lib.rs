@@ -46,7 +46,7 @@ pub enum BatchSeverity {
 
 /// One abi-tagged member of an anchor's coupled batch. The member's own tag
 /// decides its treatment — `abi=must` moves in the same pass, `abi=should`
-/// is only ever noted (docs/maintainer-guide.md "Updating coupled stacks").
+/// is only ever noted (gsa-recipe docs/maintainer-guide.md "Updating coupled stacks").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoupledMember {
     pub id: RecipeId,
@@ -224,7 +224,7 @@ impl<'a> Graph<'a> {
     }
 
     /// Anchor-derived coupled batches, members in canonical build order
-    /// (docs/maintainer-guide.md "Updating coupled stacks"; the frozen
+    /// (gsa-recipe docs/maintainer-guide.md "Updating coupled stacks"; the frozen
     /// oracle's `abi_batch_dependents` in tests/assets/build-all.fish).
     ///
     /// One batch per anchor — `config/topology.conf`: "a batch anchor is an
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn coupled_batches_are_derived_per_anchor() {
-        // The promised shape (docs/maintainer-guide.md "Updating coupled
+        // The promised shape (gsa-recipe docs/maintainer-guide.md "Updating coupled
         // stacks"): one batch per anchor — an abi=must record with no
         // abi-tagged dependency — carrying the anchor plus every abi-tagged
         // package that transitively depends on it. Three independent

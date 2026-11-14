@@ -519,7 +519,7 @@ The `-M` family is engine-state self-healing only — it never touches `/usr` or
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation (logs, stale lane/run artifacts, binpkg index `sha256+size` consistency, side-car rows with no pacman counterpart); `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure of the target `pacman.conf` (`--config PATH`, default `/etc/pacman.conf`): default reports drift, `--prune` removes stale entries, `--backfill` adds missing names the workspace BUILT (never-built declared names are skipped — they would pin a stock package) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune. The live `logs/<pkg>.log` holds one run: a lane start rotates the previous generation to `.log.1` |
-| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (`docs/source-sharing.md`). Build-user-only — never under a root supervisor |
+| `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (`gsa-recipe docs/source-sharing.md`). Build-user-only — never under a root supervisor |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (the `c` cluster letter on `-S`/`-B` does the same first, before the skip check) |
 | `gsa -Mcc` | prune strength 2: every built archive in the workspace plus its VCS-revision sidecar; symlinks are never deleted or followed |
 | `gsa -Mccc` | prune strength 3: additionally pulled sources — source clones, downloaded tarballs, staging dirs |

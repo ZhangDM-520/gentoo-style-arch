@@ -557,7 +557,7 @@ source=("git+https://example.invalid/clone.git")' git
         done
 
         if [ "$(id -u)" = 0 ]; then
-            # As root the verb refuses (docs/source-sharing.md) — the
+            # As root the verb refuses (gsa-recipe docs/source-sharing.md) — the
             # refusal IS the assertion here.
             run_engine "$ws" -Mm --noconfirm --state-dir "$state"
             [ "$FIXTURE_RC" = 3 ] || fail "as root -Mm must refuse (rc 3), got $FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -595,7 +595,7 @@ source=("git+https://example.invalid/clone.git")' git
                 fail "the link target is the relative canonical path, got $(readlink "$ws/packages/mthird/mirror")"
             [ ! -e "$ws/packages/mthird/mirror" ] || fail "the link must dangle until the canonical is built"
             [ -f "$ws/packages/msecond/mirror/keepme" ] ||
-                fail "a populated non-git dir is never replaced (docs/source-sharing.md)"
+                fail "a populated non-git dir is never replaced (gsa-recipe docs/source-sharing.md)"
             [ -d "$ws/packages/gsecond/clone" ] && [ ! -L "$ws/packages/gsecond/clone" ] ||
                 fail "the second clone is skipped, never linked over"
         fi

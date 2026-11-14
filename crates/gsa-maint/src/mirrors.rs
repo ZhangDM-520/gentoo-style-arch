@@ -1,5 +1,5 @@
 //! Shared-source mirrors (`gsa -Mm`, contract §B.7 — today's
-//! `--link-sources`, `docs/source-sharing.md`): dedupe the VCS source clones
+//! `--link-sources`, `gsa-recipe docs/source-sharing.md`): dedupe the VCS source clones
 //! makepkg keeps beside the recipes into one canonical mirror per effective
 //! URL. Duplicate local names are symlinked to the canonical clone (a
 //! missing canonical leaves a dangling symlink until its first build
@@ -10,7 +10,7 @@
 //! Canonical selection prefers an existing valid mirror, then `packages/core/`
 //! paths, then the rest (the fish ranking). Symlinks are never deleted or
 //! followed beyond what this verb itself creates. This verb MUST run as the
-//! build user (never a root supervisor — `docs/source-sharing.md`), and it
+//! build user (never a root supervisor — `gsa-recipe docs/source-sharing.md`), and it
 //! is confirmation-gated: without `--noconfirm` it prints its plan and stops
 //! (`confirmation-required`), never prompting (§K.3).
 
@@ -55,7 +55,7 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// Is this path a real Git working clone or bare mirror (the only shapes
-/// `docs/source-sharing.md` accepts as an existing canonical source)?
+/// `gsa-recipe docs/source-sharing.md` accepts as an existing canonical source)?
 fn valid_source_mirror(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
@@ -184,7 +184,7 @@ fn rank(path: &Path, core_preferred: bool) -> u32 {
 pub fn run(ctx: &MaintCtx<'_>, apply: bool) -> Result<Vec<Row>, String> {
     if gsa_sched::signals::current_uid() == 0 {
         return Err(
-            "must run as the build user, never under a root supervisor (docs/source-sharing.md)"
+            "must run as the build user, never under a root supervisor (gsa-recipe docs/source-sharing.md)"
                 .to_string(),
         );
     }

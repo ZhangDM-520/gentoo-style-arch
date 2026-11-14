@@ -556,7 +556,7 @@ pub(crate) fn privilege_gate(
             if p::effective_uid() == 0 {
                 let _ = writeln!(
                     err,
-                    "gsa: {spelling} rewrites your source-mirror tree and must run as the build user, never under a root supervisor (docs/source-sharing.md)"
+                    "gsa: {spelling} rewrites your source-mirror tree and must run as the build user, never under a root supervisor (gsa-recipe docs/source-sharing.md)"
                 );
                 return Some(refused);
             }

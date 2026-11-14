@@ -245,4 +245,4 @@ where they fall inside the tree and absent from a clean checkout.
 The source-sharing seam is intentionally between a recipe's VCS source name
 and its runtime mirror. A missing canonical mirror is valid on a clean
 checkout; the first build populates it. A populated non-Git directory is
-never silently replaced (`docs/source-sharing.md`).
+never silently replaced (`gsa-recipe docs/source-sharing.md`).

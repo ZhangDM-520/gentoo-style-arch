@@ -557,7 +557,7 @@ gsa is pacman-shaped: **reads run as any user; mutations require root.**
 | --- | --- | --- |
 | read-only | every `-Q*`, `-Sl`, `-Bl`, `--dry-run` plans, `-Ma`, report forms of `-Md/-Mi/-Ml/-Mh/-Ms/-Mw`, the hidden read seams (`--install-decide`, `--local-db-check`, `--qa-check`, `--stale-lock-check`, `--complete`, `--print-completion`), `--help` | any user; never writes state |
 | mutating | `-S`, `-B`, `-U`, `-Sw`, `-Sy`, `-Su`, `-Mi --prune/--backfill`, `-Md --fix`, `-Ml --keep`, `-Mh --prune`, `-Ms/-Mw --add/--remove`, every `-Mc/-Mcc/-Mccc`, hidden write seams (`--install-register`, `--register-ignorepkg`) | **root required**; unprivileged → early refusal, **rc 3** (§G.1), wording `you cannot perform this operation unless you are root` plus a `sudo` remedy |
-| build-user-only | `-Mm` (mirrors) | never under a root supervisor (`docs/source-sharing.md`); refused with rc 3 when euid 0 |
+| build-user-only | `-Mm` (mirrors) | never under a root supervisor (`gsa-recipe docs/source-sharing.md`); refused with rc 3 when euid 0 |
 
 Under root (`sudo gsa …`):
 
