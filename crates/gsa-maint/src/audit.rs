@@ -395,6 +395,20 @@ fn recipe_integrity(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
 /// clean.
 fn state_integrity(ctx: &MaintCtx<'_>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    // A store that does not EXIST is not a clean one: the family summarised
+    // `clean` over a root the verb had just created, so a fresh box read a
+    // green light about state that was never there (I1-ivy-2). Say what is
+    // true — nothing has been recorded yet — and keep the other families'
+    // answers, which come from the workspace and the installed DB.
+    if !ctx.state.path().is_dir() {
+        return vec![(
+            "(state)".to_string(),
+            format!(
+                "state-root-absent {} — no run, index or kv store has been written on this host yet",
+                ctx.state.path().display()
+            ),
+        )];
+    }
     match gsa_state::BinpkgIndex::load(ctx.state) {
         Ok(index) => {
             for line in &index.corrupt {

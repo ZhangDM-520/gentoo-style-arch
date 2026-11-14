@@ -339,8 +339,19 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         RecipeDb::load(&root, graph.records()).map_err(|error| cmd_error(error.to_string()))?;
 
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
-    let state =
-        StateRoot::open(&state_dir).map_err(|error| refuse_note(format!("gsa: {error}")))?;
+    // A read-only verb NEVER creates the state root (contract §B.10: "any
+    // user; never writes state"). The creating constructor made a fresh box
+    // — the box as the package leaves it, since nothing creates
+    // /var/lib/gsa — refuse with rc 3 "cannot create state directory", and
+    // the remedy it printed built an EMPTY root that the report then
+    // certified (`-Ma`: "state-integrity clean" about state that does not
+    // exist). Reads open the pure-read handle instead, and every consumer
+    // treats a missing store as the empty store.
+    let state = if read_only {
+        StateRoot::open_readonly(&state_dir)
+    } else {
+        StateRoot::open(&state_dir).map_err(|error| refuse_note(format!("gsa: {error}")))?
+    };
     let ctx = MaintCtx {
         root: &root,
         project: &project,

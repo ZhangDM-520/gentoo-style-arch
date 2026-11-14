@@ -1563,5 +1563,73 @@ if want n; then
     )
 fi
 
+
+# ─── o. a read-only -M verb never CREATES the state root (§B.10) ───────────
+# Contract §B.10 puts `-Ma` and every report form in the read-only class:
+# "any user; never writes state". The verbs nevertheless opened the state root
+# through the CREATING constructor, so a fresh box with no /var/lib/gsa (the
+# box as the package leaves it — nothing creates it) refused with rc 3
+# "cannot create state directory … pass --state-dir PATH", and the remedy it
+# printed produced a report about a brand-new EMPTY directory: `-Ma` said
+# `state-integrity clean` about state that does not exist (issue I1-ivy-2).
+if want o; then
+    (
+        set -euo pipefail
+        ws="$fixture/o/ws"
+        make_workspace "$ws" 1 auto low
+        add_package "$ws" audo "$gsa_meta_any" git
+
+        # An UNWRITABLE parent is the fresh-box shape a root-owned
+        # /var/lib/gsa reproduces for an unprivileged user, without needing
+        # that user to exist: a report verb must not try to create inside it.
+        blocked="$fixture/o/blocked"
+        mkdir -p "$blocked"
+        chmod 500 "$blocked"
+
+        run_engine "$ws" -Ma --state-dir "$blocked/state"
+        [ "$FIXTURE_RC" = 0 ] ||
+            fail "o: -Ma must not need a creatable state root (§B.10 read-only), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ ! -e "$blocked/state" ] ||
+            fail "o: -Ma CREATED the state root it reported on: $FIXTURE_OUTPUT"
+
+        run_engine "$ws" -Mh --state-dir "$blocked/state"
+        [ "$FIXTURE_RC" = 0 ] ||
+            fail "o: -Mh is a read and must not need a creatable root, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ ! -e "$blocked/state" ] || fail "o: -Mh created the state root"
+
+        run_engine "$ws" -Ml --state-dir "$blocked/state"
+        [ "$FIXTURE_RC" = 0 ] ||
+            fail "o: -Ml is a read and must not need a creatable root, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+
+        # A report about state that DOES NOT EXIST must say so rather than
+        # certify it: `state-integrity clean` over an absent store is the
+        # green light that made this defect dangerous, not merely awkward.
+        run_engine "$ws" -Ma --state-dir "$blocked/state"
+        summary=$(printf '%s\n' "$FIXTURE_OUTPUT" |
+            awk '$1 == "audit" && $2 == "state-integrity" { print; exit }')
+        [ -n "$summary" ] || fail "o: -Ma must still summarise state-integrity: $FIXTURE_OUTPUT"
+        case $summary in
+        *" clean")
+            fail "o: -Ma certified state that does not exist ('$summary') — an absent store is not a clean one"
+            ;;
+        esac
+
+        # A root that DOES exist is read as before: the fix is "do not
+        # create", not "refuse to read". Pre-created here on purpose, since a
+        # read-only verb must never be the thing that creates it.
+        mkdir -p "$fixture/o/ok"
+        run_engine "$ws" -Ma --state-dir "$fixture/o/ok"
+        [ "$FIXTURE_RC" = 0 ] || fail "o: -Ma over an existing root must stay 0: $FIXTURE_OUTPUT"
+        summary=$(printf '%s\n' "$FIXTURE_OUTPUT" |
+            awk '$1 == "audit" && $2 == "state-integrity" { print; exit }')
+        case $summary in
+        *" clean") ;;
+        *) fail "o: an existing empty root is clean, not absent ('$summary')" ;;
+        esac
+        [ -z "$(find "$fixture/o/ok" -mindepth 1 -print -quit)" ] ||
+            fail "o: -Ma wrote into the state root it read: $(find "$fixture/o/ok" -mindepth 1)"
+    )
+fi
+
 # ─── the fixture never touched the real state root (§J.3) ──────────────────
 assert_varlib_unchanged
