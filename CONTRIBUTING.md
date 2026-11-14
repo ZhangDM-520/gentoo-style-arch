@@ -98,11 +98,20 @@ PR comments go through `gh` only (never the GitHub MCP service, whose checks
 table can be stale) and never before the validation block above is green on
 the maintainer's machine.
 Each commit carries a descriptive body — what changed, why, and how it was
-validated — and the trailer:
+validated — and ends with exactly these two trailers, in this order:
 
 ```
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Assisted-by: LLM (human-reviewed)
+Signed-off-by: <the committer's configured git identity>
 ```
+
+`Assisted-by` discloses that an LLM drafted the change and that a human
+reviewed it before it landed; it is not a claim about who is responsible.
+`Signed-off-by` names the person who takes that responsibility, and must match
+`git config user.name` / `user.email` for the commit rather than a hardcoded
+value, so the policy holds for any contributor. Do not add a
+`Co-authored-by: Copilot` line: the assistant is disclosed by `Assisted-by`,
+and a second assistant trailer duplicates one fact.
 
 ## Trust and privilege
 

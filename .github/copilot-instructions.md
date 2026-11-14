@@ -223,8 +223,9 @@ flag by editing the site body, and add package-specific switches by appending
   never before the `CONTRIBUTING.md` validation block is green. A PR body
   follows `.github/pull_request_template.md` and ticks only the commands
   actually run — each with its result, deviations named as deviations.
-  Trailers:
-  `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
+  Every commit ends with the two trailers `CONTRIBUTING.md` § Committing
+  specifies — `Assisted-by: LLM (human-reviewed)` then `Signed-off-by` — and
+  never a `Co-authored-by: Copilot` line, which duplicates the disclosure.
 
 ## Where the truth lives
 
