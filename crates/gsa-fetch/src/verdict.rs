@@ -63,7 +63,25 @@ pub const REASON_RETRY_OK: &str = "retry-ok";
 /// and the one retry re-fetched and verified it (owner decision 4).
 pub const REASON_QUARANTINED_RETRY_OK: &str = "quarantined-retry-ok";
 pub const REASON_FETCH_FAILED: &str = "fetch-failed";
+/// A CHECKSUM failed: the bytes on disk are not the bytes the recipe pins.
+/// The payload is the suspect, so it is quarantined.
 pub const REASON_VERIFY_FAILED: &str = "verify-failed";
+/// A `validpgpkeys` signature failed its pin: the recipe names the key that
+/// signed the file, but the signature does not come from it. The bytes are
+/// not in question — the recipe's allowed-key set is.
+pub const REASON_SIG_KEY_NOT_ALLOWED: &str = "sig-key-not-allowed";
+/// The signature's key is absent from the local keyring, so nothing can
+/// check it. The remedy is to receive the key, never to re-fetch the bytes.
+pub const REASON_SIG_KEY_UNKNOWN: &str = "sig-key-unknown";
+/// No `validpgpkeys` pin exists and the signing key is not trusted locally.
+/// Trust must be established; the download is irrelevant.
+pub const REASON_SIG_KEY_UNTRUSTED: &str = "sig-key-untrusted";
+/// The signature is cryptographically bad for a key that IS present: the
+/// `.sig`/`.asc` companion (or the payload it signs) is genuinely suspect.
+pub const REASON_SIG_BAD: &str = "sig-bad";
+/// gpg reported an error it classified as neither a missing key nor a bad
+/// signature.
+pub const REASON_SIG_ERROR: &str = "sig-error";
 pub const REASON_EVAL_FAILED: &str = "eval-failed";
 pub const REASON_VCS_ONLY: &str = "vcs-only";
 pub const REASON_NOT_A_CANDIDATE: &str = "not-a-candidate";
@@ -80,6 +98,49 @@ pub const REASON_LOCAL_SOURCE_MISSING: &str = "local-source-missing";
 pub const REASON_UNVERIFIED_SUMS: &str = "unverified-sums";
 /// The fetch child vanished without a usable result (reap anomaly).
 pub const REASON_RESULT_LOST: &str = "result-lost";
+
+/// Is this reason a SIGNATURE-class failure whose cause is TRUST in the key
+/// rather than the bytes? Such a failure re-fetches nothing: the same bytes
+/// re-download to the same unverifiable signature, so quarantining the
+/// payload destroys a good download and retrying only spends the network.
+pub fn is_sig_trust_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        REASON_SIG_KEY_UNKNOWN | REASON_SIG_KEY_NOT_ALLOWED | REASON_SIG_KEY_UNTRUSTED
+    )
+}
+
+/// Is this reason any SIGNATURE-class failure (trust or cryptographic)?
+pub fn is_sig_reason(reason: &str) -> bool {
+    is_sig_trust_reason(reason) || matches!(reason, REASON_SIG_BAD | REASON_SIG_ERROR)
+}
+
+/// Classify makepkg's signature-failure parenthetical (C locale, LC_ALL=C by
+/// construction — [`crate::engine::verifysource_command`] pins it) into the
+/// named reason that says which of the two very different repairs applies.
+///
+/// `/usr/share/makepkg/integrity/verify_signature.sh` prints exactly one of:
+/// `unknown public key <key>` (the keyring lacks it), `public key <key> has
+/// been revoked`, `bad signature from public key <key>`, `error during
+/// signature verification`, `the public key <fpr> is not trusted` (no
+/// `validpgpkeys` at all), and `invalid public key <fpr>` (the signing key is
+/// not in the recipe's `validpgpkeys`).
+pub fn classify_signature_failure(detail: &str) -> &'static str {
+    let detail = detail.trim();
+    if detail.contains("unknown public key") {
+        REASON_SIG_KEY_UNKNOWN
+    } else if detail.contains("is not trusted") {
+        REASON_SIG_KEY_UNTRUSTED
+    } else if detail.contains("invalid public key") || detail.contains("has been revoked") {
+        // A revoked key is refused for the same reason an unpinned one is:
+        // the recipe's allowed-key set is what must change.
+        REASON_SIG_KEY_NOT_ALLOWED
+    } else if detail.contains("bad signature") {
+        REASON_SIG_BAD
+    } else {
+        REASON_SIG_ERROR
+    }
+}
 
 /// Routine skips that are not warnings: expected, zero-risk, no operator
 /// action wanted (`vcs-only` and `not-a-candidate` are the v1 classes).

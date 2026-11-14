@@ -18,11 +18,34 @@ verification contract, `AGENTS.md` rule 15, is untouched).
 ## Decisions
 
 - **Verdict vocabulary is its own** (`ok|failed|skipped` + kebab reason:
-  `ok`, `retry-ok`, `quarantined-retry-ok`, `fetch-failed`, `verify-failed`,
-  `eval-failed`, `vcs-only`, `not-a-candidate`, `disk-floor`, `result-lost`).
+  `ok`, `retry-ok`, `quarantined-retry-ok`, `verify-failed`, `sig-key-unknown`,
+  `sig-key-not-allowed`, `sig-key-untrusted`, `sig-bad`, `sig-error`,
+  `fetch-failed`, `eval-failed`, `vcs-only`, `not-a-candidate`, `disk-floor`,
+  `result-lost`, `local-source-missing`, `unverified-sums`).
   A fetch outcome is not a lane outcome — `lane_outcome_*` never carries it.
   The typed codec (`v2 <pkg> <verdict> <dur> <reason…>`) is the only way it
   crosses the process boundary (§F.2 discipline).
+- **A verification failure reports the STAGE that failed, not one word**
+  (2026-11-15, R2-juno-4). `makepkg` runs the checksum stage and the signature
+  stage as separate `==>` sections and returns on a checksum failure
+  (`/usr/share/makepkg/integrity.sh:42-43`), and its signature line names the
+  **payload** (`    <file> ... FAILED (unknown public key <key>)`) — it prints
+  `${file%.*}`. A reader that keys on the `FAILED` token alone therefore
+  indicts bytes that verified, and collapses "your keyring lacks the key",
+  "your recipe forbids the key" and "the download is corrupt" into one word
+  the operator cannot act on. Attribution is therefore stage-aware
+  (`gsa_fetch::engine::verify_failure`), and the class picks the policy:
+  - `verify-failed` — a CHECKSUM failure: the payload is the suspect, so it
+    and its signature companions are quarantined and the recipe retried once.
+  - `sig-key-unknown`, `sig-key-not-allowed`, `sig-key-untrusted` — TRUST
+    failures. Nothing on disk is suspect; the same bytes re-download to the
+    same unverifiable signature, so nothing is quarantined, **nothing is
+    retried**, and the refusal names the key, the class, this recipe's
+    `validpgpkeys` set and the repair (receive the key / fix the recipe's key
+    set / pin a key). The two repairs are mutually exclusive, which is exactly
+    why one reason word could not carry them.
+  - `sig-bad`, `sig-error` — a cryptographic failure with the key present:
+    only the signature COMPANIONS are quarantined, and the recipe retries once.
 - **v1 prefetches plain-URL sources only** (the `gsa-recipe` classifier,
   never grep): a pure-VCS recipe is `skipped vcs-only`, one with nothing to
   fetch `skipped not-a-candidate`, mixed recipes are prefetched. Such
@@ -32,6 +55,9 @@ verification contract, `AGENTS.md` rule 15, is untouched).
   and retried ONCE, loudly. makepkg keeps a failing download at its final
   name and re-fails forever; prefetch must never leave the wall standing.
   The recipe's checksums/`validpgpkeys` remain the trust anchor throughout.
+  A **signature-trust** failure is the exception (above): the file is not the
+  suspect, so only the companions of a cryptographic failure are moved and a
+  key problem moves nothing at all.
 - **Constants**: 2 attempts (the one quarantine retry aside), 10 s apart;
   prefetch pauses below **5 GiB** free on the cache filesystem (never fails);
   one fetch child in flight, niced/ionice'd, in its own process group, killed

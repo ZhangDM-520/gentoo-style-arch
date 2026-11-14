@@ -122,23 +122,132 @@ pub fn disk_floor_ok(cache_path: &Path) -> bool {
     }
 }
 
-/// makepkg's per-file failure report names the file whose pin failed
-/// (`    <file> … FAILED` on stderr; checksums and PGP share the shape).
-/// Used ONLY to attribute a quarantine — verification is makepkg's. The
-/// match is C-locale by construction: [`verifysource_command`] pins
-/// `LC_ALL=C`, so makepkg's gettext-translated `FAILED` token is English.
-pub fn failing_files(output: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    for line in output.lines() {
-        let line = line.trim();
-        if let Some((name, rest)) = line.split_once(" ... ") {
-            if rest.starts_with("FAILED") && !name.is_empty() && !names.contains(&name.to_string())
-            {
-                names.push(name.to_string());
+/// What a verification-class failure actually indicts. makepkg runs the
+/// checksum stage and the signature stage as separate `==>` sections and
+/// `check_source_integrity` returns on a checksum failure, so the two never
+/// co-occur in one attempt (`/usr/share/makepkg/integrity.sh:42-43`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerifyFailure {
+    /// `==> Validating source files with <algo>…`: the bytes on disk are not
+    /// the bytes the recipe pins.
+    Checksum { files: Vec<String> },
+    /// `==> Verifying source file signatures with gpg…`: makepkg names the
+    /// PAYLOAD (it prints `${file%.*}`), so `files` is what the signature
+    /// covers, never proof about that file's own bytes.
+    Signature {
+        files: Vec<String>,
+        reason: &'static str,
+        detail: String,
+    },
+}
+
+impl VerifyFailure {
+    /// The files the report named (payloads, for both classes).
+    pub fn files(&self) -> &[String] {
+        match self {
+            VerifyFailure::Checksum { files } | VerifyFailure::Signature { files, .. } => files,
+        }
+    }
+
+    /// The reason key this class reports.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            VerifyFailure::Checksum { .. } => REASON_VERIFY_FAILED,
+            VerifyFailure::Signature { reason, .. } => reason,
+        }
+    }
+}
+
+/// Read makepkg's verification report into the class it actually failed.
+///
+/// The prose is C-locale by construction ([`verifysource_command`] pins
+/// `LC_ALL=C`): a `==>` header selects the stage, and a `    <file> … FAILED`
+/// line inside it is an offender of THAT stage. Reading only the `FAILED`
+/// token — as this module once did — is what let a signature failure
+/// quarantine a payload whose checksum had just PASSED, and what collapsed a
+/// missing keyring entry and a bad download into one `verify-failed`.
+pub fn verify_failure(output: &str) -> Option<VerifyFailure> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Stage {
+        Other,
+        Checksum,
+        Signature,
+    }
+    let mut stage = Stage::Other;
+    let mut checksum: Vec<String> = Vec::new();
+    let mut signature: Vec<(String, String)> = Vec::new();
+    let mut unattributed: Vec<String> = Vec::new();
+    let mut saw_stage = false;
+    for raw in output.lines() {
+        let line = raw.trim();
+        if let Some(header) = line.strip_prefix("==> ") {
+            stage = if header.starts_with("Validating source files") {
+                saw_stage = true;
+                Stage::Checksum
+            } else if header.starts_with("Verifying source file signatures") {
+                saw_stage = true;
+                Stage::Signature
+            } else {
+                Stage::Other
+            };
+            continue;
+        }
+        let Some((name, rest)) = line.split_once(" ... ") else {
+            continue;
+        };
+        let Some(detail) = rest.strip_prefix("FAILED") else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let detail = detail
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim();
+        match stage {
+            Stage::Checksum => {
+                if !checksum.iter().any(|n| n == name) {
+                    checksum.push(name.to_string());
+                }
+            }
+            Stage::Signature => {
+                if !signature.iter().any(|(n, _)| n == name) {
+                    signature.push((name.to_string(), detail.to_string()));
+                }
+            }
+            Stage::Other => {
+                if !unattributed.iter().any(|n| n == name) {
+                    unattributed.push(name.to_string());
+                }
             }
         }
     }
-    names
+    // A report with no stage header at all is the pre-header shape (and what
+    // a minimal oracle prints). It keeps the CHECKSUM class: that is the
+    // quarantine-and-retry class, the conservative reading, and it never
+    // claims a key problem the prose did not name.
+    if checksum.is_empty() && !saw_stage {
+        checksum = unattributed;
+    }
+    if !checksum.is_empty() {
+        return Some(VerifyFailure::Checksum { files: checksum });
+    }
+    if !signature.is_empty() {
+        let detail = signature
+            .iter()
+            .map(|(_, d)| d.as_str())
+            .find(|d| !d.is_empty())
+            .unwrap_or("")
+            .to_string();
+        return Some(VerifyFailure::Signature {
+            files: signature.into_iter().map(|(n, _)| n).collect(),
+            reason: verdict::classify_signature_failure(&detail),
+            detail,
+        });
+    }
+    None
 }
 
 /// Was this failure a verification (integrity) failure rather than a
@@ -283,8 +392,7 @@ pub fn run_fetch_attempts_checked(
         }
         notes.push(format!("attempt {attempts} failed"));
 
-        let named = failing_files(&att.output);
-        if named.is_empty() {
+        let Some(failure) = verify_failure(&att.output) else {
             // Transport-class failure: retry once more, 10 s apart (docs/plans/plan.md).
             if transport_retries < FETCH_ATTEMPTS.saturating_sub(1) {
                 transport_retries += 1;
@@ -295,21 +403,48 @@ pub fn run_fetch_attempts_checked(
             }
             hard_failure = Some(REASON_FETCH_FAILED);
             break;
+        };
+        let named = failure.files().to_vec();
+        let reason = failure.reason();
+
+        // A SIGNATURE failure whose cause is TRUST in the key indicts nothing
+        // on disk: the same bytes re-download to the same unverifiable
+        // signature. Quarantining the payload would destroy a byte-perfect
+        // download and the retry would only spend the network, so fail at
+        // once with the reason that names the repair (R2-juno-4).
+        if verdict::is_sig_trust_reason(reason) {
+            let detail = match &failure {
+                VerifyFailure::Signature { detail, .. } if !detail.is_empty() => detail.clone(),
+                _ => "makepkg could not check the signature".to_string(),
+            };
+            notes.push(format!(
+                "{reason}: {} — {detail}; the file is not the suspect (re-fetching the same bytes cannot change the outcome)",
+                named.join(", ")
+            ));
+            hard_failure = Some(reason);
+            break;
         }
 
-        // Verification-class failure: quarantine the named files (never
-        // leave a bad file at its final name) and retry once (owner
-        // decision 4).
+        // A QUARANTINE class: the payload is the suspect for a checksum
+        // failure; for a cryptographic signature failure only the signature
+        // COMPANION is (the bytes it signs verified).
+        let suspects = match &failure {
+            VerifyFailure::Checksum { .. } => named.clone(),
+            VerifyFailure::Signature { files, .. } => files
+                .iter()
+                .flat_map(|name| signature_companions(name))
+                .collect(),
+        };
         match cache {
             Some(cache) => {
-                let outcome = quarantine_bad_files(cache, &named);
+                let outcome = quarantine_bad_files(cache, &suspects);
                 notes.extend(outcome.errors);
                 if outcome.moved.is_empty() {
                     notes.push(format!(
                         "cannot quarantine {} (not quarantined from shared source cache) — the wall stands until it is removed",
-                        named.join(", ")
+                        suspects.join(", ")
                     ));
-                    hard_failure = Some(REASON_VERIFY_FAILED);
+                    hard_failure = Some(reason);
                     break;
                 }
                 notes.push(format!("quarantined {}", outcome.moved.join(", ")));
@@ -318,14 +453,14 @@ pub fn run_fetch_attempts_checked(
             None => {
                 notes.push(format!(
                     "cannot quarantine {} — SRCDEST unresolvable, the shared source cache is unknown",
-                    named.join(", ")
+                    suspects.join(", ")
                 ));
-                hard_failure = Some(REASON_VERIFY_FAILED);
+                hard_failure = Some(reason);
                 break;
             }
         }
         if quarantine_retry_used {
-            hard_failure = Some(REASON_VERIFY_FAILED);
+            hard_failure = Some(reason);
             break;
         }
         quarantine_retry_used = true;
@@ -470,6 +605,13 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
     for note in &report.notes {
         let _ = writeln!(err, "gsa-fetch: {pkg}: {note}");
     }
+    // A signature-trust failure owes a REMEDY, not just a reason: the two
+    // repairs are mutually exclusive and a user cannot tell them apart from
+    // the reason alone (R2-juno-4 — "the difference between a bad recipe and
+    // a bad keyring is exactly what I need to know").
+    if let Some(remedy) = remedy_for_reason(&report.result.reason, &meta) {
+        let _ = writeln!(err, "gsa-fetch: {pkg}: remedy: {remedy}");
+    }
     let mut result = report.result;
     // A remote source the recipe pins as `SKIP` was fetched, never verified
     // — never report that as a clean `ok` (blind-review 2026-11-11).
@@ -485,6 +627,48 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
         }
     }
     result
+}
+
+/// The operator-facing remedy for a signature-trust failure, or `None` when
+/// the reason is not a trust class. The two repairs are genuinely different
+/// and mutually exclusive, which is why one reason word cannot carry them:
+/// an unknown key is a KEYRING problem, a not-allowed key is a RECIPE
+/// problem, and a no-`validpgpkeys` recipe is a RECIPE-DECLARATION problem.
+fn remedy_for_reason(reason: &str, meta: &gsa_recipe::RecipeMeta) -> Option<String> {
+    if !verdict::is_sig_trust_reason(reason) {
+        return None;
+    }
+    let keys = meta
+        .srcinfo
+        .as_ref()
+        .map(|info| info.validpgpkeys.clone())
+        .or_else(|| match meta.scanned.as_ref()?.vars.get("validpgpkeys")? {
+            gsa_recipe::ScanValue::Array(items) => Some(items.clone()),
+            gsa_recipe::ScanValue::Scalar(one) => Some(vec![one.clone()]),
+        })
+        .unwrap_or_default();
+    let allowed = if keys.is_empty() {
+        "this recipe declares no validpgpkeys".to_string()
+    } else {
+        format!("this recipe allows {}", keys.join(" "))
+    };
+    Some(match reason {
+        verdict::REASON_SIG_KEY_UNKNOWN => format!(
+            "the signing key is not in the local keyring ({allowed}). Receive it \
+             (the gpg line above names the key) — re-fetching the same bytes \
+             cannot change the verdict"
+        ),
+        verdict::REASON_SIG_KEY_NOT_ALLOWED => format!(
+            "upstream signed with a key this recipe does not allow ({allowed}). \
+             Decide which is wrong: add the signing key to validpgpkeys, or \
+             take the release only after the recipe's key set is corrected"
+        ),
+        verdict::REASON_SIG_KEY_UNTRUSTED => format!(
+            "no key is pinned here ({allowed}), so gpg fell back to local trust \
+             and the key is not trusted. Pin the signing key in validpgpkeys"
+        ),
+        _ => return None,
+    })
 }
 
 fn recipe_dir_and_meta(
@@ -594,7 +778,11 @@ pub fn run_fetch_job(args: &[String], err: &mut dyn Write) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::verdict::{REASON_NOT_A_CANDIDATE, REASON_RESULT_LOST, REASON_VCS_ONLY};
+    use crate::verdict::{
+        REASON_NOT_A_CANDIDATE, REASON_RESULT_LOST, REASON_SIG_BAD, REASON_SIG_ERROR,
+        REASON_SIG_KEY_NOT_ALLOWED, REASON_SIG_KEY_UNKNOWN, REASON_SIG_KEY_UNTRUSTED,
+        REASON_VCS_ONLY,
+    };
 
     fn scratch(name: &str) -> PathBuf {
         let dir =
@@ -605,19 +793,197 @@ mod tests {
     }
 
     #[test]
-    fn failing_files_are_attributed_from_makepkg_reports() {
+    fn a_report_naming_no_file_is_a_transport_failure() {
+        // `verify_failure` returning None is what routes an attempt to the
+        // transport class, so a bare curl error must stay unrecognised as a
+        // verification failure.
+        assert!(verify_failure("curl: (56) unexpected eof").is_none());
+    }
+
+    #[test]
+    fn a_signature_failure_is_never_read_as_a_checksum_failure() {
+        // The exact two stages makepkg prints for R2-juno-4: the checksum
+        // stage PASSES the payload and skips the signature, then the
+        // signature stage blames the payload for a key the keyring lacks.
         let output = "\
 ==> Validating source files with sha256sums...
-    good-1.0.tar.gz ... Passed
-    bad-1.0.tar.gz ... FAILED
-    other-1.0.tar.gz ... Skipped
-ERROR: One or more files did not pass the validity check!
+    rsync-3.5.2.tar.gz ... Passed
+    rsync-3.5.2.tar.gz.asc ... Skipped
+    rsyncd.conf ... Passed
+==> Verifying source file signatures with gpg...
+    rsync-3.5.2.tar.gz ... FAILED (unknown public key 6909546B2C52EC2D)
+==> ERROR: One or more PGP signatures could not be verified!
 ";
-        assert_eq!(failing_files(output), vec!["bad-1.0.tar.gz".to_string()]);
-        // PGP failures share the shape and may carry a detail suffix.
-        let pgp = "    signed.tar.gz ... FAILED (bad signature from public key ABC)\n";
-        assert_eq!(failing_files(pgp), vec!["signed.tar.gz".to_string()]);
-        assert!(failing_files("curl: (56) unexpected eof").is_empty());
+        match verify_failure(output) {
+            Some(VerifyFailure::Signature {
+                files,
+                reason,
+                detail,
+            }) => {
+                assert_eq!(files, vec!["rsync-3.5.2.tar.gz".to_string()]);
+                assert_eq!(reason, REASON_SIG_KEY_UNKNOWN);
+                assert!(detail.contains("6909546B2C52EC2D"), "{detail}");
+            }
+            other => panic!("a signature failure must not read as a checksum one: {other:?}"),
+        }
+        assert!(verdict::is_sig_trust_reason(REASON_SIG_KEY_UNKNOWN));
+    }
+
+    #[test]
+    fn a_checksum_failure_still_names_the_payload() {
+        let output = "\
+==> Validating source files with sha256sums...
+    bad-1.0.tar.gz ... FAILED
+==> ERROR: One or more files did not pass the validity check!
+";
+        match verify_failure(output) {
+            Some(VerifyFailure::Checksum { files }) => {
+                assert_eq!(files, vec!["bad-1.0.tar.gz".to_string()]);
+            }
+            other => panic!("expected a checksum failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_signature_parenthetical_maps_to_its_own_reason() {
+        // verify_signature.sh's five shapes, verbatim (C locale).
+        let cases = [
+            (
+                "unknown public key 6909546B2C52EC2D",
+                REASON_SIG_KEY_UNKNOWN,
+            ),
+            (
+                "the public key ABCDEF0123456789 is not trusted",
+                REASON_SIG_KEY_UNTRUSTED,
+            ),
+            (
+                "invalid public key 8EDF88F4731A1E8B45D67FBE6909546B2C52EC2D",
+                REASON_SIG_KEY_NOT_ALLOWED,
+            ),
+            (
+                "public key ABC has been revoked",
+                REASON_SIG_KEY_NOT_ALLOWED,
+            ),
+            (
+                "bad signature from public key ABCDEF0123456789",
+                REASON_SIG_BAD,
+            ),
+            ("error during signature verification", REASON_SIG_ERROR),
+        ];
+        for (detail, want) in cases {
+            assert_eq!(
+                verdict::classify_signature_failure(detail),
+                want,
+                "detail: {detail}"
+            );
+        }
+        // Only the three TRUST reasons skip the quarantine-and-retry path.
+        assert!(!verdict::is_sig_trust_reason(REASON_SIG_BAD));
+        assert!(!verdict::is_sig_trust_reason(REASON_SIG_ERROR));
+        assert!(verdict::is_sig_reason(REASON_SIG_BAD));
+    }
+
+    /// A recipe meta carrying only a `validpgpkeys` set, for the remedy tests.
+    fn meta_with_keys(keys: &[&str]) -> gsa_recipe::RecipeMeta {
+        use gsa_model::RecipeId;
+        gsa_recipe::RecipeMeta {
+            id: RecipeId::new("pkg").unwrap(),
+            path: "packages/test/pkg".to_string(),
+            srcinfo: Some(gsa_recipe::Srcinfo {
+                pkgbase: Some("pkg".to_string()),
+                validpgpkeys: keys.iter().map(|k| (*k).to_string()).collect(),
+                ..Default::default()
+            }),
+            scanned: None,
+            source: gsa_recipe::MetaSource::Srcinfo,
+        }
+    }
+
+    #[test]
+    fn a_trust_failure_names_the_repair_and_the_recipe_key_set() {
+        let pinned = meta_with_keys(&["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]);
+        let remedy = remedy_for_reason(REASON_SIG_KEY_NOT_ALLOWED, &pinned).unwrap();
+        assert!(remedy.contains("validpgpkeys"), "{remedy}");
+        assert!(
+            remedy.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            "the remedy must name the recipe's allowed set: {remedy}"
+        );
+        // The unknown-key repair is a KEYRING action, not a recipe edit.
+        let unknown = remedy_for_reason(REASON_SIG_KEY_UNKNOWN, &pinned).unwrap();
+        assert!(unknown.contains("keyring"), "{unknown}");
+        assert!(
+            unknown.contains("cannot change the verdict"),
+            "it must say a re-fetch is pointless: {unknown}"
+        );
+        // A recipe with no pin at all is a declaration problem.
+        let bare = meta_with_keys(&[]);
+        let untrusted = remedy_for_reason(REASON_SIG_KEY_UNTRUSTED, &bare).unwrap();
+        assert!(untrusted.contains("no key is pinned"), "{untrusted}");
+        // Non-trust reasons owe no remedy line of their own.
+        assert!(remedy_for_reason(REASON_VERIFY_FAILED, &pinned).is_none());
+        assert!(remedy_for_reason(REASON_SIG_BAD, &pinned).is_none());
+    }
+
+    #[test]
+    fn a_trust_failure_quarantines_nothing_and_retries_nothing() {
+        // the attempt must be spent ONCE and the good bytes left in place.
+        let cache = scratch("sig-trust");
+        std::fs::write(cache.join("good.tar.gz"), b"perfect bytes").unwrap();
+        std::fs::write(cache.join("good.tar.gz.asc"), b"signature").unwrap();
+        let mut calls = 0;
+        let report = run_fetch_attempts(
+            "pkg",
+            Some(&cache),
+            || {
+                calls += 1;
+                Attempt {
+                    ok: false,
+                    output: "==> Verifying source file signatures with gpg...\n    good.tar.gz ... FAILED (unknown public key 6909546B2C52EC2D)\n".to_string(),
+                }
+            },
+            0,
+        );
+        assert_eq!(calls, 1, "a trust failure is not retried");
+        assert_eq!(report.result.verdict, FetchVerdict::Failed);
+        assert_eq!(report.result.reason, REASON_SIG_KEY_UNKNOWN);
+        assert!(report.quarantined.is_empty(), "nothing may be quarantined");
+        assert!(
+            cache.join("good.tar.gz").exists(),
+            "a payload whose checksum passed must survive a signature failure"
+        );
+        let notes = report.notes.join("\n");
+        assert!(notes.contains(REASON_SIG_KEY_UNKNOWN), "{notes}");
+        assert!(notes.contains("6909546B2C52EC2D"), "{notes}");
+        std::fs::remove_dir_all(&cache).ok();
+    }
+
+    #[test]
+    fn a_bad_signature_quarantines_only_its_companion_and_retries_once() {
+        let cache = scratch("sig-bad");
+        std::fs::write(cache.join("good.tar.gz"), b"perfect bytes").unwrap();
+        std::fs::write(cache.join("good.tar.gz.asc"), b"signature").unwrap();
+        let mut calls = 0;
+        let report = run_fetch_attempts(
+            "pkg",
+            Some(&cache),
+            || {
+                calls += 1;
+                Attempt {
+                    ok: false,
+                    output: "==> Verifying source file signatures with gpg...\n    good.tar.gz ... FAILED (bad signature from public key ABC)\n".to_string(),
+                }
+            },
+            0,
+        );
+        assert_eq!(calls, 2, "a cryptographic failure retries once");
+        assert_eq!(report.result.reason, REASON_SIG_BAD);
+        assert!(
+            cache.join("good.tar.gz").exists(),
+            "the payload verified its checksum, so it is not the suspect"
+        );
+        assert!(!cache.join("good.tar.gz.asc").exists());
+        assert!(report.quarantined.contains(&"good.tar.gz.asc".to_string()));
+        std::fs::remove_dir_all(&cache).ok();
     }
 
     #[test]
@@ -825,7 +1191,7 @@ ERROR: One or more files did not pass the validity check!
 
     #[test]
     fn verifysource_command_pins_the_c_locale_and_keeps_the_constant_argv() {
-        // The failure prose `failing_files` parses is
+        // The failure prose `verify_failure` parses is
         // gettext-translated by makepkg; the spawn must pin it to C.
         let cmd = verifysource_command(Path::new("/nonexistent-recipe-dir"))
             .expect("a resolvable layout is the fixture's premise");

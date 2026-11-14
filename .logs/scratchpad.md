@@ -1,14 +1,16 @@
 # scratchpad — review fix phase
 
-Last action: **I1-ren-2 fixed** — `-Sw` now takes `--state-dir` + `--toolchain`
-(the family chooses the makepkg composite the fetch is handed), and the
-deferral refusal names the VERB's accepted set instead of a blanket build-run
-roster that listed the refused flag.
+Last action: **R2-juno-4 fixed** (the last commit before this one, unpushed) — fetch attribution is
+stage-aware; a signature failure never quarantines a checksum-clean payload,
+trust failures are not retried, and the refusal names the class, the key and
+the repair. Blocker closed, verified end-to-end on the real rsync recipe in the
+r2-juno guest.
 
-Unpushed: `8ebc1f6` (I1-ivy-2), `4f70912` (I1-ren-1), + I1-ren-2.
+Unpushed: R2-juno-4 (`fix(fetch): a signature failure is never read as a checksum failure`).
 
-Ledger `fixed`: I1-ivy-1, I1-sol-1, I1-ren-4, I1-ren-5, I1-ren-6, I1-ivy-2,
-I1-ren-1, I1-ren-2. Remaining `reproduced` (10): I1-ivy-3, I1-ivy-4, I1-ivy-5,
-I1-kaz-1, I1-kaz-5, I1-kaz-6, I1-ren-8, I1-sol-3, I1-sol-4; decision I1-sol-5.
+Ledger `fixed`: I1-ivy-1, I1-sol-1, I1-ren-1, I1-ren-2, I1-ren-4, I1-ren-5,
+I1-ren-6, I1-ivy-2, R2-juno-4.
 
-Next: I1-ren-8 (a `-U` that installs nothing still writes IgnorePkg).
+Next: **R2-juno-3** (the audit calls 115 GPG-verified signature files
+"unverified-sums", so the one report that says which checksums cannot be
+trusted is drowned).

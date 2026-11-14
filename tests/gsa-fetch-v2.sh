@@ -45,6 +45,12 @@ set -euo pipefail
 #      and hides `--fetch-job`; `--no-prefetch` fetches nothing and prints
 #      no `prefetch-warnings` scalar; the `--fetch-job` seam publishes its
 #      typed result row (§D.1); pacman/sudo stub logs stay EMPTY everywhere.
+#   i. `-Sw` takes the modifiers it uses (`--toolchain` reaches the
+#      composite) and its deferral refusal names the verb's own set.
+#   j. a SIGNATURE failure is never read as a checksum failure (R2-juno-4):
+#      makepkg's stage headers separate the two classes, a payload whose
+#      checksum PASSED is never quarantined, a key-trust problem is not
+#      retried, and the refusal names the class, the key and the remedy.
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -79,6 +85,7 @@ want() { [ -z "${GSA_FETCH_V2_ONLY:-}" ] || [ "${GSA_FETCH_V2_ONLY}" = "$1" ]; }
 rr2_stub_knob GSA_FAKE_FETCH_LOG "gsa-fetch-v2 makepkg stub: FETCH/BUILD event log with nanosecond clocks (plus its per-package attempt counters)"
 rr2_stub_knob GSA_FAKE_FETCH_FLAKY "gsa-fetch-v2 makepkg stub: package whose first --verifysource attempt fails and whose retry succeeds"
 rr2_stub_knob GSA_FAKE_FETCH_BADFILE "gsa-fetch-v2 makepkg stub: package whose first --verifysource reports 'bad.tar.gz ... FAILED' and whose retry succeeds"
+rr2_stub_knob GSA_FAKE_FETCH_BADKEY "gsa-fetch-v2 makepkg stub: package whose --verifysource fails a PGP signature whose key the keyring lacks (makepkg's two-stage report, checksums PASSED)"
 # GSA_FAKE_SUDO_LOG (sudo stub: argv log) and GSA_FAKE_PACMAN_LOG (trivial
 # pacman stub: argv log) are the shared vocabulary's knobs — declared there,
 # used here.
@@ -129,6 +136,21 @@ if [[ " $* " == *" --verifysource "* ]]; then
     fi
     if [[ ${GSA_FAKE_FETCH_BADFILE:-} == "$id" && $n -eq 1 ]]; then
         printf '    bad.tar.gz ... FAILED\n' >&2
+        printf 'FETCH_END %s %s\n' "$id" "$(date +%s%N)" >>"$log"
+        exit 1
+    fi
+    if [[ ${GSA_FAKE_FETCH_BADKEY:-} == "$id" ]]; then
+        # makepkg's real two-stage report (verify_checksum.sh then
+        # verify_signature.sh, integrity.sh:42-43): the checksum stage PASSES
+        # the payload and SKIPS the signature, then the signature stage blames
+        # the payload for a key the keyring does not hold. This is the
+        # R2-juno-4 shape verbatim.
+        printf '==> Validating source files with sha256sums...\n' >&2
+        printf '    good.tar.gz ... Passed\n' >&2
+        printf '    good.tar.gz.asc ... Skipped\n' >&2
+        printf '==> Verifying source file signatures with gpg...\n' >&2
+        printf '    good.tar.gz ... FAILED (unknown public key 6909546B2C52EC2D)\n' >&2
+        printf '==> ERROR: One or more PGP signatures could not be verified!\n' >&2
         printf 'FETCH_END %s %s\n' "$id" "$(date +%s%N)" >>"$log"
         exit 1
     fi
@@ -595,3 +617,59 @@ if want i; then
 fi
 
 printf 'gsa-fetch-v2: ok\n'
+
+if want j; then
+    # ─── j. a signature failure is never a checksum failure (R2-juno-4) ────
+    # The persona's blocker: `-Sw zint` quarantined a tarball whose sha256 was
+    # exactly the one the recipe pins, reported the whole thing as one word
+    # (`verify-failed`), and never named the key. makepkg's signature stage
+    # prints `    <payload> ... FAILED (unknown public key <key>)` — it names
+    # the PAYLOAD, so a stage-blind reader indicts bytes that verified.
+    (
+        set -euo pipefail
+        ws="$fixture/j/ws"
+        fetch_ws "$ws"
+        add_package "$ws" p-sig "$gsa_meta_any"$'\nsource=(https://example.invalid/good.tar.gz)'$'\nvalidpgpkeys=(AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)'
+        # The byte-perfect payload and its companion already sit in the cache.
+        printf 'exactly the bytes the recipe pins\n' >"$SRCDEST/good.tar.gz"
+        printf 'a signature\n' >"$SRCDEST/good.tar.gz.asc"
+        export GSA_FAKE_FETCH_BADKEY=p-sig
+
+        run_engine "$ws" -Sw p-sig
+        [ "$FIXTURE_RC" = 4 ] || fail_out "j: a failed fetch row is a run failure (rc 4), got $FIXTURE_RC:"
+
+        # (1) The reason names the CLASS, not the blanket word.
+        assert_verdict_row p-sig failed sig-key-unknown "j: the failure class must be named"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^p-sig failed [0-9]+ verify-failed$' \
+            && fail_out "j: a signature failure must never report the checksum reason:"
+
+        # (2) A payload whose checksum PASSED is never quarantined.
+        [ -e "$SRCDEST/good.tar.gz" ] \
+            || fail "j: the byte-perfect payload must survive a signature failure:" "$(ls -la "$SRCDEST")"
+        ls "$SRCDEST"/good.tar.gz.gsa-bad-* >/dev/null 2>&1 \
+            && fail "j: the payload must not be renamed .gsa-bad (its checksum passed):" "$(ls -la "$SRCDEST")"
+
+        # (3) A trust failure re-fetches NOTHING: the same bytes cannot help,
+        #     so the attempt budget is spent once, not twice.
+        [ "$(fetch_attempts p-sig)" = 1 ] \
+            || fail "j: a key problem must not be retried (1 attempt):" "$GSA_FAKE_FETCH_LOG"
+
+        # (4) The remedy is named, and it distinguishes the two repairs.
+        vgrep "$FIXTURE_OUTPUT" -q 'remedy:' || fail_out "j: a trust refusal owes a remedy line:"
+        vgrep "$FIXTURE_OUTPUT" -q '6909546B2C52EC2D' \
+            || fail_out "j: the refusal must name the signing key it could not check:"
+        vgrep "$FIXTURE_OUTPUT" -q 'keyring' \
+            || fail_out "j: an unknown key is a KEYRING repair:"
+        vgrep "$FIXTURE_OUTPUT" -q 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+            || fail_out "j: the remedy must name this recipe's allowed key set:"
+        vgrep "$FIXTURE_OUTPUT" -q 'cannot change the outcome' \
+            || fail_out "j: it must say a re-fetch cannot change the verdict:"
+
+        # (5) The record agrees with the row (one record, one reading).
+        [ "$(rr2_outcome p-sig reason <<<"$FIXTURE_OUTPUT")" = sig-key-unknown ] \
+            || fail "j: the record reason must carry the class:" "$FIXTURE_OUTPUT"
+        [ "$(rr2_outcome p-sig status <<<"$FIXTURE_OUTPUT")" = failed ] \
+            || fail "j: the record status must be failed:" "$FIXTURE_OUTPUT"
+        assert_no_transactions j
+    )
+fi

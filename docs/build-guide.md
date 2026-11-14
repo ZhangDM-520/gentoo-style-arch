@@ -288,6 +288,32 @@ nothing), so
 gsa -S --dry-run @git | sed -n '/run record begin/,/run record end/p' | grep '^command:'
 ```
 
+#### Reading a fetch verdict
+
+`gsa -Sw <refs…>` and a build run's `prefetch.log` carry the same verdict
+words, and the reason says which CHECK failed — not merely that one did:
+
+| Reason | What failed | What to do |
+| --- | --- | --- |
+| `ok` / `retry-ok` / `quarantined-retry-ok` | nothing (the last two recovered) | nothing |
+| `verify-failed` | a CHECKSUM: the bytes are not the ones the recipe pins | the payload is quarantined as `<name>.gsa-bad-<ts>` and the recipe retried once; find the upstream mirror |
+| `sig-key-unknown` | the signature's key is absent from the local keyring | receive the key the refusal names — **re-fetching cannot help** |
+| `sig-key-not-allowed` | the recipe's `validpgpkeys` forbids the signing key | decide which is wrong and fix it: add the key to the recipe, or do not take this release |
+| `sig-key-untrusted` | no `validpgpkeys` pin and the key is not locally trusted | pin the signing key |
+| `sig-bad` / `sig-error` | the signature is cryptographically wrong for a key you hold | only the `.sig`/`.asc` companion is quarantined and the recipe retried once |
+| `fetch-failed` | transport | retried automatically; check the mirror |
+| `eval-failed` | the recipe could not be evaluated | fix the PKGBUILD |
+
+A trust failure (`sig-key-*`) never quarantines the payload and never retries:
+the download verified, and the repair is on the key side. Every trust refusal
+prints a `remedy:` line naming the key, the class, this recipe's allowed key
+set and the repair. Measure it directly:
+
+```sh
+sudo gsa -Sw <ref> 2>&1 | grep -E 'gsa-fetch:|remedy:'
+```
+
+
 settles which form a continuation replays.
 
 ### Stable version sync and checksum verification
