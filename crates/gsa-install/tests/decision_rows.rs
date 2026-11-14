@@ -1782,3 +1782,39 @@ fn unreadable_pkgbuild_fails_discovery_and_pgo_check() {
     std::fs::set_permissions(&pkgbuild, std::fs::Permissions::from_mode(0o644)).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn discovery_skips_a_fifo_that_would_hang_the_open() {
+    // Round-3 audit (STD-R3-04): widening `is_file()` to `!is_dir()` admitted
+    // FIFOs, sockets and device nodes. `open(2)` on a writer-less FIFO BLOCKS
+    // forever, so one misnamed special file in PKGDEST hung the whole plan
+    // (measured: a bare `exec 3<input-fifo` never returns). A special file is
+    // not a damaged archive — it is not an archive — so it is skipped, while
+    // the dangling symlink above stays reportable.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("fifo-archive");
+    let recipe = dir.join("recipe");
+    std::fs::create_dir_all(&recipe).unwrap();
+    std::fs::write(recipe.join(".SRCINFO"), "pkgbase = foo\npkgname = foo\n").unwrap();
+    let fifo = recipe.join("foo-1.0-1-x86_64.pkg.tar.zst");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    assert!(made, "mkfifo must be available for this probe");
+
+    // The call must RETURN: before the fix it blocked here forever.
+    let found = discover_recipe(&recipe).unwrap();
+    assert!(
+        found.candidates.is_empty(),
+        "a FIFO is not an installable archive: {:?}",
+        found.candidates
+    );
+    assert!(
+        found.unreadable.is_empty(),
+        "a special file is not a DAMAGED archive: {:?}",
+        found.unreadable
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -283,8 +283,20 @@ pub fn discover_recipe_ranked(recipe_dir: &Path, rank: Rank) -> Result<RecipeArc
             // link or an unreadable file answers `is_file()` false, and
             // skipping those as "absent" stood the damaged-archive report
             // down (rule 71; round-2 audit, F-R2-B-04).
-            if !name.ends_with(".pkg.tar.zst") || path.is_dir() {
+            //
+            // `!is_dir()` alone would also admit FIFOs, sockets and device
+            // nodes: opening a writer-less FIFO BLOCKS forever, hanging the
+            // whole plan. So the entry must be a regular file or a symlink
+            // that resolves to one — and one whose `stat` FAILS (dangling
+            // link, loop, EACCES) still proceeds, because that is exactly
+            // the damaged archive the report must name.
+            if !name.ends_with(".pkg.tar.zst") {
                 continue;
+            }
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if !meta.is_file() {
+                    continue;
+                }
             }
             let pkginfo = match read_pkginfo(&path) {
                 Ok(pkginfo) => pkginfo,

@@ -323,3 +323,71 @@ if [ -z "$only" ] || [ "$only" = g ]; then
         esac
     )
 fi
+
+# ── h. a broken kv store is a STARTUP REFUSAL (rc 3), not a usage error ────
+# Round-3 audit (SPEC-R3-01): staging read the user sets and downgraded a
+# broken store to `Err(String)`, which the dispatcher rendered as rc 2
+# "usage" with no `startup-refused` record — while contract §C.2 (amended
+# 2026-11-14) makes a kv read failure a startup refusal on EVERY verb. The
+# regression was invisible because only this path bypassed
+# `select::user_sets_exit`.
+if [ -z "$only" ] || [ "$only" = h ]; then
+    (
+        ws="$fixture/h/empty-cwd"
+        state="$fixture/h/state"
+        mkdir -p "$ws" "$state/kv"
+        make_recipe "$fixture/h/tmpl" kv-pkg
+        # A torn tail line: normal crash state for a WRITE, but nothing here
+        # rewrites it, so the read must refuse loudly rather than answer
+        # "no user sets" (rule 71).
+        printf '{"op":"set","key":"set:alpha","value":"kv-pkg"}\n{"op":"set","key":"set:beta","val' \
+            >"$state/kv/kv.jsonl"
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -U "$fixture/h/tmpl/PKGBUILD" --dry-run
+        [ "$FIXTURE_RC" -eq 3 ] ||
+            fail "h: a broken kv store on the staging path is rc 3 (startup refusal), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        case $FIXTURE_OUTPUT in
+        *'key-value store is unreadable'*) ;;
+        *) fail "h: the refusal must name the kv store: $FIXTURE_OUTPUT" ;;
+        esac
+        # STD-R3-02: the repairing verb is gated on this same read, so a
+        # refusal that named no remedy left the store unrepairable. The
+        # refusal must name the exact byte offset of the last complete row.
+        case $FIXTURE_OUTPUT in
+        *"truncate -s $(printf '%s\n' '{"op":"set","key":"set:alpha","value":"kv-pkg"}' | wc -c) $state/kv/kv.jsonl"*) ;;
+        *) fail "h: the refusal must name the exact repair (offset + file): $FIXTURE_OUTPUT" ;;
+        esac
+        # The named remedy heals the store, and the rows before the tear
+        # survive it: run it and read the set back.
+        before=$(md5sum <"$state/kv/kv.jsonl")
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -U "$fixture/h/tmpl/PKGBUILD" --dry-run
+        [ "$FIXTURE_RC" -ne 0 ] || fail "h: the store must stay broken until repaired"
+        [ "$(md5sum <"$state/kv/kv.jsonl")" = "$before" ] \
+            || fail "h: a refusal must never rewrite the store"
+        truncate -s "$(printf '%s\n' '{"op":"set","key":"set:alpha","value":"kv-pkg"}' | wc -c)" \
+            "$state/kv/kv.jsonl"
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -U "$fixture/h/tmpl/PKGBUILD" --dry-run
+        # The heal is proven by the store no longer being the refusal: this
+        # dry-run then reaches its own empty-list answer (rc 3, a different
+        # reason), which is the untouched behaviour.
+        case $FIXTURE_OUTPUT in
+        *'key-value store is unreadable'*)
+            fail "h: the named repair must heal the store: $FIXTURE_OUTPUT" ;;
+        *'refused empty-list'*) ;;
+        *) fail "h: after the repair the verb must reach its normal answer: $FIXTURE_OUTPUT" ;;
+        esac
+        # A complete-but-unparseable line is NOT offered that repair: the
+        # truncation would delete a row that is still data.
+        printf '{"op":"set","key":"set:alpha","value":"kv-pkg"}\n{not json\n' \
+            >"$state/kv/kv.jsonl"
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
+            -U "$fixture/h/tmpl/PKGBUILD" --dry-run
+        [ "$FIXTURE_RC" -eq 3 ] \
+            || fail "h: an interior corrupt row is still rc 3, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        case $FIXTURE_OUTPUT in
+        *'truncate -s'*) fail "h: an interior corrupt row must not be handed a truncation: $FIXTURE_OUTPUT" ;;
+        esac
+    )
+fi

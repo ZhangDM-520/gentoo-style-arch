@@ -1619,6 +1619,28 @@ build time and in the installed-ABI record at install time. **Signed indexes
 are deferred** (owner decision); the index is tamper-evident only through
 content hashes.
 
+*Amendment (2026-11-14, a damaged JSONL store is a refusal that names its
+repair).* The three append-only stores (`index/binpkg.jsonl`,
+`runs/history.jsonl`, `kv/kv.jsonl`) share one reader
+(`gsa_state::store::read_json`). A line that does not parse is **reported,
+never folded as fact**: the surviving rows are not the whole truth, so the
+reader refuses (rule 71) rather than answering from a prefix — the reader
+hands back the offenders and each surface renders them as `corrupt-row <store>
+<name> line <n>: <detail>`. One refusal, `CorruptLine::refusal`, is the only
+wording.
+
+An **unterminated final line** is the one damage the engine can locate
+exactly: it never formed a row, so the bytes before it are the complete
+prefix. For that case alone the refusal names the repair —
+`truncate -s <keep-bytes> <path>` — because every verb builds the same context
+first, so a refusal that named no remedy left the store unrepairable *by the
+engine's own verbs* (round-3 audit, STD-R3-02). The engine **applies
+nothing**: a store deliberately cut with `truncate -s 70%` is textually
+identical to a torn tail, so the repair stays a human decision, and an
+interior corrupt row (a complete line that does not parse) offers no
+truncation at all — that would delete good rows. Applying the named offset
+loses no row and the store reads clean afterwards.
+
 ### J.5 Write-time ownership (rule 19)
 
 Every state file is owned by the **privileged runner** from the moment it is

@@ -1489,22 +1489,40 @@ fn resolve_budget(
 /// `--lanes 0` is a usage error on every host, and answering it after the
 /// workspace probe made a workspace-less host report the privilege refusal
 /// (rc 3) instead (round-2 audit, F-R2-C-01). The project-default rung needs
-/// the project and stays in [`resolve_budget`].
+/// the project and stays in [`resolve_budget`]. Both rungs come from
+/// [`argv_or_env_override`], so the flag/env spellings exist once (rule 73).
 fn preflight_budget_syntax(inv: &Invocation) -> Result<(), Exit> {
-    let pairs = [
+    for (flag, raw, env_name) in [
         ("--lanes", inv.lanes.as_deref(), "GSA_LANES"),
         ("--jobs", inv.jobs.as_deref(), "GSA_JOBS"),
-    ];
-    for (flag, raw, env_name) in pairs {
-        if let Some(raw) = raw {
-            Override::parse(raw).map_err(|e| Exit::Usage(format!("{flag}: {e}")))?;
-        } else if let Ok(raw) = std::env::var(env_name) {
-            if !raw.is_empty() {
-                Override::parse(&raw).map_err(|e| Exit::Usage(format!("{env_name}: {e}")))?;
-            }
-        }
+    ] {
+        argv_or_env_override(flag, raw, env_name).map_err(Exit::Usage)?;
     }
     Ok(())
+}
+
+/// The two rungs a host can answer with before any configuration is read:
+/// the flag, else its `GSA_*` env twin (contract §B.8: a flag beats its env
+/// twin). `Ok(None)` means neither answered, so the caller falls through to
+/// its own default rung. This is the ONE place the argv/env pair is spelled —
+/// the syntax preflight and the budget resolution both call it, so a renamed
+/// flag cannot drift between validation and use (rule 73).
+fn argv_or_env_override(
+    flag: &str,
+    raw: Option<&str>,
+    env_name: &str,
+) -> Result<Option<(Override, String)>, String> {
+    if let Some(raw) = raw {
+        let value = Override::parse(raw).map_err(|e| format!("{flag}: {e}"))?;
+        return Ok(Some((value, flag.to_string())));
+    }
+    if let Ok(raw) = std::env::var(env_name) {
+        if !raw.is_empty() {
+            let value = Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"))?;
+            return Ok(Some((value, env_name.to_string())));
+        }
+    }
+    Ok(None)
 }
 
 fn override_value(
@@ -1513,15 +1531,8 @@ fn override_value(
     conf: &str,
 ) -> Result<(Override, String), String> {
     let name = env_name.trim_start_matches("GSA_").to_ascii_lowercase();
-    if let Some(raw) = flag {
-        let value = Override::parse(raw).map_err(|e| format!("--{name}: {e}"))?;
-        return Ok((value, format!("--{name}")));
-    }
-    if let Ok(raw) = std::env::var(env_name) {
-        if !raw.is_empty() {
-            let value = Override::parse(&raw).map_err(|e| format!("{env_name}: {e}"))?;
-            return Ok((value, env_name.to_string()));
-        }
+    if let Some(answer) = argv_or_env_override(&format!("--{name}"), flag, env_name)? {
+        return Ok(answer);
     }
     let value =
         Override::parse(conf.trim()).map_err(|e| format!("config/build-defaults.conf: {e}"))?;

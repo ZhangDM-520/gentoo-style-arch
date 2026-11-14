@@ -64,7 +64,7 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_STATE_V2_ONLY=<a..f> runs exactly one section.
+# Section filter: GSA_STATE_V2_ONLY=<a..h> runs exactly one section.
 want() { [ -z "${GSA_STATE_V2_ONLY:-}" ] || [ "${GSA_STATE_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
@@ -662,6 +662,44 @@ if want g; then
         esac
         [ ! -e "$fixture/g/state with space" ] \
             || fail "g: a refused state root must never be created"
+    )
+fi
+
+# ─── h. an unreadable store refuses; only the state ROOT may be a file ─────
+# Round-3 audit (STD-R3-01): the round-2 `NotADirectory` carve-out was meant
+# for a state root that is a regular file (its stores cannot exist, so the
+# root gate owns that record-bearing refusal). Generalised, it made a BROKEN
+# store below the root answer "clean and empty" — `gsa -Qb` returned rc 0
+# over `index/` being a file. Rule 71: unreadable is not absent.
+if want h; then
+    (
+        set -euo pipefail
+        ws="$fixture/h/ws"
+        make_workspace "$ws" 1 auto low
+        add_package "$ws" probe "$gsa_meta_any" git
+
+        # (1) A NON-DIRECTORY below the root is a broken store, not an
+        #     absent one: the read refuses rather than answering "no rows".
+        nested="$fixture/h/nested"
+        mkdir -p "$nested"
+        : >"$nested/index"
+        run_engine "$ws" -Qb --state-dir "$nested"
+        [ "$FIXTURE_RC" != 0 ] \
+            || fail "h: -Qb over index/ as a file must refuse, got rc 0: $FIXTURE_OUTPUT"
+        grep -F 'Not a directory' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "h: the refusal must name the unreadable store path: $FIXTURE_OUTPUT"
+
+        # (2) The state ROOT itself as a file is still the build family's
+        #     record-bearing startup refusal (run-record §3) — the carve-out
+        #     survives exactly there, so a -B run keeps its rc 3 + record.
+        blocked="$fixture/h/not-a-dir"
+        : >"$blocked"
+        run_engine "$ws" -B --no-prefetch --leaf --lanes 1 --jobs 2 --intensity low \
+            --state-dir "$blocked" probe
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "h: a state ROOT that is a file is the rc 3 startup refusal, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" = refused ] \
+            || fail "h: the refusal must carry the run record: $FIXTURE_OUTPUT"
     )
 fi
 

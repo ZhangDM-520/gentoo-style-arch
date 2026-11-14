@@ -32,6 +32,15 @@ pub struct CorruptLine {
     /// The offender's best-effort name (empty when nothing can be derived).
     pub name: String,
     pub detail: String,
+    /// For an unterminated FINAL line only: the byte length of the complete
+    /// rows before it. The bytes after it never formed a row, so dropping
+    /// them loses no data — which is why the refusal can name an exact
+    /// remedy instead of asking the operator to guess (round-3 audit,
+    /// STD-R3-02).
+    pub keep_bytes: Option<u64>,
+    /// The file the row lives in, so a refusal can name a command the
+    /// operator can actually run (the `store` field is a prose label).
+    pub path: String,
 }
 
 impl CorruptLine {
@@ -44,13 +53,30 @@ impl CorruptLine {
     /// `None` for an intact store, so the clean path costs one emptiness
     /// test. The message names every offender and the one probe that
     /// explains the file.
+    ///
+    /// When the ONLY offender is an unterminated final line, the message
+    /// also names the exact repair: that line never formed a row, so its
+    /// bytes are not data, and the store refuses to guess for the operator
+    /// (round-3 audit, STD-R3-02 — the repairing verb is itself gated on
+    /// this read, so a refusal that named no remedy left the store
+    /// unrepairable). A deliberately truncated store is textually identical
+    /// and still refuses: the remedy is handed to a human, never applied.
     pub fn refusal(corrupt: &[CorruptLine], what: &str) -> Option<String> {
         if corrupt.is_empty() {
             return None;
         }
         let lines: Vec<String> = corrupt.iter().map(CorruptLine::render).collect();
+        let torn_tail_only = corrupt.len() == 1 && corrupt[0].keep_bytes.is_some();
+        let remedy = match (torn_tail_only, corrupt[0].keep_bytes) {
+            (true, Some(keep)) => format!(
+                "; line {} never completed, so no row is lost by dropping it: \
+                 'sudo -n truncate -s {keep} {}' then re-run",
+                corrupt[0].line, corrupt[0].path
+            ),
+            _ => String::new(),
+        };
         Some(format!(
-            "{what} is unreadable: {} — the surviving rows are not the whole truth, so nothing is reported; inspect it with 'gsa --local-db-check health'{}",
+            "{what} is unreadable: {} — the surviving rows are not the whole truth, so nothing is reported; inspect it with 'gsa --local-db-check health'{}{remedy}",
             lines.join("; "),
             if corrupt.len() > 1 { " (all offenders listed)" } else { "" }
         ))
@@ -199,20 +225,15 @@ pub(crate) fn read_json<T: DeserializeOwned>(
         corrupt: Vec::new(),
     };
     let bytes = match std::fs::read(path) {
-        // Absent store: the file does not exist. `NotADirectory` is the same
-        // fact when a path COMPONENT is a regular file (a `--state-dir`
-        // naming a file): such a file cannot exist either, so there is
-        // nothing to read and nothing to lose — the state-ROOT gate is what
-        // refuses that invocation (run-record §3's startup refusal).
+        // Absent store: the file does not exist. A NON-DIRECTORY at any path
+        // component is a BROKEN store and refuses (rule 71) — a reader that
+        // answered "clean and empty" over `index/` being a file reported
+        // state as fact (round-3 audit, STD-R3-01). The one exception, a
+        // state ROOT that is itself a regular file, is answered by the
+        // user-sets read (`select::load_user_sets_at`), so the state-root
+        // gate keeps owning that record-bearing refusal (run-record §3).
         Ok(bytes) => bytes,
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(out)
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => {
             return Err(StateError::Io(format!(
                 "cannot read state file {} ({e})",
@@ -231,6 +252,13 @@ pub(crate) fn read_json<T: DeserializeOwned>(
             line: lines.len() + 1,
             name: derive_name(tail),
             detail: "truncated tail line (no terminator)".to_string(),
+            // `text` is a lossy view, so the offset is only exact when the
+            // bytes were valid UTF-8; otherwise the remedy is left unnamed
+            // rather than naming a spot that would cut a row.
+            keep_bytes: std::str::from_utf8(&bytes)
+                .ok()
+                .map(|clean| (clean.len() - tail.len()) as u64),
+            path: path.display().to_string(),
         });
     }
     for (idx, raw) in lines.iter().enumerate() {
@@ -244,6 +272,8 @@ pub(crate) fn read_json<T: DeserializeOwned>(
                 line: idx + 1,
                 name: derive_name(raw),
                 detail: e.to_string(),
+                keep_bytes: None,
+                path: path.display().to_string(),
             }),
         }
     }
@@ -397,5 +427,120 @@ mod tests {
         assert_eq!(read.corrupt[0].line, 2);
         assert_eq!(read.corrupt[0].name, "bogus-1.0-1-any.pkg.tar.zst");
         assert!(read.corrupt[0].render().contains("corrupt-row test"));
+    }
+
+    /// STD-R3-02: a torn tail is refused, but the refusal must name a repair
+    /// the operator can actually run — and that repair must leave a store
+    /// that reads clean. Asserting the text alone would pass over a command
+    /// that cuts a row, so the test RUNS the named offset.
+    #[test]
+    fn a_torn_tail_refusal_names_a_repair_that_heals_the_store() {
+        let path = scratch("torn-remedy");
+        let mut err = Vec::new();
+        for n in 1..=3u32 {
+            append_json(
+                &path,
+                &Row {
+                    name: format!("row-{n}"),
+                    n,
+                },
+                &mut err,
+            )
+            .unwrap();
+        }
+        let complete = std::fs::read(&path).unwrap();
+        let mut torn = complete.clone();
+        torn.extend_from_slice(b"{\"name\":\"half");
+        std::fs::write(&path, &torn).unwrap();
+
+        let read: StoreRead<Row> = read_json(&path, "test").unwrap();
+        let refusal = CorruptLine::refusal(&read.corrupt, "the key-value store")
+            .expect("a torn tail is refused");
+        assert!(
+            refusal.contains("truncate -s "),
+            "the refusal must name the repair: {refusal}"
+        );
+        assert!(
+            refusal.contains(&path.display().to_string()),
+            "the repair must name the real file, not a prose label: {refusal}"
+        );
+        let keep = read.corrupt[0]
+            .keep_bytes
+            .expect("an unterminated tail carries its offset");
+        assert_eq!(keep, complete.len() as u64, "the offset keeps every row");
+
+        // Run the named repair: the store reads clean and no row was lost.
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(keep).unwrap();
+        drop(file);
+        let healed: StoreRead<Row> = read_json(&path, "test").unwrap();
+        assert!(healed.corrupt.is_empty(), "the named repair must heal it");
+        assert_eq!(healed.rows.len(), 3, "the repair must not cut a row");
+    }
+
+    /// The remedy is offered for a torn tail ONLY, and the engine never
+    /// applies it. An interior corrupt row — a complete line that does not
+    /// parse — is refused with no command, because truncating anywhere would
+    /// destroy rows that are still good.
+    #[test]
+    fn an_interior_corrupt_row_offers_no_truncation() {
+        let interior = scratch("interior");
+        let mut err = Vec::new();
+        append_json(
+            &interior,
+            &Row {
+                name: "ok".into(),
+                n: 1,
+            },
+            &mut err,
+        )
+        .unwrap();
+        append_line(&interior, "{not json", &mut err).unwrap();
+        let read: StoreRead<Row> = read_json(&interior, "test").unwrap();
+        assert!(read.corrupt[0].keep_bytes.is_none());
+        let refusal = CorruptLine::refusal(&read.corrupt, "the key-value store").unwrap();
+        assert!(
+            !refusal.contains("truncate -s "),
+            "an interior corrupt row must not be handed a truncation: {refusal}"
+        );
+    }
+
+    /// The ambiguous case the audit flagged: `truncate -s 70%` also leaves one
+    /// unterminated line, so it is textually identical to a torn tail. The
+    /// answer is option (b) of STD-R3-02 — still a refusal, with the exact
+    /// repair named for a human and nothing applied. What must NEVER happen is
+    /// the rejection the finding warned about: folding the survivors as fact.
+    #[test]
+    fn a_truncated_store_stays_a_refusal_and_is_never_folded() {
+        let path = scratch("truncated-store");
+        let mut err = Vec::new();
+        for n in 1..=3u32 {
+            append_json(
+                &path,
+                &Row {
+                    name: format!("row-{n}"),
+                    n,
+                },
+                &mut err,
+            )
+            .unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        // 70% is the shape the audit reproduced: it cuts mid-line.
+        let cut = bytes.len() * 7 / 10;
+        std::fs::write(&path, &bytes[..cut]).unwrap();
+        let read: StoreRead<Row> = read_json(&path, "test").unwrap();
+        let refusal = CorruptLine::refusal(&read.corrupt, "the key-value store")
+            .expect("a truncated store is refused, never folded");
+        assert!(refusal.contains("nothing is reported"));
+        let keep = read.corrupt[0]
+            .keep_bytes
+            .expect("a torn tail has an offset");
+        assert!(
+            keep < cut as u64,
+            "the offset must land before the cut, not at it: {keep} vs {cut}"
+        );
+        // Nothing was written: the refusal is a read-side answer.
+        assert_eq!(std::fs::read(&path).unwrap().len(), cut);
     }
 }

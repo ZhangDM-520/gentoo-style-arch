@@ -610,6 +610,12 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   differs ("is not a clone of"), re-fetches every build, leaves `<file>.part` on
   a partial download (servers without byte ranges then fail — delete it, `curl
   --retry`), and a config-changing retry must wipe the build workspace.
+- **A fixture that retargets the store's origin corrupts the REAL store when the
+  ladder is not pinned**: a crash-recovery incident left the canonical store's
+  `FETCH_HEAD` on a `/tmp/gsa-state-recipes-…` upstream from a fixture's
+  retarget, stranding the store on a stranger commit with `packages/` empty. A
+  fixture always pins `GSA_RECIPES_DIR`; a real store's `git log -1` and
+  `git remote -v` must name the real origin before any run trusts it.
 
 ### Install, ABI and the record
 
@@ -665,6 +671,12 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   `gsa`/`pacman` spawn). And `ldconfig -p` is ~5.8k rows: build the map once
   (103 ms per miss against 0.2 ms when the old loop rescanned per soname — a
   100-miss payload went 9.25 s → 0.62 s).
+- **A gate in one language drifts from the gate in the other**: the ABI
+  exclusions registry was honoured by `gsa-install::gates::AbiExclusions::covers`
+  and ignored by the bash pre-transaction hook, so every `pacman -Syu` for four
+  days died on a false `libcuda.so.1` positive. A shell mirror of an engine
+  predicate must name the predicate it mirrors and be falsified against the
+  same registry rows.
 - **A multi-output index instance is a SET of per-output token rows, and a `-`
   token is NO token**: a fold keyed `(recipe_id, instance)` keeps only the last
   output, so every split rebuild reads as a token move and every placeholder as
@@ -681,6 +693,15 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   dashboard is a `Progress` fold, the roots resolve through
   `config::resolve` with provenance, an early exit is a typed `Exit` behind one
   renderer (rules 72–74).
+- **A refusal that names no remedy is unrepairable when the repairing verb
+  reads the same file**: a torn `kv.jsonl` tail refused EVERY verb including
+  `-Ms --add`, so the store could never heal (round-3 audit STD-R3-02; the
+  file was md5-identical after the attempt). The refusal now names the exact
+  `truncate -s <offset> <path>`, the offset being the bytes before the last
+  complete row — and the engine still APPLIES nothing: a `truncate -s 70%`
+  store is textually identical to a torn tail, so it stays a refusal and the
+  remedy stays a human decision (`CorruptLine.keep_bytes` is `None` for an
+  interior corrupt row, which suppresses the command).
 
 ### Signals, lanes and runs
 
@@ -730,6 +751,12 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   cross-checked in both directions by `tests/cleanup-extensions.sh`.
 - **A completed build dir is not free disk**: downstream builds embed
   build-internals paths, so prune only trees with no pending consumers.
+- **A legacy toolchain-marker identity is a one-time clean, not a bug**: a
+  marker in the old shorter format (compiler line only) never matches the
+  current `<family>|<compiler version line>|<config sha256>` identity, so every
+  recipe with one rebuilds from zero and says so loudly. The clean is CORRECT
+  (the cache predates the config digest); the tell is the message naming the
+  marker, and the cost is one full pass, never a debugging session.
 - **An in-flight prune keep-list comes from live PIDs, never lane names**: the
   build-dir name can differ from the package id (`build/zen-browser` vs lane
   `zen-browser-pgo`). Resolve keep-paths via
@@ -801,6 +828,12 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   tiered (`S/M/L/XL`) artifact, only after a reference run exists.
   Blocked on: a written plan (multi-sitting) and an owner decision on whether
   the 50-record `runs/history.jsonl` retention is enough to seed it.
+  Campaign evidence (2026-11-14): still no sampling anywhere, and the run that
+  would seed it exists — `runs/history.jsonl` holds **367** records carrying an
+  explicit `order` and a `stamp`, so a reference dataset can be joined to real
+  durations without a new store. The premise remains unmeasured: the campaign's
+  only per-package numbers are wall-clock (blender-git 5063 s from zero;
+  16 obj/min).
 
 - **Per-lane job count does not adapt to the live ready set (opened
   2026-11-13, owner-observed).** `Budget::resolve` derives `lanes` from the
@@ -824,6 +857,15 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   infeasible; only spawn-time widening is possible. Keep this item SMALL and
   do it after the measurement item above, which supplies the evidence.
   Blocked on: the per-package measurement landing first.
+  Campaign evidence (2026-11-14): the static division is what the campaign
+  recorded — of the **18** `runs/history.jsonl` records in the campaign window,
+  **16** ran `lanes=6` and the normal lane's `-j` was **2–4** (3 in 9 of them)
+  while `core-jobs` sat at **8–13**; the two small tail runs fell to `lanes` 5
+  and 2. So a normal lane is worth 2–4 jobs host-wide regardless of how few
+  lanes are actually ready. Caveat against over-reading it: `blender-git`
+  (started 22:32) and `obs-studio` (log written to 01:05) overlapped, so the
+  machine was NOT idle during the long pole, and that run's `order` is a
+  38-package tail, not a full-roster ready set.
 
 - **`core`-alone is one boolean for a heterogeneous group (opened 2026-11-13,
   owner-observed).** `machine.rs::can_dispatch` gives a `core` member the
@@ -865,6 +907,11 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   wrong for most members.
   Blocked on: an owner decision — the evidence now favours documentation over
   mechanism, which is a product call, not an engineering one.
+  Campaign evidence (2026-11-14): the roster census backs the "coarse proxy"
+  reading harder than the 2026-11-13 selection did — **334 of 667** topology
+  records (50%) carry `core` or `build-tools`, and of the 38-package campaign
+  tail **12** were core. So on any core-bearing selection the boolean governs
+  half the set, not an exception list.
 
 - **A package install can race a concurrent build (found by research
   2026-11-13, UNGUARDED).** Installs run in the supervisor thread
@@ -880,25 +927,42 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   no tag vocabulary change, no new store.
   Blocked on: a written plan + a decision on whether to quiesce builds or
   merely pause dispatch (the latter cannot protect an already-running link).
+  Campaign evidence (2026-11-14): no incident was observed across 13 passes,
+  so the hazard stays **unproven in the field, not disproven** — the campaign
+  ran installs from the supervisor thread beside live lanes throughout (the
+  `libportal` batch and its orphan-removal transaction among them) and no
+  loader death or `/usr/share/makepkg` loss appeared. Absence here is weak
+  evidence: the classic tell is a rare unlucky interleaving, so the item keeps
+  its "UNGUARDED" status rather than moving to done.
 
-- **Snapshot pins in `@core`/`@build-tools` (QUEUED for the owner's weekend
-  full rebuild, opened 2026-11-09).**
-  136 recipes whose source ref moves (113 floating + 23 `#branch=`-pinned) take
-  `#commit=` = the last commit at or before Monday 00:00 UTC. **Nothing is
-  renamed**: the recipe, its `pkgname`s and its `provides=` stay `-git`, so
-  pacman, topology, IgnorePkg and the index see no move at all. The snapshot
-  name is a FRONTEND surface — `gsa` accepts `<id>-snapshot` as an input alias
-  for a pinned `<id>` (rc 2, naming the ref, when it is not one) — and that
-  engine half (W0) LANDED 2026-11-09 (`select::resolve_snapshot_alias`, contract
-  §C.1, `tests/project.sh` §9). The `-Sy` provider that advances the pins (W5)
-  is the remaining engine work and lands LAST, after the recipe waves.
-  State: W1 (64 fan-out ≤ 4 trackers) is PINNED with fresh `.SRCINFO` but not
-  built and not installed — the owner deferred every real build to the weekend
-  campaign ("do not do real build test, i am not ready"), so archives from the
-  discarded validation pass are stale and untrusted. W2–W4 (72 recipes) are
-  unpinned. `gsa-pm` stays exempt. Reconciliation and waves: the recipe
+- **Snapshot pins in `@core`/`@build-tools` (open 2026-11-09; the engine half
+  is LANDED, 82 recipe pins remain).**
+  Recipes whose source ref moves (a floating VCS source, or a `#branch=`-pinned
+  one) take `#commit=` = the last commit at or before Monday 00:00 UTC.
+  **Nothing is renamed**: the recipe, its `pkgname`s and its `provides=` stay
+  `-git`, so pacman, topology, IgnorePkg and the index see no move at all. The
+  snapshot name is a FRONTEND surface — `gsa` accepts `<id>-snapshot` as an
+  input alias for a pinned `<id>` (rc 2, naming the ref, when it is not one).
+  Both engine halves have LANDED: **W0**, the input alias, 2026-11-09
+  (`select::resolve_snapshot_alias`, contract §C.1, `tests/project.sh` §9); and
+  **W5**, the `-Sy` provider that advances the pins, 2026-11-12 (`055e4c5`,
+  contract §B.4 amended, `tests/sync-snapshot.sh` falsified red both ways).
+  **The remaining work is recipe DATA, not engine code** — planting pins in the
+  still-moving trackers — plus the owner's rebuild of what was pinned under the
+  now-discarded validation pass (those archives are stale and untrusted).
+  `gsa-pm` stays exempt. Census rule (re-run it, never trust a remembered
+  count): for every topology record in `core`/`build-tools`, read its
+  `.SRCINFO` sources, keep those whose scheme is a VCS one
+  (`git+https`/`git://`/`svn+…`; the scheme is the text before `://`, minus any
+  `+`), and classify the fragment — `#commit=` or `#tag=` is immutable, while
+  an empty fragment or `#branch=` moves. Measured 2026-11-14 over the recipe
+  checkout: **233** such records — **93** `#commit=`-pinned, **58**
+  immutable-tag, **82** still moving (`bzip2-git`, `cairo-git`, `cmake-git`,
+  `coreutils`, `glib2-git`, `gtk4-git`, `meson-git`, `ninja-git`, `qt6-base-git`
+  …), zero missing recipe directories. Reconciliation and waves: the recipe
   repository's `docs/snapshot-expansion.md` §8.
-  Blocked on: the owner's weekend rebuild (build + install W1, then W2–W4).
+  Blocked on: the owner's rebuild campaign — W1's pins were built and installed
+  during it, so the queue item is now the 82 still-moving trackers, not W2–W4.
 
 ## 7 · Environment and shell boundaries
 

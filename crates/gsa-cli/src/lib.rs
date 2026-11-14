@@ -1043,10 +1043,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 // or a run the privilege gate will refuse) is cleaned up
                 // after the entry returns.
                 match standalone::apply(&mut inv, &command) {
-                    Err(message) => {
-                        let _ = writeln!(err, "gsa: {message}");
-                        RC_USAGE
-                    }
+                    Err(exit) => exit.render(err),
                     Ok(staged) => {
                         let code = match command {
                             Command::Build => build::run_build(&inv, out, err),

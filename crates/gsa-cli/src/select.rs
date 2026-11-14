@@ -73,6 +73,17 @@ pub fn load_user_sets_at(
     state_dir: Option<&str>,
 ) -> Result<Vec<(String, Vec<String>)>, UserSetsError> {
     let state = gsa_model::config::resolve_state_dir(state_dir).map_err(UserSetsError::Usage)?;
+    // A state root that EXISTS as a non-directory holds no stores at all, and
+    // the state-root gate is what refuses that invocation with a record
+    // (run-record §3's startup refusal). Treating it as an unreadable store
+    // here would answer rc 3 first, without the record — so this one case
+    // answers "no user sets" and lets the gate speak.
+    if std::fs::symlink_metadata(&state)
+        .map(|meta| !meta.is_dir())
+        .unwrap_or(false)
+    {
+        return Ok(Vec::new());
+    }
     // Read-only handle: loading user sets is a pure read (§D.1 "touches
     // nothing else") — a dry or refused run must never create `index/`,
     // `runs/`, `kv/` just to learn a set is empty.

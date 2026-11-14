@@ -693,6 +693,24 @@ record_block() {
         || fail "the -Su stale set must be exactly [demo]:" "$fixture/s4/run4.txt"
     [ "$(rr2_outcome demo status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
         || fail "-Su did not build the stale recipe:" "$fixture/s4/run4.txt"
+
+    # ── -Su is NON-TERMINAL: the `f`/`c` build modifiers parse on it, and the
+    #    letter decides the mode (not the `u`). The round-2 remediation made
+    #    -Su accept modifiers; a parser that still treated `u` as terminal
+    #    would answer rc 2 here. Assert the GRAMMAR (rc 0, an update run that
+    #    runs no sync), never a member list: run 4 already installed the stale
+    #    recipe, so every later -Su answers an empty stale set by design.
+    for spelling in -Suf -Suc -Syuf -Syuc; do
+        si_before=$(wc -l <"$GSA_FAKE_SYNC_SI_LOG")
+        run_engine "$ws" "$spelling" --dry-run --state-dir "$state" \
+            --config "$ws/pacman.conf" --no-prefetch
+        printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/s4/$spelling.txt"
+        [ "$FIXTURE_RC" = 0 ] \
+            || fail "$spelling must parse as an update run (rc 0 dry run), got $FIXTURE_RC:" \
+                "$fixture/s4/$spelling.txt"
+        [ "$(wc -l <"$GSA_FAKE_SYNC_SI_LOG")" = "$si_before" ] \
+            || fail "$spelling queried the provider (a dry run never syncs):" "$GSA_FAKE_SYNC_SI_LOG"
+    done
 )
 
 # ─── 5. skip claims (--skip / --skip-built) and the --no-sync no-query proof ─
