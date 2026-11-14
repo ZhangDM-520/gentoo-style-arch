@@ -22,7 +22,13 @@ set -uo pipefail
 #      runs) and a rc-1 failure is NAMED by the shim;
 #   6. (FISH-DRIVEN, see DEVIATION 2) an install that hits the mutex wait
 #      lands in the run record as a `mutex-timeout` row instead of a generic
-#      build-failed.
+#      build-failed;
+#   7. (I1-sol-4) the shim carries the run's `--config` as a fixed
+#      `--config <abs path>` argv pair on BOTH paths, so makepkg's dependency
+#      test (`-T`) and missing-dependency install (`-S --asdeps`) judge the
+#      database the engine's gates judge. Falsify by deleting the
+#      `set -- --config "$C" "$@"` line: every recorded argv below loses the
+#      pair and a prerequisite in a private root reads as "target not found".
 #
 # Flip notes (docs/gsa-fixture-migration.md row `tests/pacman-mutex-shim.sh`):
 # argv `fish build-all.fish --allow-broken-rustc --no-deps --no-sync --lanes 1
@@ -232,6 +238,9 @@ rr2_body <<<"$run_output" >/dev/null ||
 
 # 1. shim generated at run start: mode, mutex wiring, absolute paths.
 shim="$state/locks/pacman-shim"
+# The run's `--config`, absolutized by the engine (makepkg runs with the
+# recipe's cwd, so a relative target would resolve against the recipe).
+abs_conf="$fixture/pacman.conf"
 [[ -e $shim ]] ||
     fail "run start did not generate $shim"
 [[ $(stat -c %a "$shim") == 755 ]] ||
@@ -270,8 +279,8 @@ env PATH="$fixture/bin:$PATH" \
     GSA_FAKE_STUB_PACMAN_LOG="$stub_log" \
     "$shim" -S --noconfirm 'arg with space' 'wild*card' ||
     fail "shim invocation failed"
-[[ $(cat "$stub_log") == '4|-S --noconfirm arg with space wild*card' ]] ||
-    fail "shim did not pass \$@ through verbatim: '$(cat "$stub_log")'"
+[[ $(cat "$stub_log") == "6|--config $abs_conf -S --noconfirm arg with space wild*card" ]] ||
+    fail "shim did not pass \$@ through verbatim after the --config pair: '$(cat "$stub_log")'"
 
 # 4. query/transaction split (R-F17): read-only calls never take the mutex.
 # The shim's P= line is pointed at the recorder in a COPY so the query path
@@ -295,20 +304,20 @@ shim_call() { # $1 = pacman-record log; rest = shim args
 }
 
 shim_call "$qlog" -T -- dep1 'dep 2'
-[[ $(cat "$qlog") == '4|-T -- dep1 dep 2' ]] ||
-    fail "shim -T did not pass \$@ through verbatim: '$(cat "$qlog")'"
+[[ $(cat "$qlog") == "6|--config $abs_conf -T -- dep1 dep 2" ]] ||
+    fail "shim -T did not pass \$@ through verbatim after the --config pair: '$(cat "$qlog")'"
 [[ ! -s $flog ]] ||
     fail "read-only pacman -T queued on the transaction mutex:" "$(cat "$flog")"
 shim_call "$qlog" --noconfirm -Q -q pkgname
-[[ $(cat "$qlog") == '4|--noconfirm -Q -q pkgname' ]] ||
-    fail "shim -Q did not pass \$@ through verbatim: '$(cat "$qlog")'"
+[[ $(cat "$qlog") == "6|--config $abs_conf --noconfirm -Q -q pkgname" ]] ||
+    fail "shim -Q did not pass \$@ through verbatim after the --config pair: '$(cat "$qlog")'"
 [[ ! -s $flog ]] ||
     fail "read-only pacman -Q (PACMAN_OPTS-prefixed) queued on the transaction mutex:" "$(cat "$flog")"
 shim_call "$qlog" -S --noconfirm pkgname
 [[ -s $flog ]] ||
     fail "pacman -S transaction did NOT take the transaction mutex"
-[[ $(cat "$qlog") == '3|-S --noconfirm pkgname' ]] ||
-    fail "transaction args not passed verbatim: '$(cat "$qlog")'"
+[[ $(cat "$qlog") == "5|--config $abs_conf -S --noconfirm pkgname" ]] ||
+    fail "transaction args not passed verbatim after the --config pair: '$(cat "$qlog")'"
 
 # 5. a flock failure is propagated verbatim and runs no pacman; a rc-1
 #    failure is named by the shim (DEVIATION 1: the engine names rc 1 only,
@@ -394,6 +403,26 @@ if grep -q 'broken entry' "$state2/logs/p1.log"; then
     fail "the rc-75 path ran the local-db recovery probe:" \
         "$(cat "$state2/logs/p1.log")"
 fi
+
+# 7. (I1-sol-4) the shim carries the run's `--config` on BOTH paths.
+#    makepkg routes `-T` (the dependency test) and `-S --asdeps` (the missing
+#    dependency install) through `$PACMAN`, so the shim is the only place the
+#    named database can reach them. Without the pair the dependency probe
+#    reads the HOST database and a package installed in `--config`'s DB is
+#    reported "target not found", refusing a satisfiable build.
+#    Falsify by deleting shim_body's `set -- --config ...` line: the recorded
+#    argv below loses the pair.
+echo "section 7: the shim carries --config on the query and transaction paths"
+grep -qF "C='$abs_conf'" "$shim" ||
+    fail "shim does not bake the absolute --config target $abs_conf: $(cat "$shim")"
+grep -qF 'set -- --config "$C" "$@"' "$shim" ||
+    fail "shim does not prepend the configuration to every call: $(cat "$shim")"
+shim_call "$qlog" -T p1
+[[ $(cat "$qlog") == "4|--config $abs_conf -T p1" ]] ||
+    fail "shim -T did not carry --config (makepkg's dependency test would read the host DB): '$(cat "$qlog")'"
+shim_call "$qlog" -S --asdeps p1
+[[ $(cat "$qlog") == "5|--config $abs_conf -S --asdeps p1" ]] ||
+    fail "shim -S --asdeps did not carry --config (the dep install would land in the host DB): '$(cat "$qlog")'"
 
 if ps -eo args= | grep -F "$fixture" | grep -v grep >/dev/null; then
     fail "a fixture process survived:" \

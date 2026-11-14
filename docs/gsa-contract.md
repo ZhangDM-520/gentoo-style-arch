@@ -1751,6 +1751,20 @@ dispatch; a failure parks a cone (§I).
   own dependency installs are routed through the same lock (the `PACMAN` shim).
   A system `db.lck` is NEVER deleted automatically; lock idleness is proven by
   an open-file-descriptor scan, not by filenames.
+  *Amendment (2026-11-15, `I1-sol-4` — the shim carries the configuration).*
+  The `PACMAN` shim is the ONLY choke point for makepkg's own database reads:
+  `/usr/bin/makepkg` resolves `PACMAN_PATH` from `$PACMAN` and routes every
+  `run_pacman` call through it, so the shim must carry the run's `--config`
+  (absolutized, §K.1's recipe cwd) as a fixed `--config <path>` argv pair on
+  BOTH paths — the read-only branch (`-T`, `-Q*`) and the transaction branch
+  (`-S --asdeps`). Without it the dependency test and the missing-dependency
+  install judge the HOST database while the engine's gates judge the named
+  one, so a dependency installed in `--config`'s DB reads as missing and a
+  satisfiable build is refused (`error: target not found`). A run that names
+  no configuration bakes no pair (the host IS the target). The shim's
+  idempotency compares the generated BODY, never the file's size: a run that
+  names a different `--config` must not keep reading a previous run's
+  database through a shim left behind.
   *Amendment (2026-10-28, H10):* the state-root mutex is
   `<state>/locks/run.lock`. A build-user-only verb (§B.7 `-Mm`) cannot open a
   root-owned state root's lock and must not run under a root supervisor; when

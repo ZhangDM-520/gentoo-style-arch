@@ -7,13 +7,23 @@
 //! and unprivileged; every transaction queues on the state-root mutex. The
 //! system `db.lck` is never touched by the shim (makepkg/pacman own it).
 //!
-//! The generated body is a root-executed shell script, so the one piece of
-//! engine data baked into it — the mutex path — is rendered through
-//! [`shell_single_quote`]: inside `'…'` no byte of a `--state-dir` value is
-//! ever shell syntax, so spaces break nothing and `$(…)`/`;`/newlines can
-//! never become code execution in the shim.
+//! The generated body is a root-executed shell script, so the two pieces of
+//! engine data baked into it — the mutex path and the target pacman
+//! configuration — are rendered through [`shell_single_quote`]: inside `'…'`
+//! no byte of a `--state-dir` or `--config` value is ever shell syntax, so
+//! spaces break nothing and `$(…)`/`;`/newlines can never become code
+//! execution in the shim.
+//!
+//! The `--config` pair exists because the shim is the ONLY choke point for
+//! makepkg's own database reads: `/usr/bin/makepkg` resolves `PACMAN_PATH`
+//! from `$PACMAN` and routes every `run_pacman` call through it, so a shim
+//! that forgets the configuration made `-T` (the dependency test) and
+//! `-S --asdeps` (the missing-dependency install) judge the HOST database
+//! while the engine's gates judged the named one — a satisfiable build was
+//! refused with "error: target not found" for a package installed in the DB
+//! the user named (round-1 review, `I1-sol-4`).
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// The shim path under the state root. A fixture or run without it (Phase 2
@@ -35,32 +45,30 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-/// Write the shim once, executable, owned by the privileged runner (rule 19:
-/// engine state is root-owned). Idempotent: an existing shim is left as
-/// it is (its baked paths never change for one state root).
-pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
-    let path = shim_path(state_dir);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.read(true).write(true).create(true);
-    let mut file = gsa_model::state_gate::open_state_file_with_uid(
-        &path,
-        &mut opts,
-        gsa_model::state_gate::current_uid(),
-        &mut std::io::stderr(),
-    )
-    .map_err(|e| e.to_string())?;
-    let meta = file
-        .metadata()
-        .map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
-    if meta.len() > 0 {
-        return Ok(path);
-    }
+/// The generated shim body. `conf` is the run's target pacman configuration
+/// (`--config`): when it is `None` the body is byte-identical to the
+/// pre-`--config` shim, because an unnamed configuration means the host's
+/// database and pacman's own default already names it.
+fn shim_body(state_dir: &Path, conf: Option<&Path>) -> String {
     let mutex = shell_single_quote(&mutex_path(state_dir).display().to_string());
-    let body = format!(
+    let (bind, apply) = match conf {
+        None => (String::new(), String::new()),
+        Some(conf) => (
+            format!("C={}\n", shell_single_quote(&conf.display().to_string())),
+            "# The named configuration rides every call: makepkg's own\n\
+             # dependency test (-T) and dependency install (-S --asdeps) are\n\
+             # pacman reads/writes too, and they must judge the database the\n\
+             # engine's gates judge (§B.8, `--config`).\n\
+             set -- --config \"$C\" \"$@\"\n"
+                .to_string(),
+        ),
+    };
+    format!(
         "#!/bin/sh\n\
          # gsa PACMAN shim — generated; makepkg dependency installs share the\n\
          # engine transaction lock and run through sudo -n (never prompts).\n\
          P=/usr/bin/pacman\n\
+         {bind}\
          q=\n\
          t=\n\
          for a in \"$@\"; do\n\
@@ -69,6 +77,7 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
          \x20       -S*|-U*|-R*|-D*|-F*|--sync|--remove|--upgrade|--database|--files) t=1 ;;\n\
          \x20   esac\n\
          done\n\
+         {apply}\
          if [ -n \"$q\" ] && [ -z \"$t\" ]; then\n\
          \x20   exec \"$P\" \"$@\"\n\
          fi\n\
@@ -78,8 +87,41 @@ pub fn ensure_pacman_shim(state_dir: &Path) -> Result<PathBuf, String> {
          \x20   echo \"gsa pacman shim: transaction failed (sudo -n never prompts)\" >&2\n\
          fi\n\
          exit \"$rc\"\n",
+        bind = bind,
+        apply = apply,
         mutex = mutex
-    );
+    )
+}
+
+/// Write the shim, executable, owned by the privileged runner (rule 19:
+/// engine state is root-owned). Idempotent on the BODY, never on the size: a
+/// run that names a different `--config` must not keep reading the previous
+/// database through a shim an earlier run left behind. `conf` is made
+/// absolute here because makepkg runs with the RECIPE's cwd (§K.1), exactly
+/// like every other path handed to it.
+pub fn ensure_pacman_shim(state_dir: &Path, conf: Option<&Path>) -> Result<PathBuf, String> {
+    let path = shim_path(state_dir);
+    let conf = conf.map(gsa_model::config::absolute_for_child);
+    let body = shim_body(state_dir, conf.as_deref());
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create(true);
+    let mut file = gsa_model::state_gate::open_state_file_with_uid(
+        &path,
+        &mut opts,
+        gsa_model::state_gate::current_uid(),
+        &mut std::io::stderr(),
+    )
+    .map_err(|e| e.to_string())?;
+    let mut existing = Vec::new();
+    file.read_to_end(&mut existing)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if existing == body.as_bytes() {
+        return Ok(path);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("cannot rewind {}: {e}", path.display()))?;
+    file.set_len(0)
+        .map_err(|e| format!("cannot truncate {}: {e}", path.display()))?;
     file.write_all(body.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     file.flush()
@@ -102,7 +144,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gsa-shim-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("locks")).unwrap();
-        let path = ensure_pacman_shim(&dir).unwrap();
+        let path = ensure_pacman_shim(&dir, None).unwrap();
         assert!(path.is_file());
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("sudo -n"), "the shim must never prompt");
@@ -111,10 +153,70 @@ mod tests {
             body.contains("db.lck") == false,
             "the shim never names db.lck"
         );
-        // Idempotent: a second call leaves the file alone.
+        // A run that names no configuration keeps the host's database, so
+        // its shim carries no `--config` at all (byte-identical to the
+        // pre-`--config` body).
+        assert!(
+            !body.contains("--config"),
+            "an unnamed configuration must not bake one: {body}"
+        );
+        // Idempotent on the BODY: a second call leaves a matching file alone.
+        ensure_pacman_shim(&dir, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        // ... and a body that drifted is repaired, never trusted by size.
         std::fs::write(&path, "#!/bin/sh\ntrue\n").unwrap();
-        ensure_pacman_shim(&dir).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#!/bin/sh\ntrue\n");
+        ensure_pacman_shim(&dir, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shim_carries_the_named_configuration_on_every_call() {
+        // makepkg routes `-T` and `-S --asdeps` through `$PACMAN`, so the
+        // shim is the only place the named database can reach them: without
+        // it a dependency installed in `--config`'s DB read as missing
+        // (round-1 review, `I1-sol-4`).
+        let dir = std::env::temp_dir().join(format!("gsa-shim-conf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        // A name that would be shell syntax unquoted, plus a relative one
+        // (made absolute for makepkg's recipe cwd).
+        let conf = dir.join("odd $(touch pwned); 'q.conf");
+        std::fs::write(&conf, "[options]\n").unwrap();
+        let path = ensure_pacman_shim(&dir, Some(&conf)).unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let syntax = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(&path)
+            .status()
+            .expect("sh runs");
+        assert!(syntax.success(), "the generated shim must parse: {body}");
+        assert!(
+            body.contains("set -- --config \"$C\" \"$@\""),
+            "the configuration must be prepended to every call: {body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "C={}",
+                shell_single_quote(&conf.display().to_string())
+            )),
+            "the configuration path must be one quoted literal: {body}"
+        );
+        // A different configuration REWRITES the shim: leaving the previous
+        // body in place kept reading the previous database.
+        let other = dir.join("other.conf");
+        std::fs::write(&other, "[options]\n").unwrap();
+        ensure_pacman_shim(&dir, Some(&other)).unwrap();
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            rewritten.contains(&other.display().to_string()),
+            "{rewritten}"
+        );
+        assert!(!rewritten.contains("odd $(touch pwned)"), "{rewritten}");
+        // Back to the host's database: the pair leaves the body again.
+        ensure_pacman_shim(&dir, None).unwrap();
+        let restored = std::fs::read_to_string(&path).unwrap();
+        assert!(!restored.contains("--config"), "{restored}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -129,7 +231,7 @@ mod tests {
         let marker = base.join("pwned");
         let hostile = base.join("state $(touch pwned); 'quote& space");
         std::fs::create_dir_all(hostile.join("locks")).unwrap();
-        let path = ensure_pacman_shim(&hostile).unwrap();
+        let path = ensure_pacman_shim(&hostile, None).unwrap();
         let body = std::fs::read_to_string(&path).unwrap();
         // The generated body must parse as shell at all ...
         let syntax = std::process::Command::new("sh")
@@ -201,7 +303,7 @@ mod tests {
         let shim = shim_path(&dir);
         std::os::unix::fs::symlink(&target, &shim).unwrap();
 
-        let err = ensure_pacman_shim(&dir).unwrap_err();
+        let err = ensure_pacman_shim(&dir, None).unwrap_err();
         assert!(
             err.contains("symlink") || err.contains("ownership"),
             "symlink refusal expected, got: {err}"

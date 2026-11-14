@@ -321,7 +321,13 @@ fn run_build_with(
     }
     // The PACMAN shim (§K.3): makepkg's own dependency installs share the
     // transaction lock and run through `sudo -n` — the engine never prompts.
-    if let Err(message) = gsa_build::shim::ensure_pacman_shim(&state_dir) {
+    // The run's `--config` rides it too: the shim is the only choke point for
+    // makepkg's `-T`/`-S --asdeps`, so without it a dependency installed in
+    // the named database read as missing and a satisfiable build was
+    // refused (round-1 review, `I1-sol-4`).
+    if let Err(message) =
+        gsa_build::shim::ensure_pacman_shim(&state_dir, inv.config.as_deref().map(Path::new))
+    {
         let _ = writeln!(err, "gsa: {message}");
         return Err(refuse_before_dispatch(
             inv,

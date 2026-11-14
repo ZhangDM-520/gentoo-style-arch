@@ -524,7 +524,11 @@ credential" distinct from "installs are impossible":
 - While running, installs go through one serialized `pacman -U` at a time,
   each via the engine's PACMAN shim (`sudo -n flock -x` on the state-root
   mutex), so makepkg's own dependency installs share the same lock (contract
-  §K.3).
+  §K.3). The shim also carries the run's `--config` on every call, so
+  makepkg's dependency test (`-T`) and missing-dependency install
+  (`-S --asdeps`) read and write the database `--config` names rather than
+  the host's — a prerequisite installed in a private pacman root therefore
+  satisfies its consumer.
 - If the credential is genuinely lost mid-run, dispatch stops once (`sudo
   credential expired and cannot be refreshed` — one message, not one per
   poll), in-flight lanes drain, and the run lists the unstarted packages as
