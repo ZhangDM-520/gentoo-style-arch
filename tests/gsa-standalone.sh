@@ -340,8 +340,21 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         # A torn tail line: normal crash state for a WRITE, but nothing here
         # rewrites it, so the read must refuse loudly rather than answer
         # "no user sets" (rule 71).
-        printf '{"op":"set","key":"set:alpha","value":"kv-pkg"}\n{"op":"set","key":"set:beta","val' \
-            >"$state/kv/kv.jsonl"
+        #
+        # The offset of the tear is DERIVED from the bytes actually written,
+        # never predicted from a restated literal: a fixture that computes the
+        # expected value a second way can drift from the file it produced and
+        # still pass while asserting the wrong number (round-4 audit,
+        # STD-R4-01).
+        complete='{"op":"set","key":"set:alpha","value":"kv-pkg"}'
+        keep_bytes=$((${#complete} + 1))   # the row + its terminating newline
+        # Prove the derivation against the prefix ALONE, before the tear is
+        # written: a keep_bytes that is too large would otherwise pass every
+        # later assertion while pointing past the last complete row.
+        printf '%s\n' "$complete" >"$state/kv/kv.jsonl"
+        [ "$(/usr/bin/stat -c %s "$state/kv/kv.jsonl")" -eq "$keep_bytes" ] \
+            || fail "h: keep_bytes must be the complete-prefix length, got $keep_bytes"
+        printf '%s' '{"op":"set","key":"set:beta","val' >>"$state/kv/kv.jsonl"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
             -U "$fixture/h/tmpl/PKGBUILD" --dry-run
         [ "$FIXTURE_RC" -eq 3 ] ||
@@ -354,8 +367,8 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         # refusal that named no remedy left the store unrepairable. The
         # refusal must name the exact byte offset of the last complete row.
         case $FIXTURE_OUTPUT in
-        *"truncate -s $(printf '%s\n' '{"op":"set","key":"set:alpha","value":"kv-pkg"}' | wc -c) $state/kv/kv.jsonl"*) ;;
-        *) fail "h: the refusal must name the exact repair (offset + file): $FIXTURE_OUTPUT" ;;
+        *"truncate -s $keep_bytes $state/kv/kv.jsonl"*) ;;
+        *) fail "h: the refusal must name the exact repair (offset $keep_bytes + file): $FIXTURE_OUTPUT" ;;
         esac
         # The named remedy heals the store, and the rows before the tear
         # survive it: run it and read the set back.
@@ -365,8 +378,7 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         [ "$FIXTURE_RC" -ne 0 ] || fail "h: the store must stay broken until repaired"
         [ "$(md5sum <"$state/kv/kv.jsonl")" = "$before" ] \
             || fail "h: a refusal must never rewrite the store"
-        truncate -s "$(printf '%s\n' '{"op":"set","key":"set:alpha","value":"kv-pkg"}' | wc -c)" \
-            "$state/kv/kv.jsonl"
+        truncate -s "$keep_bytes" "$state/kv/kv.jsonl"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
             -U "$fixture/h/tmpl/PKGBUILD" --dry-run
         # The heal is proven by the store no longer being the refusal: this
@@ -380,8 +392,7 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         esac
         # A complete-but-unparseable line is NOT offered that repair: the
         # truncation would delete a row that is still data.
-        printf '{"op":"set","key":"set:alpha","value":"kv-pkg"}\n{not json\n' \
-            >"$state/kv/kv.jsonl"
+        printf '%s\n{not json\n' "$complete" >"$state/kv/kv.jsonl"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" \
             -U "$fixture/h/tmpl/PKGBUILD" --dry-run
         [ "$FIXTURE_RC" -eq 3 ] \
