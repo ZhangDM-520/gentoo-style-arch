@@ -241,6 +241,43 @@ if [ -z "$only" ] || [ "$only" = b ]; then
                 || fail "b: the recipe section lost '$probe': $FIXTURE_OUTPUT"
         done
 
+        # A split recipe's `Depends On` is THAT OUTPUT's own list. The
+        # flattened .SRCINFO view concatenates every section, so all four
+        # outputs printed one union belonging to none of them — `libportal-gtk3`
+        # showed `gtk4`/`qt6-base`, and `glib2-git` listed itself through its
+        # sibling `glib2-devel-git`'s row (which is the one real reader of this
+        # field: "what does THIS output need before I touch it?").
+        add_package "$ws" split "pkgver=1.0.0
+pkgrel=1
+arch=(x86_64)"
+        cat >"$ws/packages/split/.SRCINFO" <<'SRCINFO'
+pkgbase = split
+	pkgver = 1.0.0
+	pkgrel = 1
+	arch = x86_64
+	depends = glib2
+pkgname = split
+	depends = baseonly
+pkgname = split-gtk3
+	depends = gtk3
+pkgname = split-qt6
+	depends = qt6-base
+SRCINFO
+        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qi split
+        [ "$FIXTURE_RC" -eq 0 ] \
+            || fail "b: -Qi split rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+        flat=$(tr -s ' ' <<<"$FIXTURE_OUTPUT")
+        # One block per output, in .SRCINFO order, each with its own row.
+        for want in 'Depends On : glib2, baseonly' \
+            'Depends On : glib2, gtk3' 'Depends On : glib2, qt6-base'; do
+            grep -Fx -- "$want" <<<"$flat" >/dev/null \
+                || fail "b: a split output's own depends row is missing ('$want'): $FIXTURE_OUTPUT"
+        done
+        # …and the union is gone: no output may claim a sibling's dependency.
+        count=$(grep -Ec '^Depends On :' <<<"$flat")
+        [ "$count" -eq 3 ] \
+            || fail "b: expected one Depends On per output (3), got $count: $FIXTURE_OUTPUT"
+
         # An INSTALLED name no recipe owns resolves to its pacman fields:
         # `-Q` lists `loose`, and `-Qi loose` used to answer "unknown
         # reference (nearest candidates: foo)" (blind review, 2026-11-11).

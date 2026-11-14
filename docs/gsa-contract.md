@@ -659,6 +659,16 @@ body is a lie. `gsa --print-conf <family>` prints the body verbatim (§D.1), so
 `gsa-pm` installs `/etc/gsa/<family>-makepkg.conf` from the binary it just
 built.
 
+A `BUILDENV` option is a REQUEST the host must be able to honour — makepkg
+aborts the lane before `build()` when `ccache` is asked for and the binary is
+absent (`executable/ccache.sh`) — while `gsa-pm` depends on neither ccache nor
+fakeroot. ccache is a performance option (a second object cache), never a
+correctness one, so the composite degrades it instead of killing the build:
+its last statement rewrites `BUILDENV` to `!ccache` when the binary is not on
+`PATH`. It runs AFTER every site file, so a site body may ask for ccache and a
+host that can honour it still gets it; `!check` stays deliberate (a recipe's
+`check()` probes upstream test suites the build does not want installed).
+
 **Compiler selection.** `--toolchain gcc|clang` beats a record's
 `toolchain=<family>` tag, which beats the PKGBUILD inference (explicit driver
 markers only: `CC=clang`, `CXX=clang++`, `-DCMAKE_C_COMPILER=clang`, … — a

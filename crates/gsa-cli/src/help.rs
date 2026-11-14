@@ -69,8 +69,8 @@ and a root shell without a build user is refused with guidance.",
     Section {
         head: "Output modes (run families -S/-B/-U/-M; the default follows the terminal — a capture is a machine):",
         blocks: &[
-            ("--machine", "leveled machine lines — `INFO|WARNING|ERROR event k=v …`, direct-action fields (the default when stdout is captured); row vocabularies and the `format: 2` run record are identical in both modes"),
-            ("-Q*, -Sl, -Ml", "already one stable row vocabulary: no event stream, so --machine changes nothing (a capture reads the same rows)"),
+            ("--machine", "leveled machine lines — `LEVEL event k=v …` (LEVEL is INFO, WARNING or ERROR), direct-action fields (the default when stdout is captured); row vocabularies and the `format: 2` run record are identical in both modes"),
+            ("-Q*, -Sl, -Ml", "already one stable row vocabulary on stdout: no event stream, so --machine changes nothing (a capture reads the same rows). A stderr note can still announce an ANSWERED range clamp (§C.3) — that note is prose about the request, never a row, so parse stdout alone"),
         ],
     },
     Section {

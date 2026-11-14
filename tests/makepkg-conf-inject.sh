@@ -316,4 +316,55 @@ for family in gcc clang; do
         fail "H: --print-conf $family differs from the embedded body" "$printed"
 done
 
+# ── J. a buildenv the host cannot honour is not forced onto it ──────────────
+# `BUILDENV=(… ccache …)` makes makepkg hard-require the ccache binary
+# (libmakepkg executable/ccache.sh: "Cannot find the ccache binary required for
+# compiler cache usage") and the lane dies before build() ever runs. The
+# built-in body asked for ccache unconditionally while `gsa-pm` declares only
+# `gcc-libs glibc`, so a host following the shipped material had no working
+# build at all and nothing named the undeclared prerequisite.
+#
+# ccache is a PERFORMANCE option (a second object cache), never a correctness
+# one, so an absent binary degrades the option instead of aborting the lane.
+read_buildenv() {
+    # source the composite exactly as makepkg does, under $1 as PATH
+    PATH="$1" bash --noprofile --norc -c '
+      set +u
+      source "$1" >/dev/null 2>&1
+      printf %s "${BUILDENV[*]}"
+    ' _ "$composite"
+}
+
+# Positive control: a host that HAS ccache still gets the option, so the
+# section cannot pass by deleting the feature.
+ccache_bin=$(command -v ccache 2>/dev/null || true)
+if [ -n "$ccache_bin" ]; then
+    buildenv_here=$(read_buildenv "$PATH")
+    vgrep "$buildenv_here" -Fq -- '!ccache' &&
+        fail "J: an installed ccache was refused: $buildenv_here"
+    vgrep "$buildenv_here" -Fq -- 'ccache' ||
+        fail "J: the composite stopped naming ccache at all: $buildenv_here"
+else
+    printf 'makepkg-conf-inject: SKIP section J positive control (ccache not installed)\n' >&2
+fi
+
+# The degrade half: a PATH without ccache must ask makepkg for `!ccache`. The
+# mask keeps every tool the composite needs, so an empty result means "the
+# composite could not be sourced", not "the option went away".
+masked="$fixture/noccache-path"
+mkdir -p "$masked"
+for tool in bash sh sed grep awk tr cut mktemp sha256sum readlink dirname cat uname; do
+    target=$(command -v "$tool" 2>/dev/null) || continue
+    ln -sf "$target" "$masked/$tool"
+done
+buildenv_masked=$(read_buildenv "$masked")
+[ -n "$buildenv_masked" ] || fail 'J: the composite is not sourceable without ccache on PATH'
+vgrep "$buildenv_masked" -Fq -- '!ccache' ||
+    fail "J: a host with no ccache is still asked for one: $buildenv_masked"
+# The rest of the line is untouched: this is a one-option degrade.
+for word in '!distcc' color '!check' '!sign'; do
+    grep -Fq -- "$word" < <(printf '%s\n' "$buildenv_masked" | tr ' ' '\n') ||
+        fail "J: the degrade dropped '$word' from BUILDENV: $buildenv_masked"
+done
+
 printf 'makepkg-conf-inject: PASS (argv, layering, no host config, engine paths, per-family files, exported RUSTFLAGS, compiler acceptance, --print-conf)\n'

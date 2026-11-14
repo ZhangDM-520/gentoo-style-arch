@@ -431,7 +431,23 @@ pub fn render_package_info(
         out.push('\n');
         out.push_str(&f("Licenses", &multi("license", |i| i.license.clone())));
         out.push('\n');
-        out.push_str(&f("Depends On", &multi("depends", |i| i.depends.clone())));
+        // Depends On is the OUTPUT's own list where the committed `.SRCINFO`
+        // can answer it: the flattened view concatenates every section, so a
+        // split recipe's four outputs all printed one union that belonged to
+        // none of them (`libportal-gtk3` listed `gtk4` and `qt6-base`, and
+        // `glib2-git` listed itself through its sibling's row). The pkgbase
+        // section still merges into every output, exactly as makepkg does.
+        let per_output_depends = ctx
+            .db
+            .srcinfo_rows_for(&record.id)
+            .map(|rows| rows.deps_of(pkgname));
+        out.push_str(&f(
+            "Depends On",
+            &match per_output_depends {
+                Some(deps) => join_list(&deps),
+                None => multi("depends", |i| i.depends.clone()),
+            },
+        ));
         out.push('\n');
         out.push_str(&f(
             "Make Depends On",

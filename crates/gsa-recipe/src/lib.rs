@@ -304,6 +304,22 @@ impl SrcinfoRows {
             self.pkgnames.clone()
         }
     }
+
+    /// One output's OWN dependency rows, exactly as makepkg resolves them: the
+    /// pkgbase section's list (which makepkg merges into every output) followed
+    /// by that output's own `pkgname` section — never a SIBLING's. The flattened
+    /// [`Srcinfo`] concatenates every section, so it cannot answer this: a
+    /// split recipe's four outputs all read as one 25-item union that belongs to
+    /// none of them (`libportal-gtk3` listing `gtk4` and `qt6-base`).
+    pub fn deps_of(&self, output: &str) -> Vec<String> {
+        self.deps
+            .iter()
+            .filter(|(field, handle, _)| {
+                field == "depends" && (handle.is_empty() || handle == output)
+            })
+            .map(|(_, _, value)| value.clone())
+            .collect()
+    }
 }
 
 /// Parse committed `.SRCINFO` into section-tagged rows ([`SrcinfoRows`]).
@@ -881,6 +897,7 @@ pub struct RecipeDb {
     pub order: Vec<RecipeId>,
     pkgname_index: BTreeMap<String, Vec<RecipeId>>,
     scans: RefCell<HashMap<RecipeId, Rc<PkgbuildScan>>>,
+    rows: RefCell<HashMap<RecipeId, Option<Rc<SrcinfoRows>>>>,
 }
 
 impl RecipeDb {
@@ -894,6 +911,7 @@ impl RecipeDb {
             order: Vec::new(),
             pkgname_index: BTreeMap::new(),
             scans: RefCell::new(HashMap::new()),
+            rows: RefCell::new(HashMap::new()),
         };
         for record in records {
             let dir = root.join(&record.path);
@@ -959,6 +977,28 @@ impl RecipeDb {
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
+    }
+
+    /// One output's OWN dependency rows from the committed `.SRCINFO`
+    /// (section-tagged — [`SrcinfoRows::deps_of`]). `None` when the recipe
+    /// carries no committed `.SRCINFO` or it no longer parses: the caller's
+    /// reader then falls back to the flat view rather than guessing sections.
+    /// Loaded on first use; read-only.
+    pub fn srcinfo_rows_for(&self, id: &RecipeId) -> Option<Rc<SrcinfoRows>> {
+        if let Some(rows) = self.rows.borrow().get(id) {
+            return rows.clone();
+        }
+        let meta = self.metas.get(id.as_str())?;
+        if meta.source != MetaSource::Srcinfo {
+            return None;
+        }
+        let path = self.root.join(&meta.path).join(".SRCINFO");
+        let parsed = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| parse_srcinfo_rows(&content, &meta.path).ok())
+            .map(Rc::new);
+        self.rows.borrow_mut().insert(id.clone(), parsed.clone());
+        parsed
     }
 
     /// The cached `PKGBUILD` scan of one recipe (for facts `.SRCINFO` does

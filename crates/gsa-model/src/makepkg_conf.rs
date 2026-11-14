@@ -326,6 +326,16 @@ NINJAFLAGS=\"${GSA_LANE_NINJAFLAGS:-$NINJAFLAGS}\"
 # assignment left it invisible to them — the budget bound Make only (blind
 # review, 2026-11-11).
 export RUSTFLAGS NINJAFLAGS
+# A BUILDENV option is a REQUEST the host must be able to honour: makepkg
+# aborts the lane when `ccache` is asked for and the binary is missing
+# (libmakepkg executable/ccache.sh), while `gsa-pm` depends on neither. ccache
+# is a performance option — a second object cache — never a correctness one,
+# so its absence degrades the request instead of killing every build with a
+# message about an undeclared prerequisite. Site bodies may still ask for it;
+# this runs last, so the built-in floor and a site override are both honoured.
+if ! command -v ccache >/dev/null 2>&1; then
+    BUILDENV=(\"${BUILDENV[@]/#ccache/!ccache}\")
+fi
 ",
     );
     // The caller's appended flags go LAST, after every site body and the
@@ -526,7 +536,18 @@ mod render_tests {
         // NINJAFLAGS is the lane job count's other home: `ninja`/`cmake
         // --build`/`meson compile` read it from the environment, and makepkg
         // exports only its buildenv list (blind review, 2026-11-11).
-        assert!(body.ends_with("export RUSTFLAGS NINJAFLAGS\n"), "{body}");
+        // The BUILDENV guard follows it: a `ccache` request the host cannot
+        // honour must be degraded LAST, after every site file, so a site body
+        // that asks for it is honoured where the binary exists.
+        let guard = body
+            .find("\nif ! command -v ccache")
+            .expect("the composite degrades an unhonourable ccache");
+        assert!(export < guard, "{body}");
+        assert!(body.ends_with("fi\n"), "{body}");
+        assert!(
+            body.contains("BUILDENV=(\"${BUILDENV[@]/#ccache/!ccache}\")"),
+            "{body}"
+        );
     }
 
     #[test]

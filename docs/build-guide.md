@@ -704,7 +704,14 @@ lane and `--verifysource` fetch alike — carries
 built-in universal body, the built-in per-compiler body, then the site files
 (baseline before the user clone), then the engine's own
 `BUILDDIR`/`PKGDIR`/`PKGDEST`/`SRCDEST` and lane job flags, and finally the
-caller's appended flags. `extra_cflags`/`extra_ldflags` are the lever to
+caller's appended flags. A `BUILDENV` option must be one the host can honour: the composite's last
+statement asks makepkg for `!ccache` when no `ccache` is on `PATH`, because
+makepkg aborts the lane before `build()` when the binary is missing and ccache
+is only a performance cache. `gsa-pm` therefore builds on a host that has just
+`gcc` and `makepkg`; a site body that wants ccache still gets it where the
+binary exists.
+
+`extra_cflags`/`extra_ldflags` are the lever to
 EXTEND the shipped flags from `gsa.conf` (e.g.
 `extra_cflags = -fstack-clash-protection`): they emit `CFLAGS+=`,
 `CXXFLAGS+=` and `LDFLAGS+=`, so a site body's base survives, and the

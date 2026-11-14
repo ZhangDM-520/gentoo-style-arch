@@ -542,6 +542,25 @@ EOF
             fail "--help must hide the $seam seam (§D.1)"
         fi
     done
+    # The documented machine-line separator IS the emitted one. The roster used
+    # to advertise `INFO|WARNING|ERROR event k=v` while `output::kv_line` emits
+    # `LEVEL event k=v` with a SPACE, so a parser written to the only
+    # documentation of the format read one field per line and classified every
+    # event as unknown — a quiet zero, not an error (§L.9).
+    printf '%s\n' "$help" | grep -F -- 'INFO|WARNING' >/dev/null &&
+        fail "--help documents a pipe between level and event: the emitted separator is a space"
+    printf '%s\n' "$help" | grep -F -- 'LEVEL event k=v' >/dev/null ||
+        fail "--help does not document the machine line as 'LEVEL event k=v'"
+    # A row-only verb's doc may not claim a SILENT stderr: `-Sl` answers an
+    # out-of-range clamp with a note on stderr (§C.3 — the clamp is deliberate
+    # and the note is how it stops being a silent shrink), so the categorical
+    # "no event stream" sent a `2>&1` parser after interleaved `INFO note`
+    # lines. The doc names stdout as the row channel and the note as prose.
+    # (the help renderer WRAPS, so match the words separately, never a phrase)
+    for needle in 'stable row vocabulary on stdout' 'stderr' 'range clamp'; do
+        printf '%s\n' "$help" | grep -F -- "$needle" >/dev/null ||
+            fail "--help claims a silent stderr for the row-only verbs (missing '$needle'): -Sl announces range clamps there"
+    done
 )
 
 # ─── 6. --stale-lock-check: probe only, never deletes db.lck (§D.1) ─────────
