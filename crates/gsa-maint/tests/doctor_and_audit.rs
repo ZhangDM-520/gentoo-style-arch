@@ -231,6 +231,18 @@ fn audit_report_is_read_only_and_renders_row_grammar() {
                 .any(|r| r.subject == "stale-artifact" && r.reason == "lane-result"),
             "the stale run artifact is named"
         );
+        // The report accounts for itself: the `audit total` row's count is the
+        // number of finding rows, so a reader never has to count lines.
+        let total = rows
+            .iter()
+            .find(|r| r.subject == "audit" && r.action == "total")
+            .expect("the report carries a total row");
+        let findings = rows.iter().filter(|r| r.subject != "audit").count();
+        assert_eq!(
+            total.reason,
+            format!("{findings} finding(s)"),
+            "the total must equal the finding rows: {rows:?}"
+        );
     });
     assert_eq!(fx.snapshot(), before, "the audit never mutates the tree");
 }

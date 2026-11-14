@@ -545,7 +545,7 @@ The `-M` family is engine-state self-healing only — it never touches `/usr` or
 
 | Verb | Action |
 | --- | --- |
-| `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, recipe-contract lints, installed PGO payload report. Report-only: exit 0, read the report |
+| `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a non-signature remote source pinned `SKIP`), `state-integrity`, and a closing `audit total` row counting every finding. Report-only: exit 0, read the report |
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation (logs, stale lane/run artifacts, binpkg index `sha256+size` consistency, side-car rows with no pacman counterpart); `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure of the target `pacman.conf` (`--config PATH`, default `/etc/pacman.conf`): default reports drift, `--prune` removes stale entries, `--backfill` adds missing names the workspace BUILT (never-built declared names are skipped — they would pin a stock package) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune. The live `logs/<pkg>.log` holds one run: a lane start rotates the previous generation to `.log.1` |

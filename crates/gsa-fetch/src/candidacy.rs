@@ -42,21 +42,11 @@ impl FetchCandidacy {
 }
 
 /// The download name makepkg uses for one source entry: the `name::` alias
-/// when present, else the URL basename without query/fragment.
+/// when present, else the URL basename without query/fragment. ONE derivation
+/// — `gsa_recipe::freshness::source_name`, which the engine's own signature
+/// test reads too.
 pub fn source_filename(source: &gsa_recipe::ClassifiedSource) -> String {
-    if let Some(name) = &source.name {
-        return name.clone();
-    }
-    let location = source
-        .location
-        .split_once('?')
-        .map(|(before, _)| before)
-        .unwrap_or(&source.location);
-    let location = location
-        .split_once('#')
-        .map(|(before, _)| before)
-        .unwrap_or(location);
-    location.rsplit('/').next().unwrap_or(location).to_string()
+    gsa_recipe::freshness::source_name(source)
 }
 
 /// Classify one recipe's sources (contract §D owner decision 3: the
@@ -149,5 +139,16 @@ mod tests {
             source_filename(&gsa_recipe::classify_source("git+https://h/a/b.git#tag")),
             "b.git"
         );
+    }
+
+    /// `git-lfs+` is a git checkout (makepkg rewrites it to `git+` and clones,
+    /// then pulls the LFS objects), so a `git-lfs`-only recipe is VCS-only for
+    /// fetch-ahead and never a plain download candidate (R2-juno-3, blender-git).
+    #[test]
+    fn git_lfs_sources_are_vcs_not_plain_downloads() {
+        let meta = meta_from_srcinfo(
+            "pkgbase = pkg\npkgname = pkg\nsource = body::git-lfs+https://example.com/b.git\n",
+        );
+        assert_eq!(classify(&meta), FetchCandidacy::VcsOnly);
     }
 }

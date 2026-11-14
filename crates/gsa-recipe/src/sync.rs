@@ -238,13 +238,8 @@ impl SourceEntry {
         } else {
             url_basename(self.url()?)?
         };
-        if name.is_empty() {
+        if name.is_empty() || crate::freshness::is_signature_filename(&name) {
             return None;
-        }
-        for suffix in [".sig", ".asc", ".signature", ".sign"] {
-            if name.ends_with(suffix) {
-                return None;
-            }
         }
         Some(name)
     }

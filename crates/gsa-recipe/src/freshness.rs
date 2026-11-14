@@ -732,10 +732,14 @@ pub fn source_url(entry: &str) -> Option<&str> {
 /// git checkout exactly like `git+https://`, and `https://` is a plain
 /// download. ONE derivation — `classify_source` calls this too, because the
 /// two used to disagree on the bare-scheme spelling.
+///
+/// `git-lfs+https://` is a git checkout too: makepkg's `download_git-lfs`
+/// rewrites it to `git+` and clones (then pulls the LFS objects), so its
+/// `SKIP` sum is the normal VCS spelling, never an unanchored one.
 pub fn scheme_vcs(url: &str) -> Option<VcsKind> {
     let scheme = url.split_once("://")?.0;
     match scheme.split('+').next()? {
-        "git" => Some(VcsKind::Git),
+        "git" | "git-lfs" => Some(VcsKind::Git),
         "svn" => Some(VcsKind::Svn),
         "hg" => Some(VcsKind::Hg),
         "bzr" => Some(VcsKind::Bzr),
@@ -751,32 +755,63 @@ pub fn source_vcs(entry: &str) -> Option<VcsKind> {
     scheme_vcs(source_url(entry)?)
 }
 
+/// The detached-signature suffixes makepkg names a source with: it writes
+/// `SKIP` for those BY DESIGN and gpg-verifies them against the payload and
+/// `validpgpkeys`, so such an entry is neither a downloadable source nor an
+/// unanchored sum. ONE list, consulted by every signature test in the tree
+/// (`sync::anchor_sums` states the same rule for anchoring).
+pub fn is_signature_filename(name: &str) -> bool {
+    [".sig", ".asc", ".signature", ".sign"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
+
+/// The URL basename after `?#`/trailing-slash stripping — the name makepkg
+/// gives a source entry that carries no `name::` override. ONE derivation,
+/// shared by [`source_filename`] and [`source_name`].
+fn url_basename_of(url: &str) -> String {
+    let url = match url.find(['?', '#']) {
+        Some(idx) => &url[..idx],
+        None => url,
+    };
+    let url = url.trim_end_matches('/');
+    match url.rfind('/') {
+        Some(idx) => url[idx + 1..].to_string(),
+        None => url.to_string(),
+    }
+}
+
+/// The name makepkg gives a CLASSIFIED source: its `name::` alias, else the
+/// URL basename. The fetch-ahead and prune seams name files by this, and the
+/// signature test reads it, so the rule is stated once here.
+pub fn source_name(source: &crate::ClassifiedSource) -> String {
+    match &source.name {
+        Some(name) => name.clone(),
+        None => match source_url(&source.location) {
+            Some(url) => url_basename_of(url),
+            None => source.location.clone(),
+        },
+    }
+}
+
+/// Whether a classified source is a detached signature, judged by the name
+/// makepkg gives it — so an alias (`body.sig::https://…`) is judged by the
+/// alias exactly as makepkg judges it.
+pub fn is_signature_source(source: &crate::ClassifiedSource) -> bool {
+    is_signature_filename(&source_name(source))
+}
+
 /// The name makepkg gives one source entry: the `name::` override (up to the
 /// FIRST `::`), otherwise the URL basename after `?#`/trailing-slash
 /// stripping. `None` for a detached-signature entry (makepkg writes SKIP for
 /// those) or an empty name — neither is a downloadable source.
 pub fn source_filename(entry: &str) -> Option<String> {
-    let name = if entry.contains("::") {
-        entry.split("::").next().unwrap_or("").to_string()
-    } else {
-        let url = source_url(entry)?;
-        let url = match url.find(['?', '#']) {
-            Some(idx) => &url[..idx],
-            None => url,
-        };
-        let url = url.trim_end_matches('/');
-        match url.rfind('/') {
-            Some(idx) => url[idx + 1..].to_string(),
-            None => url.to_string(),
-        }
+    let name = match entry.split_once("::") {
+        Some((prefix, _)) => prefix.to_string(),
+        None => url_basename_of(source_url(entry)?),
     };
-    if name.is_empty() {
+    if name.is_empty() || is_signature_filename(&name) {
         return None;
-    }
-    for suffix in [".sig", ".asc", ".signature", ".sign"] {
-        if name.ends_with(suffix) {
-            return None;
-        }
     }
     Some(name)
 }
@@ -830,8 +865,11 @@ pub struct VcsRef {
 pub fn vcs_source_ref_info(entry: &str) -> Option<VcsRef> {
     let protocol = source_vcs(entry)?;
     let raw = source_url(entry)?;
+    // `git-lfs+` is a git transport (makepkg rewrites it to `git+` before
+    // cloning), so it strips exactly like the other VCS prefixes.
     let raw = raw
-        .strip_prefix("git+")
+        .strip_prefix("git-lfs+")
+        .or_else(|| raw.strip_prefix("git+"))
         .or_else(|| raw.strip_prefix("svn+"))
         .or_else(|| raw.strip_prefix("hg+"))
         .or_else(|| raw.strip_prefix("bzr+"))
@@ -2689,6 +2727,7 @@ mod source_protocol_tests {
         for (entry, want) in [
             ("git+https://host/x.git", VcsKind::Git),
             ("git://host/x.git", VcsKind::Git),
+            ("git-lfs+https://host/x.git", VcsKind::Git),
             ("alias::git://host/x.git", VcsKind::Git),
             ("svn://host/x", VcsKind::Svn),
             ("hg+https://host/x", VcsKind::Hg),
@@ -2714,5 +2753,47 @@ mod source_protocol_tests {
         assert_eq!(info.url, "git://host/x.git");
         assert_eq!(info.kind, RefKind::Commit);
         assert_eq!(info.value, "abc123");
+    }
+
+    /// makepkg rewrites `git-lfs+` to `git+` and clones, so the ref fragment
+    /// parses exactly as a git one (2026-11-15: blender-git's source).
+    #[test]
+    fn git_lfs_transport_parses_as_git() {
+        let info = vcs_source_ref_info("body::git-lfs+https://host/x.git#commit=abc123").unwrap();
+        assert_eq!(info.protocol, VcsKind::Git);
+        assert_eq!(info.url, "https://host/x.git");
+        assert_eq!(info.kind, RefKind::Commit);
+        assert_eq!(info.value, "abc123");
+        let plain =
+            vcs_source_ref_info("blender::git-lfs+https://host/blender/blender.git").unwrap();
+        assert_eq!(
+            plain,
+            VcsRef {
+                protocol: VcsKind::Git,
+                url: "https://host/blender/blender.git".to_string(),
+                kind: RefKind::Default,
+                value: "-".to_string(),
+            }
+        );
+    }
+
+    /// A detached signature is makepkg's normal `SKIP` spelling, judged by
+    /// the name makepkg gives the entry (alias first).
+    #[test]
+    fn detached_signatures_are_recognised_by_their_name() {
+        for (entry, want) in [
+            ("https://host/x.tar.gz.sig", true),
+            ("https://host/x.tar.gz.asc", true),
+            ("https://host/x.asc?download=1", true),
+            ("body.sig::https://host/sig?id=1", true),
+            ("https://host/x.tar.gz", false),
+            ("x.patch", false),
+        ] {
+            assert_eq!(
+                is_signature_source(&crate::classify_source(entry)),
+                want,
+                "{entry}"
+            );
+        }
     }
 }

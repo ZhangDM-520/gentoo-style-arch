@@ -786,7 +786,9 @@ impl RecipeMeta {
     /// The REMOTE sources whose integrity sum is `SKIP` (makepkg's
     /// `sha256sums=(SKIP)` and friends): fetched, never verified. A VCS
     /// source with `SKIP` is the normal spelling and is not listed — its
-    /// ref, not a sum, is the anchor.
+    /// ref, not a sum, is the anchor — and neither is a detached signature
+    /// (`is_signature_source`): makepkg writes `SKIP` for those by design
+    /// and gpg-verifies them against the payload.
     ///
     /// The sum lists are consumed the way makepkg consumes them: the first
     /// sum family present in declaration order, indexed by source position.
@@ -842,6 +844,13 @@ impl RecipeMeta {
         let mut out = Vec::new();
         for (index, source) in sources.iter().enumerate() {
             if source.kind != SourceKind::Remote {
+                continue;
+            }
+            // A detached signature is NOT an unanchored sum: makepkg writes
+            // `SKIP` for a `.sig`/`.asc` entry BY DESIGN and gpg-verifies it
+            // against the payload, so reporting it flagged every signed
+            // recipe in the roster (2026-11-15, 115 of 116 findings).
+            if crate::freshness::is_signature_source(source) {
                 continue;
             }
             let Some(list) = sums.as_ref().filter(|list| list.len() == sources.len()) else {
@@ -1290,5 +1299,65 @@ pkgname = zen-browser
         };
         assert!(dyn_meta.pkgnames_checked().is_err());
         assert!(dyn_meta.sources_checked().is_err());
+    }
+
+    /// A detached signature is not an unanchored sum: makepkg writes `SKIP`
+    /// for it by design. And `git-lfs+` is a VCS checkout, so its `SKIP` is
+    /// the normal VCS spelling too — neither belongs in this family
+    /// (2026-11-15: 115 of 116 `-Ma` findings were `.sig` files).
+    #[test]
+    fn unverified_remote_sums_skips_signatures_and_git_lfs() {
+        let info = parse_srcinfo(
+            "pkgbase = a\n\tpkgver = 1.0\n\tpkgrel = 1\n\
+             \tsource = https://example.com/a.tar.gz\n\
+             \tsource = https://example.com/a.tar.gz.sig\n\
+             \tsha256sums = deadbeef\n\tsha256sums = SKIP\n",
+            ".SRCINFO",
+        )
+        .unwrap();
+        let meta = RecipeMeta {
+            id: RecipeId::new("a").unwrap(),
+            path: "packages/stable/a".to_string(),
+            srcinfo: Some(info),
+            scanned: None,
+            source: MetaSource::Srcinfo,
+        };
+        assert_eq!(meta.unverified_remote_sums(), Vec::<String>::new());
+
+        // An aliased signature is judged by the alias, exactly as makepkg
+        // names it.
+        let aliased = parse_srcinfo(
+            "pkgbase = b\n\tpkgver = 1.0\n\tpkgrel = 1\n\
+             \tsource = https://example.com/b.tar.gz\n\
+             \tsource = b.tar.gz.sig::https://example.com/sig?id=9\n\
+             \tsha256sums = deadbeef\n\tsha256sums = SKIP\n",
+            ".SRCINFO",
+        )
+        .unwrap();
+        let aliased = RecipeMeta {
+            id: RecipeId::new("b").unwrap(),
+            path: "packages/stable/b".to_string(),
+            srcinfo: Some(aliased),
+            scanned: None,
+            source: MetaSource::Srcinfo,
+        };
+        assert_eq!(aliased.unverified_remote_sums(), Vec::<String>::new());
+
+        let lfs = parse_srcinfo(
+            "pkgbase = c\n\tpkgver = 1.0\n\tpkgrel = 1\n\
+             \tsource = body::git-lfs+https://example.com/c.git\n\
+             \tsha256sums = SKIP\n",
+            ".SRCINFO",
+        )
+        .unwrap();
+        let lfs = RecipeMeta {
+            id: RecipeId::new("c").unwrap(),
+            path: "packages/stable/c".to_string(),
+            srcinfo: Some(lfs),
+            scanned: None,
+            source: MetaSource::Srcinfo,
+        };
+        assert_eq!(lfs.sources()[0].kind, SourceKind::Vcs(VcsKind::Git));
+        assert_eq!(lfs.unverified_remote_sums(), Vec::<String>::new());
     }
 }

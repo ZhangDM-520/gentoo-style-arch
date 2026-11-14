@@ -26,7 +26,8 @@
 //!    carrying a baked profiling destination (`.gcda`/`.profraw` bytes).
 //! 8. `recipe-integrity` — source claims the recipe cannot honour: a declared
 //!    local source absent from the recipe directory, and a REMOTE source
-//!    whose integrity sum is `SKIP` (fetched, never verified).
+//!    whose integrity sum is `SKIP` (fetched, never verified). A detached
+//!    signature's `SKIP` is makepkg's normal spelling and is never a finding.
 //! 9. `state-integrity` — the side-car's own truth (rule 71): unusable lines
 //!    in the binpkg index, the run history and the kv store, plus every index
 //!    row whose archive is gone, unreadable or no longer the recorded size.
@@ -347,9 +348,34 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
 
     let recipe_integrity = recipe_integrity(ctx);
     push_family(&mut rows, "recipe-integrity", recipe_integrity);
+    // What the family MEANS. A wrong-but-present sum is not its question: an
+    // unverified-sums finding says the local declaration anchors nothing, and
+    // comparing a present sum against upstream is the version-sync pass's job
+    // (2026-11-15, the family read as "your sums are wrong").
+    rows.push(Row::new(
+        "audit",
+        "recipe-integrity",
+        "scope=declared-sources-only — an absent local source, and a REMOTE \
+         non-signature source pinned SKIP; a present sum's agreement with \
+         upstream is the version-sync pass's question",
+    ));
 
     let integrity = state_integrity(ctx);
     push_family(&mut rows, "state-integrity", integrity);
+
+    // The report's own accounting: a reader should not have to count lines to
+    // learn how much the run found (R2-juno-3). Family summaries and their
+    // scope rows are subject `audit`; every other row is a finding.
+    let total = rows.iter().filter(|row| row.subject != "audit").count();
+    rows.push(Row::new(
+        "audit",
+        "total",
+        if total == 0 {
+            "clean".to_string()
+        } else {
+            format!("{total} finding(s)")
+        },
+    ));
 
     rows
 }

@@ -80,7 +80,11 @@ set -euo pipefail
 #      run-in-flight).
 #   m. `-Ma`'s `recipe-integrity` family names the source claims a recipe
 #      cannot honour: a declared local source absent from the recipe dir and
-#      a REMOTE source pinned `SKIP` (a clean audit must not bless either).
+#      a REMOTE non-signature source pinned `SKIP` (a clean audit must not
+#      bless either), while a detached signature's `SKIP` and a `git-lfs+`
+#      transport are NEVER findings (R2-juno-3). The family prints a
+#      `scope=` row saying what it means, and the report closes with an
+#      `audit total` row whose count is the number of finding rows.
 #   k. side-car integrity (rule 71): a truncated `runs/history.jsonl` is
 #      named by `-Mh` (and `--show` refuses rather than renumbering), a
 #      truncated `index/binpkg.jsonl` makes `-Qb` refuse, and `-Ma`'s
@@ -1509,6 +1513,11 @@ if want m; then
         add_package "$ws" abslocal "$gsa_meta_any"$'\nsource=(absent.patch)'
         add_package "$ws" skipsum "$gsa_meta_any"$'\nsource=(https://example.invalid/s-1.0.0.tar.gz)\nsha256sums=(SKIP)'
         add_package "$ws" vcsskip "$gsa_meta_any"$'\nsource=(git+https://example.invalid/v.git)\nsha256sums=(SKIP)'
+        # A detached signature is makepkg's normal `SKIP` spelling (gpg
+        # verifies it against the payload), and `git-lfs+` is a git
+        # checkout — neither is an unverified sum (R2-juno-3).
+        add_package "$ws" sigskip "$gsa_meta_any"$'\nsource=(https://example.invalid/g-1.0.0.tar.gz https://example.invalid/g-1.0.0.tar.gz.sig)\nsha256sums=(deadbeef SKIP)'
+        add_package "$ws" gitlfsskip "$gsa_meta_any"$'\nsource=(body::git-lfs+https://example.invalid/b.git)\nsha256sums=(SKIP)'
 
         run_engine "$ws" -Ma --state-dir "$state"
         [ "$FIXTURE_RC" = 0 ] || fail "m: -Ma is report-only rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -1519,10 +1528,22 @@ if want m; then
         grep -E '^recipe-integrity +skipsum +unverified-sums' <<<"$FIXTURE_OUTPUT" >/dev/null \
             || fail "m: the SKIP-sum remote source must be named: $FIXTURE_OUTPUT"
         # A VCS source with SKIP is the normal spelling: never a finding, and
-        # a plain verified source is clean.
-        if grep -E '^recipe-integrity +(vcsskip|good) ' <<<"$FIXTURE_OUTPUT"; then
-            fail "m: a VCS SKIP sum or a verified remote source is not a finding: $FIXTURE_OUTPUT"
+        # a plain verified source is clean. A detached signature's SKIP and a
+        # `git-lfs+` transport are not findings either (R2-juno-3).
+        if grep -E '^recipe-integrity +(vcsskip|good|sigskip|gitlfsskip) ' <<<"$FIXTURE_OUTPUT"; then
+            fail "m: a VCS/signature SKIP sum or a verified remote source is not a finding: $FIXTURE_OUTPUT"
         fi
+        # The family says what it means: a wrong-but-present sum is not its
+        # question — upstream comparison belongs to the version-sync pass.
+        grep -E '^audit +recipe-integrity +scope=.*version-sync' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "m: -Ma must state the recipe-integrity family's scope: $FIXTURE_OUTPUT"
+        # The report accounts for itself: one total row whose count is the
+        # number of finding rows, so a reader never counts lines (R2-juno-3).
+        total=$(sed -nE 's/^audit +total +([0-9]+) finding\(s\)$/\1/p' <<<"$FIXTURE_OUTPUT")
+        [ -n "$total" ] || fail "m: -Ma must print a total finding count: $FIXTURE_OUTPUT"
+        findings=$(grep -vcE '^audit ' <<<"$FIXTURE_OUTPUT" || true)
+        [ "$total" = "$findings" ] \
+            || fail "m: the total row ($total) must equal the finding rows ($findings): $FIXTURE_OUTPUT"
     )
 fi
 
