@@ -1,7 +1,7 @@
 # scratchpad (reset)
 
-No active task. Last: engine deployed — `sudo gsa -S gsa-pm --no-sync` landed
-`gsa-pm 0.1.0+r731+gd8083575ea39-1` (the merged audit), and the battery ran on
-the INSTALLED `/usr/bin/gsa` with no `GSA_TEST_GSA_BIN`, 58/58 PASS twice, so
-the §L.10 pre-install deviation is closed — see `docs/JOURNAL.md` tail and
-`.logs/action-2026-11-14-deploy-engine.md`.
+No active task. Last: docs consolidated — `docs/journals/` and the CLOSED runbook
+removed (content preserved and proven first), `gsa-fixture-migration.md` cut 68%
+with all anchors intact, the four design plans kept on measurement, and 14
+dangling recipe-doc citations fixed — see `docs/JOURNAL.md` tail and
+`.logs/action-2026-11-14-consolidate-docs.md`.
