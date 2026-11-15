@@ -560,6 +560,13 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
   `GIT_CONFIG_COUNT=0` because the mirrors are build-user data read as root —
   without it git's `dubious ownership` guard calls every healthy mirror
   unusable.
+- **A snapshot pin's boundary operand is the newest MAINLINE commit**: a bare
+  `git rev-list -1 --before=<boundary>` walks every merged side history, so a
+  project that merges a sibling repository can be pinned to that sibling's
+  tree — measured on the live `rust` mirror, 25 of 30 boundaries off-mainline
+  and one a `clippy` commit with no `compiler/` at all. `--first-parent` is
+  what makes the operand "a snapshot of THIS project" (contract §B.4;
+  `tests/sync-snapshot.sh` §1c).
 - **A source URL's scheme is makepkg's `get_protocol`, not a `<vcs>+` prefix**:
   the scheme is the text before `://` minus any `+`, so bare `git://` is a git
   checkout exactly like `git+https://`. One derivation —

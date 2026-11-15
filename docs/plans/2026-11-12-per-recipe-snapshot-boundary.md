@@ -4,6 +4,38 @@
 2026-11-12 full-rebuild campaign at the owner's request; deliberately not
 implemented mid-campaign.
 
+**Status amendment (2026-11-15): the weekday remedy is MEASURED AND REJECTED,
+and two premises below were corrected.** A later research pass — plan
+`2026-11-15-snapshot-anchor-spanning.md`, evidence record
+`2026-11-15-snapshot-anchor-spanning-research.md`, both same directory —
+superseded the open questions with measurements. The body below is unchanged
+provenance; this header carries what moved:
+
+1. **The premise "rust-git was cut on 11-02" was stale.** Both live pins are
+   the 11-09 boundary (`llvm 2d12c0df533b`, `rust b5fc745fd7cc`), so the
+   incident was a SAME-INSTANT failure, not a six-day skew. The pair is also
+   already repaired by content: rust-git's
+   `0009-compiler-Update-LLVM-24-targetoptions-call.patch` (upstream
+   `ec4acfa`) takes the broken instant from 1 compile error to 0.
+2. **The weekday remedy — the "Friday checkout" hypothesis this plan left as a
+   candidate — is refuted, not merely untested.** A compile harness (git
+   `rust`'s `PassWrapper.cpp` against `llvm/include`, `g++ -fsyntax-only`,
+   `--first-parent` selection) swept 10 anchored Mondays under three policies:
+   same instant 9 FINE / 1 BROKEN (the 11-09 incident), provider Mon + consumer
+   +2d 9 FINE / 1 BROKEN (break-even — the same week), provider Mon + consumer
+   +4d 8 FINE / 2 BROKEN (09-14, 09-28, both of which the same instant gets
+   right, while 11-09 itself passes). Spanning is never better than the status
+   quo and can be worse, and every asymmetric direction fails on some week, so
+   "which side is earlier" is not the safety axis either — mutual compatibility
+   is, exactly as "What the engine already gives us" argues.
+
+That pass did ship one engine defect found while measuring: the boundary
+operand resolved without `--first-parent`, so `rev-list -1 --before` could pin
+a commit merged in from a sibling history (25 of 30 boundaries off-mainline on
+the live `rust` mirror, one a `clippy` commit with no `compiler/`). That is a
+correctness fix to the existing Monday cadence, not a change to it — contract
+§B.4 carries the amendment and `tests/sync-snapshot.sh` §1c pins it.
+
 Evidence record (claims with re-runnable handles, boundary table, falsification
 log): `2026-11-12-per-recipe-snapshot-boundary-research.md`, same directory.
 Claim ids below (`A*`, `B*`, `C*`) refer to that record.

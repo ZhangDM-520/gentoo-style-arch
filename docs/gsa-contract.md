@@ -218,10 +218,18 @@ anchors, not weekly snapshots), and everything else is `not-a-snapshot` →
 Arch provider → `version-sync=nvchecker` → Arch provider, as before.
 
 - **Evidence, not a query.** The commit is resolved from the recipe's own
-  `SRCDEST/<makepkg name>` bare mirror (`git rev-list -1 --before=<boundary>`
-  over `refs/remotes/origin/<ref>`, then `refs/heads/<ref>`, then bare; the
-  branch is `_snapshot_ref=` when the recipe records it). Nothing is fetched
-  at edit time, and no pin is ever placed from the network.
+  `SRCDEST/<makepkg name>` bare mirror (`git rev-list -1 --first-parent
+  --before=<boundary>` over `refs/remotes/origin/<ref>`, then
+  `refs/heads/<ref>`, then bare; the branch is `_snapshot_ref=` when the
+  recipe records it). Nothing is fetched at edit time, and no pin is ever
+  placed from the network.
+- **The operand is the newest MAINLINE commit at or before the boundary.** The
+  walk carries `--first-parent`, so a commit the mirror merely merged from a
+  sibling history is never a candidate. Without it `rev-list -1 --before`
+  answers the newest commit ANYWHERE in the merged topology: measured on the
+  live `rust` mirror, 25 of 30 boundaries picked off-mainline and one picked a
+  `clippy` commit whose tree has no `compiler/` at all — a pin that is not a
+  snapshot of this project (2026-11-15 amendment; `llvm` was identical 8/8).
 - **The version is the recipe's own `pkgver()`**, evaluated in `$srcdir` at
   the new commit — makepkg's `run_function_safe pkgver` cwd — never a second
   derivation (a central `git describe` would drift from the recipe's
