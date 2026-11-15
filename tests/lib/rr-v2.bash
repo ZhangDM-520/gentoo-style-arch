@@ -680,6 +680,7 @@ GSA_FAKE_LANE_INTERVALS|scheduler-core-solo: START/END timestamp log
 GSA_FAKE_LANE_MARKER|dashboard makepkg stub: lane-child PID log
 GSA_FAKE_MAKEPKG_COUNT|install-archive-guard makepkg stub: invocation counter
 GSA_FAKE_MAKEPKG_LOG|abi-batch makepkg stub: BUILD marker log
+GSA_FAKE_MAKEPKG_RC|host-prerequisite makepkg stub: the exit code a lane must classify
 GSA_FAKE_MKTEMP_FAIL|anchor-defer mktemp stub: fail only the anchor scratch template
 GSA_FAKE_MARKER_DIR|per-package build marker dir
 GSA_FAKE_NO_ARCHIVE|install-archive-guard makepkg stub: build ok, archive absent

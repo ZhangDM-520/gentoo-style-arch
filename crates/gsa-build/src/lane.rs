@@ -7,10 +7,14 @@
 //! Outcome mapping (§F.1): makepkg success → `ok 0`; makepkg exit 99 →
 //! `defer 99 source-unfetchable` (the Phase-2 stand-in for the fetch and
 //! anchoring gates, which land with `gsa-fetch`/version-sync and are the only
-//! other paths allowed to emit deferral); any other exit → `failed 1
-//! build-failed`, and a wait that never delivered an end state tears makepkg
-//! down with one TERM and settles `failed 1 lane-wait-failed` (§K.3 — never
-//! `build-failed`, which claims makepkg failed). The classification reads the
+//! other paths allowed to emit deferral); makepkg's own pre-build gates keep
+//! their cause (`failed 1 dependency-install-failed` for
+//! `E_INSTALL_DEPS_FAILED`, `failed 1 host-prerequisite-missing` for
+//! `E_MISSING_MAKEPKG_DEPS` — the box could not start a build, which is not a
+//! recipe failure); any other exit → `failed 1 build-failed`, and a wait that
+//! never delivered an end state tears makepkg down with one TERM and settles
+//! `failed 1 lane-wait-failed` (§K.3 — never `build-failed`, which claims
+//! makepkg failed). The classification reads the
 //! child's own end state first:
 //! a makepkg killed by a signal carries its cause (HUP/INT/TERM → the lane
 //! codes 129/143/130, §K.3; any other signal → `failed 1
@@ -122,6 +126,17 @@ pub fn classify_build_exit(
                 // The deferral stand-in (see the module docs): the only
                 // Phase-2 path that emits `defer` (§F.1).
                 99 => (LaneOutcome::Defer, "source-unfetchable".to_string()),
+                // makepkg's OWN pre-build gates. `build-failed` claims the
+                // recipe failed to compile, sending the operator into a
+                // rebuild loop for a host fact — these two exits are
+                // makepkg refusing to START (§H.3 additive keys):
+                //   * 8 `E_INSTALL_DEPS_FAILED` — a declared dependency
+                //     could not be resolved or installed from the mirrors;
+                //   * 15 `E_MISSING_MAKEPKG_DEPS` — `check_software` found a
+                //     required host binary absent (the `Cannot find the
+                //     <tool> binary.` line in the package log).
+                8 => (LaneOutcome::Failed, "dependency-install-failed".to_string()),
+                15 => (LaneOutcome::Failed, "host-prerequisite-missing".to_string()),
                 _ => (LaneOutcome::Failed, "build-failed".to_string()),
             },
         },
@@ -583,6 +598,19 @@ mod tests {
             classify_build_exit(ChildExit::Exited(1), 0),
             (LaneOutcome::Failed, "build-failed".to_string())
         );
+        // makepkg's own pre-build gates are NOT recipe failures (R2-maya-2):
+        // exit 15 is `check_software` refusing to start (a host binary is
+        // absent), exit 8 is a dependency that could not be installed. Both
+        // would otherwise read `build-failed` — rc 4, "rebuild it" — for a
+        // build that never ran.
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(15), 0),
+            (LaneOutcome::Failed, "host-prerequisite-missing".to_string())
+        );
+        assert_eq!(
+            classify_build_exit(ChildExit::Exited(8), 0),
+            (LaneOutcome::Failed, "dependency-install-failed".to_string())
+        );
         assert_eq!(
             classify_build_exit(ChildExit::Exited(99), 0),
             (LaneOutcome::Defer, "source-unfetchable".to_string())
@@ -619,6 +647,13 @@ mod tests {
         assert_eq!(
             classify_wait(Ok(std::process::ExitStatus::from_raw(signals::SIGKILL)), 0),
             (LaneOutcome::Failed, "build-killed-by-signal-9".to_string())
+        );
+        // The reaped path must carry makepkg's pre-build gate too: the same
+        // child classified through `classify_wait` may not fall back to
+        // `build-failed` (exit 15 → wait status 15 << 8).
+        assert_eq!(
+            classify_wait(Ok(std::process::ExitStatus::from_raw(15 << 8)), 0),
+            (LaneOutcome::Failed, "host-prerequisite-missing".to_string())
         );
     }
 

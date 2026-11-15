@@ -737,22 +737,24 @@ fn build_reason_key(reason: &str) -> &str {
     reason.split(": ").next().unwrap_or(reason)
 }
 
-/// Run the pre-dispatch pass over one selection, in canonical build order.
-/// `selection` is `select::build_selection`'s answer; `state_dir` gates the
-/// ABI-repair markers. Loud lines land in each [`PackagePrep::log`].
-/// The privileged-PATH hint an absent-compiler refusal owes. A privileged run
-/// inherits `sudo`'s PATH (`secure_path`), so a compiler the operator's own
-/// shell finds outside those directories is invisible to the engine AND to
-/// every lane. Without the hint the message reads "not installed" and sends
-/// the operator to reinstall a compiler that is already there.
-pub(crate) fn secure_path_hint() -> &'static str {
+/// The privileged-PATH hint an absent-tool refusal owes. A privileged run
+/// inherits `sudo`'s PATH (`secure_path`), so a tool the operator's own shell
+/// finds outside those directories is invisible to the engine AND to every
+/// lane. Without the hint the message reads "not installed" and sends the
+/// operator to reinstall something that is already there.
+pub(crate) fn secure_path_hint(what: &str) -> String {
     if gsa_model::privilege::build_user().is_some() {
-        "; a privileged run inherits sudo's PATH (secure_path), so a compiler installed outside those directories is invisible here even when your own shell finds it — install it under /usr/bin or another secure_path directory"
+        format!(
+            "; a privileged run inherits sudo's PATH (secure_path), so a {what} installed outside those directories is invisible here even when your own shell finds it — install it under /usr/bin or another secure_path directory"
+        )
     } else {
-        ""
+        String::new()
     }
 }
 
+/// Run the pre-dispatch pass over one selection, in canonical build order.
+/// `selection` is `select::build_selection`'s answer; `state_dir` gates the
+/// ABI-repair markers. Loud lines land in each [`PackagePrep::log`].
 pub fn prepare_all(
     root: &Path,
     state_dir: &Path,
@@ -832,7 +834,7 @@ fn prepare_one(
         if identity.starts_with(&format!("{toolchain}|{unavailable}|")) {
             log.push(format!(
                 "{name}: the {toolchain} compiler is not installed ({unavailable}) — install it or pick another --toolchain{}",
-                secure_path_hint()
+                secure_path_hint("compiler")
             ));
             return PackagePrep {
                 plan: NodePlan::Refuse {

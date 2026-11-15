@@ -415,7 +415,12 @@ pub fn resolve_probe_scratch() -> PathBuf {
 /// `command -v` semantics for one program name: some `PATH` entry holds a
 /// regular executable file of that name. PATH is resolved here (never an
 /// absolute tool path) so fixtures can stub or withhold tools per test.
-fn on_path(program: &str) -> bool {
+///
+/// Public because it is the ONE PATH lookup the engine has: makepkg's own
+/// prerequisite probe (`gsa_build::prereq`) asks `type -p <tool>` about the
+/// same PATH the compiler probes read, and a second copy of these semantics
+/// is how two answers to one question drift apart.
+pub fn on_path(program: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     let Some(path) = std::env::var_os("PATH") else {

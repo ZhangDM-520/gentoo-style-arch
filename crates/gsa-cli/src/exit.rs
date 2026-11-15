@@ -59,6 +59,11 @@ pub(crate) enum RefusalClass {
     AnchorRefused,
     AbiConsumerUncovered,
     PreflightRefused,
+    /// A build the host cannot start: a binary makepkg's own `check_software`
+    /// requires (`fakeroot`) is absent from the PATH a lane inherits. The
+    /// prose names the tool and its package; the rows carry this key so a
+    /// reader can tell a host fact from a recipe failure (R2-maya-2).
+    HostPrerequisiteMissing,
     /// The operator declined an interactive prompt (`q`, EOF). A dialogue
     /// that ends in NO is a refusal, not a usage error (owner decision
     /// 2026-11-11): the argv was valid, the operator said stop.
@@ -74,6 +79,7 @@ impl RefusalClass {
             RefusalClass::AnchorRefused => "anchor-refused",
             RefusalClass::AbiConsumerUncovered => "abi-consumer-uncovered",
             RefusalClass::PreflightRefused => "preflight-refused",
+            RefusalClass::HostPrerequisiteMissing => "host-prerequisite-missing",
             RefusalClass::PromptDeclined => "prompt-declined",
         }
     }
@@ -87,6 +93,7 @@ impl RefusalClass {
             RefusalClass::AnchorRefused,
             RefusalClass::AbiConsumerUncovered,
             RefusalClass::PreflightRefused,
+            RefusalClass::HostPrerequisiteMissing,
             RefusalClass::PromptDeclined,
         ]
         .into_iter()
@@ -243,6 +250,7 @@ mod tests {
             "anchor-refused",
             "abi-consumer-uncovered",
             "preflight-refused",
+            "host-prerequisite-missing",
         ] {
             let class = RefusalClass::from_key(key).expect("a known class key");
             assert_eq!(class.key(), key);

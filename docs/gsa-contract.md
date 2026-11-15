@@ -1184,7 +1184,7 @@ mapping from lane code to status is total and defined in §H.3.
 | 0 | success | every selected package `succeeded` (including skip reasons); no `failed`, `deferred`, or `parked` row |
 | 1 | build failure under `--fail-fast` | ≥1 `failed` row and dispatch stopped (drain completed) |
 | 2 | usage error | bad flags, unknown reference/typo (with nearest candidates), invalid range, **empty selection** (`selection resolved to no packages`), malformed config record or `gsa.conf` layer (§B.11), a standalone-target refusal (mixed with workspace references, query/report verb, staging failure — §C.1) |
-| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), install refusal (a `refuse` decision row reached execution), confirmation gate (`-Mcc`/`-Mccc`/`-Mm` on a destructive plan without `--noconfirm`: plan printed, `confirmation-required` — §B.7), **the operator declined a prompt** (`q`/EOF at the `@app` or build-dir dialogue; reason `prompt-declined`, §C.4) |
+| 3 | refusal | the run refused to start or aborted at a fail-closed gate: privilege refusal (§B.10 — not root, no build user, or `-Mm` under root), preflight (`sudo cannot install non-interactively`), integrity stop (published checksum mismatch — `docs/build-guide.md`), **a host prerequisite a build cannot start without is absent** (`fakeroot` off the PATH a lane inherits; reason `host-prerequisite-missing`, §H.3), install refusal (a `refuse` decision row reached execution), confirmation gate (`-Mcc`/`-Mccc`/`-Mm` on a destructive plan without `--noconfirm`: plan printed, `confirmation-required` — §B.7), **the operator declined a prompt** (`q`/EOF at the `@app` or build-dir dialogue; reason `prompt-declined`, §C.4) |
 | 4 | parked-cone-with-failures | **cone-stop (default) run with ≥1 `failed` row** — dispatch continued with unrelated work; parked rows may be empty when the failed package is a leaf |
 | 5 | deferral-only | ≥1 `deferred`/`parked` row and no `failed` row (extension of the six-class list; preserves "a deferral exits non-zero" without claiming a build failure) |
 | 130 | interrupted | a signal terminated the run; the full run record is emitted first |
@@ -1455,6 +1455,27 @@ must never re-fetch it). A skip the run imposed — `disk-floor` — is
 package from `remaining:`. It is the only `deferred` row that carries no lane
 code, because a paused fetch spawns no lane (R2-juno-6: `tcl succeeded - -
 disk-floor` was the record calling a skipped fetch a completed one).
+
+*Amendment (2026-11-15, host prerequisites — R2-maya-2).* Two additive keys,
+both naming a HOST fact so neither claims a recipe failure (nothing compiled on
+either path):
+
+- `host-prerequisite-missing` — `never-started` when the pre-dispatch gate
+  refuses the run (every row; the prose names the program, the package that
+  provides it, and under a privileged run sudo's `secure_path` mechanism,
+  §G.1), and `failed 1` when makepkg's own `check_software` still refuses a
+  lane with `E_MISSING_MAKEPKG_DEPS` (15) — the package log then carries
+  makepkg's `Cannot find the <tool> binary.` A lane that could not start is
+  not `build-failed`.
+- `dependency-install-failed` — `failed 1` for makepkg's
+  `E_INSTALL_DEPS_FAILED` (8): a declared dependency the configured mirrors
+  could not resolve or install.
+
+The gate probes the PATH a lane inherits (the build-user drop preserves it)
+for the binaries `executable_*` requires unconditionally — `fakeroot` — so an
+optional degradation (`ccache`, `distcc`, a VCS client a recipe does not use)
+is never a refusal. Pinned by `tests/host-prerequisite.sh` (both seams
+falsified red-first) and `gsa-build`'s exit-classification unit test.
 
 ### H.4 Annotated example
 

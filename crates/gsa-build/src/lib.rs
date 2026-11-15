@@ -4,6 +4,8 @@
 //! - [`lane`]: the `--lane-job` child entry — one package, one result file.
 //! - [`makepkg`]: the makepkg argv/env contract (checksums/PGP never
 //!   weakened, `GSA_BUILD_JOBS` exported, `MAKEFLAGS`/`NINJAFLAGS` rewritten).
+//! - [`prereq`]: the host binaries a build cannot start without (the
+//!   pre-dispatch half of makepkg's own `check_software` refusal).
 //! - [`shim`]: the `PACMAN` shim routing makepkg's own dependency installs
 //!   through one transaction lock and `sudo -n` (the engine never prompts).
 //! - [`clean`]: prune strength 1 (`-Bc`/`-Mc`): `src/`/`pkg/`/`build/` trees
@@ -12,6 +14,7 @@
 pub mod clean;
 pub mod lane;
 pub mod makepkg;
+pub mod prereq;
 pub mod shim;
 
 /// Per-package build log location under the state root (contract §J.1: logs

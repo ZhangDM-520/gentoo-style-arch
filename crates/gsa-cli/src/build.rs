@@ -477,7 +477,37 @@ fn run_build_with(
             pre.insert(id.as_str().to_string(), prep.plan.clone());
         }
     }
-    // 5. the remediation latent set (owner rule 2026-10-02): every possible
+    // 5. the host-prerequisite gate (R2-maya-2): a build that cannot START is
+    //    not a failed build. makepkg's own `check_software` refuses at setup
+    //    without `fakeroot`, and a lane could only report that as
+    //    `build-failed` — rc 4, the code for a real compile failure, with the
+    //    cause buried in the package log — so the operator's instinct is to
+    //    rebuild, which loops. Ask makepkg's question on the PATH a lane
+    //    inherits and refuse pre-dispatch naming the tool, exactly as an
+    //    absent compiler is named (§G.1 rc 3, the full record). No build means
+    //    no prerequisite: a run whose every node is pre-settled (skip /
+    //    defer) spawns no makepkg and must not refuse.
+    if pre.len() < selection.listed.len() {
+        if let Some(tool) = gsa_build::prereq::missing() {
+            let _ = writeln!(
+                err,
+                "gsa: this host cannot start a build: makepkg needs `{}` before any build begins and it is not on PATH — install it (pacman -S {}){}",
+                tool.program,
+                tool.package,
+                prepare::secure_path_hint(&format!("`{}`", tool.program))
+            );
+            return Err(refuse_before_dispatch(
+                inv,
+                &selection,
+                &budget,
+                &state_dir,
+                out,
+                err,
+                RefusalClass::HostPrerequisiteMissing,
+            ));
+        }
+    }
+    // 6. the remediation latent set (owner rule 2026-10-02): every possible
     //    remediation target not already in the selection, in force-queue
     //    order — the broken consumer first, then the `core` roster (the
     //    escalated chain's order, fish `_GROUP_core`).

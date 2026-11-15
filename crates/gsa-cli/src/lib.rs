@@ -978,7 +978,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                             let _ = writeln!(
                                 err,
                                 "gsa: --build-identity: the {toolchain} compiler is not installed — the identity records its absence{}",
-                                crate::prepare::secure_path_hint()
+                                crate::prepare::secure_path_hint("compiler")
                             );
                             RC_REFUSED
                         } else {

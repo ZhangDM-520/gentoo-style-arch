@@ -1001,6 +1001,24 @@ it to the build user, and migrates a legacy `<state>/recipes` on sight (one
 loud note; move failure is a hard error, move the tree manually then retry).
 A root-owned store is never correct state.
 
+### `host-prerequisite-missing` — the box cannot start a build
+
+makepkg refuses to begin when a host binary it needs is absent, and that is
+not a recipe failure: nothing compiled. The engine asks makepkg's own question
+before dispatch, so the run refuses with rc 3 and names the program and its
+package (`makepkg needs \`fakeroot\` … — install it (pacman -S fakeroot)`), and
+every row is `never-started host-prerequisite-missing`. Install what it names
+and re-run; a privileged run inherits `sudo`'s `secure_path`, so the hint's
+recipe (install under `/usr/bin`) is the other half of the fix.
+
+A lane that still reaches makepkg's own gate — a site file or a mid-run change
+— reports `failed 1 host-prerequisite-missing` (makepkg exit 15,
+`E_MISSING_MAKEPKG_DEPS`, `Cannot find the <tool> binary.` in the package log)
+or `failed 1 dependency-install-failed` (exit 8,
+`E_INSTALL_DEPS_FAILED`: a declared dependency the configured mirrors could
+not install). Neither means "the recipe is broken" — resume after fixing the
+host, do not rebuild the recipe blind.
+
 ### When the machine freezes during a build
 
 A hard freeze leaves nothing in the per-package log, because the log is exactly
