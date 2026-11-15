@@ -566,7 +566,7 @@ The `-M` family is engine-state self-healing only — it never touches `/usr` or
 | Verb | Action |
 | --- | --- |
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a non-signature remote source pinned `SKIP`), `state-integrity`, and a closing `audit total` row counting every finding. Report-only: exit 0, read the report |
-| `gsa -Md [--fix]` | doctor: runtime-state reconciliation (logs, stale lane/run artifacts, binpkg index `sha256+size` consistency, side-car rows with no pacman counterpart); `--fix` applies the named repairs |
+| `gsa -Md [--fix]` | doctor: runtime-state reconciliation (logs, stale lane/run artifacts, binpkg index `sha256+size` consistency, side-car rows with no pacman counterpart, `SRCDEST` mirrors that exist but are unusable); `--fix` applies the named repairs |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure of the target `pacman.conf` (`--config PATH`, default `/etc/pacman.conf`): default reports drift, `--prune` removes stale entries, `--backfill` adds missing names the workspace BUILT (never-built declared names are skipped — they would pin a stock package). The report's header counts the closure it introduces and closes with one `ignorepkg drift missing= addable= unbuilt=` row; `addable` is exactly what `--backfill` plans, so "how many entries would change" needs no arithmetic |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune. The live `logs/<pkg>.log` holds one run: a lane start rotates the previous generation to `.log.1` |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (`gsa-recipe docs/source-sharing.md`). Build-user-only — never under a root supervisor |
@@ -1038,6 +1038,29 @@ A store `PKGBUILD` the build user cannot write makes checksum refresh refuse
 it to the build user, and migrates a legacy `<state>/recipes` on sight (one
 loud note; move failure is a hard error, move the tree manually then retry).
 A root-owned store is never correct state.
+
+### `mirror-unusable` — a source mirror lost its `refs/`
+
+A recipe whose `SRCDEST` mirror directory is present but unreadable cannot be
+built, and makepkg's own words (`'<mirror>' is not a clone of '<url>'`, or a
+bare `git clone` failure inside `extract_git`) name the symptom. The usual
+shape is an empty-directory sweep that removed the mirror's `refs/` while
+`objects/`, `packed-refs`, `HEAD` and `config` survived, which makes git
+answer `not a git repository` to every question.
+
+The build lane refuses before spawning makepkg and names the fault, the mirror
+path and the remedy; the package log carries git's words. Repair without
+refetching:
+
+```sh
+sudo gsa -Md            # mirror:<path> unusable <git's words>
+sudo gsa -Md --fix      # repaired refs-restored
+```
+
+`sudo gsa -Sy` heals the same fault in place, because the snapshot pass needs
+those mirrors anyway. Deleting the directory also works (the next build
+re-clones, at network cost). Only `refs/` is ever created — a mirror broken
+some other way keeps deferring and needs the directory deleted.
 
 ### `host-prerequisite-missing` — the box cannot start a build
 

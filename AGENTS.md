@@ -548,6 +548,18 @@ only restates a numbered rule belongs nowhere. Grouped by the surface it bites.
 
 ### Sources, refs and freshness
 
+- **A `SRCDEST` mirror that exists but is unreadable is CORRUPT evidence, not
+  missing evidence**: a bare mirror whose `refs/` directory was swept keeps
+  every ref in `packed-refs` but answers `not a git repository` to git, so the
+  source is unbuildable AND unpinnable while makepkg reports `'<mirror>' is
+  not a clone of '<url>'`. One probe decides it
+  (`gsa_model::mirror::mirror_state`: `Absent`/`Unusable`/`Usable`), the pass
+  reports `mirror-unusable` (never `ref-unresolvable`, which blames a ref
+  spelling) and heals by recreating `refs/` alone; the build path reports and
+  never heals. The probe carries `safe.directory=*` under
+  `GIT_CONFIG_COUNT=0` because the mirrors are build-user data read as root —
+  without it git's `dubious ownership` guard calls every healthy mirror
+  unusable.
 - **A source URL's scheme is makepkg's `get_protocol`, not a `<vcs>+` prefix**:
   the scheme is the text before `://` minus any `+`, so bare `git://` is a git
   checkout exactly like `git+https://`. One derivation —

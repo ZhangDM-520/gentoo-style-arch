@@ -236,11 +236,11 @@ Arch provider → `version-sync=nvchecker` → Arch provider, as before.
   evidence) is a DEFERRAL — `source-unfetchable`, rc 5, recipe unchanged —
   because one un-fetched mirror must not abort a full-set `-Sy`. A defective
   RECIPE refuses (rc 3). Refusal keywords: `ref-unresolvable`,
-  `no-commit-before-boundary`, `mirror-missing`, `pkgver-evaluation-failed`,
-  `pkgver-unsafe` defer/refuse as their arm says; `pkgver-function-missing`
-  and `not-a-snapshot` are NO-CHANGES (`NoChangeReason::PkgverFunction` and
-  `::NotASnapshot`), so the exempt recipes in a 667-package set cannot redden
-  the pass.
+  `no-commit-before-boundary`, `mirror-missing`, `mirror-unusable`,
+  `pkgver-evaluation-failed`, `pkgver-unsafe` defer/refuse as their arm says;
+  `pkgver-function-missing` and `not-a-snapshot` are NO-CHANGES
+  (`NoChangeReason::PkgverFunction` and `::NotASnapshot`), so the exempt
+  recipes in a 667-package set cannot redden the pass.
 - **Skew is measured at the OLD pin.** The recorded `pkgver` is compared with
   what `pkgver()` computes at the pin the recipe RECORDS; a disagreement is
   named loudly on the report and both fields still move together. Comparing
@@ -248,6 +248,36 @@ Arch provider → `version-sync=nvchecker` → Arch provider, as before.
 - Forward-only: a boundary commit that is not a descendant of the recorded
   pin is left alone (`NoChangeReason::Current`), so a second `-Sy` in one week
   is a no-op and can never rewind a pin.
+
+*Amendment (2026-11-15, `mirror-unusable` + the in-place heal).* Three
+tightenings of the arm above, all code truth:
+
+1. **A present-but-unreadable mirror is its own keyword.** `mirror-missing`
+   means the directory is not there — missing evidence, fixed by fetching. A
+   directory that EXISTS and that git refuses to read as a repository is
+   CORRUPT evidence and reports `mirror-unusable`, naming the path and git's
+   own words; the pre-2026-11-15 arm reported it as `ref-unresolvable`, which
+   sent the operator hunting a bad ref name for a mirror fault. The two are
+   one probe apart (`gsa_model::mirror::mirror_state`: `Absent` / `Unusable` /
+   `Usable`), shared by the pass, `-Md` (§B.7) and the build side (§B.5) so
+   the three cannot drift.
+2. **A swept `refs/` is healed in place before the deferral.** A bare mirror
+   whose `refs/` directory was removed (an empty-directory sweep — git never
+   removes it) answers `not a git repository` to every question while keeping
+   every ref in `packed-refs`. The pass recreates that one missing level,
+   re-probes, and continues on `Usable` with one log line per repaired
+   mirror; the created level is handed to the build user (rule 60). A mirror
+   broken any OTHER way still defers as `mirror-unusable`.
+3. **Only `refs/` is ever touched**, so the repair cannot move a pin, drop a
+   ref or re-fetch a byte. Repair belongs to `-Sy` and `-Md --fix`; the build
+   path only reports (§B.5).
+
+The mirror probe is OWNER-AGNOSTIC by construction (`safe.bareRepository=all`
+plus `safe.directory=*`, under `GIT_CONFIG_COUNT=0`): the mirrors are
+build-user data and the engine runs as root, so git's `dubious ownership`
+guard would otherwise refuse every healthy mirror under a bare root shell and
+`-Md --fix` would "repair" the whole source cache. Pinned where real sudo
+exists: `tests/gsa-privilege.sh` §i.
 
 Pinned by `tests/sync-snapshot.sh` (move + uncommitted + no-rewind; genuine
 skew named, coherent recipe not; non-pin untouched; absent mirror defers;
@@ -269,6 +299,22 @@ Code truth (`gsa-model::config::build_root`): `$GSA_BUILD_DIR` env > config
 states; the recipe dir survives only as the pre-W4 legacy scan fallback in
 archive discovery (§J.2). Wording-only correction (§L.2: no `format:` bump);
 behaviour is pinned elsewhere, no fixture changes.
+
+*Amendment (2026-11-15, the mirror gate).* A recipe whose `SRCDEST` mirror is
+present but unusable fails its OWN lane before `makepkg` is spawned: the lane
+result reason is `mirror-unusable <source name> <mirror path>` (`failed 1`, so
+nothing compiled and, under `-S`, nothing transacted), the console and the
+package log carry git's own words, and the log names the remedy. The probe
+reads the recipe's declared git sources through the ONE mirror-name
+derivation (`gsa-recipe::sync::build_mirror_paths` — a `name::` prefix
+verbatim, a bare URL truncated at the first `.git`), so it can never refuse a
+path the recipe does not use. It reads the EVALUATED `source=()` array, the
+same way the snapshot pass does: most real recipes build that array from
+variables, so a scan-only gate would guard a third of the roster. An ABSENT
+mirror is not a fault: that is
+makepkg's own first clone. The build path never heals — writing a shared
+source cache from a lane would race every other lane reading it; the repair
+is `-Sy`'s and `-Md --fix`'s (§B.4/§B.7). Pinned by `tests/anchor-defer.sh`.
 
 ### B.6 `-U` — install from archives
 
@@ -293,7 +339,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | Spelling | Action |
 | --- | --- |
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a REMOTE NON-SIGNATURE source pinned `SKIP`; a detached signature's `SKIP` is makepkg's normal spelling and is never a finding, and a present sum's agreement with upstream is the sync pass's question — the family prints a `scope=` row saying so), `state-integrity` (unusable side-car lines, index rows whose archive is gone or resized) (today `--audit`), and a closing `audit total <N finding(s)>` row counting every finding row. Report-only by contract (§E.4); exit 0, read the report |
-| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3), and the §K.3 RUN lock (`run-lock:<path> <status> …`: absent/free/a live holder are `health ok` statements, a lock no live gsa process holds is a `stale-run-lock` finding carrying the exact `rm` — 2026-11-15 amendment). The run-lock row is the documented home for a lock diagnosis, since `--stale-lock-check` is a hidden seam (§D.1). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
+| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3), the `SRCDEST` mirrors that exist but are unusable (`mirror:<path> unusable <git's words>`: a roster VCS source name carrying the bare-repository shape, `HEAD`+`objects/`, that `mirror_state` cannot read — `--fix` restores the swept `refs/` and reports `repaired`/`refs-restored`, one failure never aborting the others, §B.4 amendment 2026-11-15), and the §K.3 RUN lock (`run-lock:<path> <status> …`: absent/free/a live holder are `health ok` statements, a lock no live gsa process holds is a `stale-run-lock` finding carrying the exact `rm` — 2026-11-15 amendment). The run-lock row is the documented home for a lock diagnosis, since `--stale-lock-check` is a hidden seam (§D.1). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones the workspace actually BUILT (an archive shipped the name; a declared-but-never-built name is skipped with a summary row, because it would pin the STOCK package — today's hidden `--register-ignorepkg`). The report's header counts the CLOSURE it introduces (`entries=N in-use=N stale=N`), names the installed-DB census as a classification input only, and closes with ONE `ignorepkg drift missing=N addable=N unbuilt=N` summary whose `addable` is exactly the set `--backfill` plans (2026-11-15 amendment) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated on its DESTROYED SET (§K.3): a `clean` plan applies without asking; a plan that links or rewrites prints its targets and, without `--noconfirm`, stops rc 3 `confirmation-required` (on a TTY it asks one `y`/`N` question first). Must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
@@ -1496,6 +1542,14 @@ for every signal-ended lane, exactly as §I.3 states ("what started is
 the lane code (129/130/143, §F.1), never the reason key. (T9: `startup-refused`
 and `park-marker-unwritable` added to this list in the same pass — they were
 fixture-pinned keys missing from the recorded vocabulary.)
+
+*Amendment (2026-11-15, the mirror gate — `mirror-unusable`).* One additive
+`failed 1` key: `mirror-unusable <source name> <mirror path>`. It names a
+SOURCE-CACHE fact, not a recipe fault and not a build attempt — the lane
+refuses before spawning makepkg (§B.5), so nothing compiled and its
+`build-failed` would be a false claim. The reason carries the
+`gsa-recipe::sync::SnapshotRefusal` keyword of the same name (§B.4), so one
+word means one fault on both paths. Pinned by `tests/anchor-defer.sh`.
 
 *Amendment (2026-11-15, fetch-only rows — `disk-floor` is a deferral).* A
 fetch-only (`-Sw`) record maps its verdicts as `ok` → `succeeded`,

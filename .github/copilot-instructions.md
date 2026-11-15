@@ -29,7 +29,7 @@ cargo test -p gsa-sched                  # one crate
 cargo test -p gsa-sched budget::tests::budget_formulas_follow_portability_doc
 cargo test -p gsa-cli --test preflight_contract   # one integration test file
 cargo test --workspace -- --test-threads=1   # deterministic; see flake note
-cargo clippy --workspace --all-targets       # must be clean
+cargo clippy --workspace --all-targets       # add no new warning; see baseline note
 tools/fmt.sh                                 # rustfmt check; --write to apply
 ```
 
@@ -48,6 +48,15 @@ nightly (`rustc 1.101.0-nightly` at the time of writing), and that is why
 `cargo fmt` aborts and `tools/fmt.sh` exists. Never add a toolchain file to work
 around it, and never rely on a specific nightly feature without checking the
 installed one.
+
+**Clippy is not clean at HEAD, and an unrelated change must not try to make it
+so.** `cargo clippy --workspace --all-targets` emits ~115 pre-existing warnings
+(~61 without `--all-targets`) and exits 0; the total moves with the build cache,
+so a bare number is not a gate. The requirement is that *your* change adds no
+new diagnostic — measure the delta yourself
+(`cargo clippy --workspace --all-targets --message-format=short | grep -c '^warning:'`)
+rather than treating a non-zero count as a failure, and never sweep the
+pre-existing warnings in a change that was about something else.
 
 **There is no CI: the validation block in `CONTRIBUTING.md` is the gate.** A
 change is validated only when those commands have been run locally and their
@@ -286,6 +295,15 @@ flag by editing the site body, and add package-specific switches by appending
   bash: wrap ad-hoc one-liners in `bash -c '…'`. Agent shells inject git config
   that breaks bare repos and makepkg VCS operations — prefix those with
   `GIT_CONFIG_COUNT=0`. `rm` is a trash wrapper in fish; use `command rm`.
+- **Code cites the contract and the rule map by number, and those numbers are
+  immutable.** `crates/` carries ~1,100 `§A–§L` citations and ~250 `rule N`
+  comments; both refer to `docs/gsa-contract.md` and `AGENTS.md` §4. The rule
+  numbering is inherited with **gaps** — several numbers (3, 4, 7, 14–17, 21,
+  24, …) are pointers to the recipe repository and have no text here, and a
+  dropped number is never reused (`AGENTS.md` §4 states the mechanism). Never
+  renumber, never fill a gap, and never "fix" a citation that does not resolve
+  locally by inventing a rule body. Follow the number into `AGENTS.md` §4's
+  rule map first; if it names `gsa-recipe`, the text lives there.
 - **Never commit or push unprompted.** A green battery is evidence, not
   consent. PR comments go through `gh`, never the GitHub MCP service, and
   never before the `CONTRIBUTING.md` validation block is green. A PR body
