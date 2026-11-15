@@ -431,3 +431,55 @@ srcdest_for() {
             "$fixture/s4/err"
     fi
 )
+
+# ─── 5. a mirror that EXISTS but is unusable is healed, then advances ──────
+# A bare mirror whose refs/ was removed (an empty-directory sweep, never git)
+# answers "not a git repository" to every question, so every candidate ref
+# failed and the pass reported `ref-unresolvable` — naming a ref spelling that
+# was never the problem (2026-11-15, 208 of 505 host mirrors in this state).
+# The heal restores the `refs/` level only: every loose ref is already in
+# packed-refs, so the pin still resolves and nothing is re-fetched.
+(
+    set -euo pipefail
+    ws="$fixture/s5/ws"
+    make_workspace "$ws" 1 1 low
+    write_stub_pacman "$ws"
+    write_stub_makepkg "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_SNAPSHOT_MAKEPKG_LOG="$fixture/s5/makepkg.log"
+
+    srcdest="$fixture/s5/srcdest"
+    mkdir -p "$srcdest"
+    # snapshot_recipe names its source after the recipe id, so the mirror
+    # makepkg would use is $srcdest/demo.
+    mapfile -t shas < <(make_mirror "$srcdest" demo)
+    old=${shas[0]}
+    boundary=${shas[1]}
+
+    snapshot_recipe "$ws" demo "https://example.invalid/swept" "$old" old
+    srcdest_for "$ws" "$srcdest"
+
+    # The corruption: refs/ gone, everything else intact.
+    rm -rf "$srcdest/demo/refs"
+    [ ! -d "$srcdest/demo/refs" ] || fail "the fixture failed to sweep refs/"
+    git_env -C "$srcdest/demo" rev-parse HEAD >/dev/null 2>&1 \
+        && fail "a refs-less mirror must not be readable by git before the heal"
+
+    recipe="$ws/packages/demo"
+    run_sy "$ws" "$fixture/s5/out" "$fixture/s5/err" "$fixture/s5/state"
+
+    [ "$SY_RC" = 0 ] \
+        || fail "a healable mirror must not park the recipe, got $SY_RC:" "$fixture/s5/err"
+    grep -F "demo: mirrored repository repaired (refs/ restored)" "$fixture/s5/err" >/dev/null \
+        || fail "the heal was silent — a write into the source cache must be announced:" "$fixture/s5/err"
+    grep -F "#commit=$boundary" "$recipe/PKGBUILD" >/dev/null \
+        || fail "the pin did not advance after the heal:" "$recipe/PKGBUILD"
+    [ -d "$srcdest/demo/refs" ] || fail "refs/ was not restored at $srcdest/demo/refs"
+    # The heal must not be reported as the OLD fault classes.
+    if grep -F 'ref-unresolvable' "$fixture/s5/err" >/dev/null; then
+        fail "a corrupt mirror is still blamed on a ref spelling:" "$fixture/s5/err"
+    fi
+    if grep -F 'mirror-missing' "$fixture/s5/err" >/dev/null; then
+        fail "a PRESENT mirror is still reported absent:" "$fixture/s5/err"
+    fi
+)
