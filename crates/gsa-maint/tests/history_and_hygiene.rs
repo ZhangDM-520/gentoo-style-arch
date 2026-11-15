@@ -148,6 +148,57 @@ fn history_retention_keeps_one_resume_pointer_per_selection() {
 }
 
 #[test]
+fn a_foreign_format_history_row_refuses_the_verbs_that_must_not_guess() {
+    let fx = Fixture::new("history-foreign-format");
+    let state = fx.state();
+    append_run(&state, &run_record("alpha", &[]));
+    append_run(&state, &run_record("beta", &[]));
+
+    // Rewrite the SECOND row's marker to a grammar this build does not
+    // render, leaving the first intact — so the tolerant read has one row it
+    // can use and one it must report.
+    let path = RunHistory::path(&state);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let found = format!("\"format\":{}", gsa_model::RECORD_FORMAT);
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    assert_eq!(lines.len(), 2, "two stored rows: {text}");
+    lines[1] = lines[1].replacen(&found, "\"format\":99", 1);
+    assert!(
+        lines[1].contains("\"format\":99"),
+        "the fixture must rewrite the marker"
+    );
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    // A listing NAMES the offender and keeps going: an unreadable row is not
+    // an absent one (rule 71), and the rows before it survive.
+    let (rows, corrupt) = history::list_rows_with_corrupt(&state).unwrap();
+    assert_eq!(rows.len(), 1, "the readable row still lists: {corrupt:?}");
+    assert_eq!(corrupt.len(), 1, "{corrupt:?}");
+    assert!(
+        corrupt[0].detail.contains("record format 99"),
+        "the report names the grammar: {}",
+        corrupt[0].detail
+    );
+
+    // The verbs that would RENUMBER over the hole refuse instead, so a run id
+    // can never silently mean a different run.
+    let before = std::fs::read(&path).unwrap();
+    let error = history::show(&state, 1).expect_err("--show must refuse");
+    assert!(error.contains("run history is unreadable"), "{error}");
+    assert!(
+        error.contains("record format 99"),
+        "the refusal names the grammar it found: {error}"
+    );
+    let error = history::prune(&state, true).expect_err("--prune must refuse");
+    assert!(error.contains("run history is unreadable"), "{error}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "a refused prune never renumbers or compacts the store"
+    );
+}
+
+#[test]
 fn log_retention_keeps_the_newest_per_stem() {
     let fx = Fixture::new("hygiene-logs");
     let logs = fx.state_dir.join("logs");

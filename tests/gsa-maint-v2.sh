@@ -761,6 +761,50 @@ $(diff -u "$fixture/g/emitted1" "$fixture/g/show1" || true)"
             fail "--show 2 is not byte-identical to run 2's emitted block:
 $(diff -u "$fixture/g/emitted2" "$fixture/g/show2" || true)"
 
+        # ── the store names the grammar it was written in (R2-vera-11) ───
+        # A stored row must carry the SAME format marker its live block
+        # printed, or after a format bump a stored line and a damaged one are
+        # indistinguishable and a re-render is a guess. The expected number is
+        # DERIVED from the block the run itself emitted, never pinned.
+        hist="$state/runs/history.jsonl"
+        block_format=$(sed -n 's/^format: //p' "$fixture/g/emitted1")
+        [ -n "$block_format" ] || fail "run 1's emitted block names no format: $(cat "$fixture/g/emitted1")"
+        /usr/bin/sudo -n grep -F "\"format\":$block_format" "$hist" >/dev/null ||
+            fail "a stored run row must name its record format ($block_format): $(/usr/bin/sudo -n head -n 1 "$hist" | cut -c1-120)"
+        stored_rows=$(/usr/bin/sudo -n wc -l <"$hist")
+        marked_rows=$(/usr/bin/sudo -n grep -cF "\"format\":$block_format" "$hist")
+        [ "$marked_rows" = "$stored_rows" ] ||
+            fail "every stored row names the format ($marked_rows of $stored_rows)"
+
+        # A row written in a grammar this build does not render is NAMED by
+        # the tolerant listing and never reinterpreted: an unreadable row is
+        # not an absent one (rule 71), so --show and --prune refuse rather
+        # than renumber over it.
+        /usr/bin/sudo -n cp "$hist" "$fixture/g/hist.saved"
+        foreign_line=$(/usr/bin/sudo -n head -n 1 "$hist" |
+            sed "s/\"format\":$block_format/\"format\":$((block_format + 1))/")
+        case $foreign_line in
+        *"\"format\":$((block_format + 1))"*) ;;
+        *) fail "the foreign-format seed did not take (wire shape drift?): $(printf '%s' "$foreign_line" | cut -c1-120)" ;;
+        esac
+        printf '%s\n' "$foreign_line" | /usr/bin/sudo -n tee -a "$hist" >/dev/null
+        run_engine "$ws" -Mh --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] ||
+            fail "-Mh over a foreign-format row is a report, rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        grep -F "corrupt-row runs" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+            fail "-Mh must name the foreign-format row: $FIXTURE_OUTPUT"
+        grep -F "record format $((block_format + 1))" <<<"$FIXTURE_OUTPUT" >/dev/null ||
+            fail "the report must name the grammar it found: $FIXTURE_OUTPUT"
+        run_engine "$ws" -Mh --show 1 --state-dir "$state"
+        [ "$FIXTURE_RC" != 0 ] ||
+            fail "--show over a foreign-format row must refuse (ids shift): $FIXTURE_OUTPUT"
+        grep -F 'run history is unreadable' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+            fail "--show must name the damage: $FIXTURE_OUTPUT"
+        run_engine "$ws" -Mh --prune --state-dir "$state"
+        [ "$FIXTURE_RC" != 0 ] ||
+            fail "--prune must never drop rows it cannot read: $FIXTURE_OUTPUT"
+        /usr/bin/sudo -n cp "$fixture/g/hist.saved" "$hist"
+
         # ── a run with no history row: in-progress, then died (§J.1) ─────
         # The history alone cannot answer "was a run in flight when I lost
         # the terminal?": the run's own stamps in runs/<id>/ are the answer

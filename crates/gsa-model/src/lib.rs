@@ -515,6 +515,14 @@ impl RunOutcome {
 // Run record (contract §H, `format: 2`)
 // ---------------------------------------------------------------------------
 
+/// The machine-block grammar version this build WRITES and the only one it
+/// renders (contract §L.2: a row/record grammar change bumps this and the
+/// parser fixture in the same change). One literal for both directions:
+/// [`RunRecord::render_machine`] prints it and
+/// [`RunRecord::stored_format`] reconciles a stored line against it, so a
+/// reader can never claim a grammar the writer does not emit (R2-vera-11).
+pub const RECORD_FORMAT: u32 = 2;
+
 /// The continuation section (contract §H.2). Arguments come from one
 /// flag-rule table with an explicit not-mirrored list; ambient environment
 /// inputs are warned about (`env_required`), never baked in.
@@ -613,7 +621,7 @@ impl RunRecord {
     pub fn render_machine(&self) -> String {
         let mut out = String::new();
         out.push_str("--- run record begin ---\n");
-        out.push_str(&format!("format: 2\n"));
+        out.push_str(&format!("format: {RECORD_FORMAT}\n"));
         out.push_str(&format!(
             "selection-source: {}\n",
             scalar(&self.selection_source)

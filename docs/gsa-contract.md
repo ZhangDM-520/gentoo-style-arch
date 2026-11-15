@@ -302,7 +302,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | `gsa -Mccc` | prune strength 3: additionally remove pulled sources — source clones, downloaded tarballs (extension-matched to the root `.gitignore` set), staging dirs. Prints its target list and stops rc 3 `confirmation-required` without `--noconfirm` (today `-ccc`) |
 | `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; user sets are the kv-store/`config/sets` union (§C.2) — `--add`/`--remove` edit the kv side. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
 | `gsa -Mw [--add\|--remove <ref…>]` | world: the explicitly wanted set. Default lists it; `--add`/`--remove` edit it (remove = deselect) |
-| `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention |
+| `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention. Every stored row names the record format it was written in (§H.1) |
 
 The strength idiom `-Mc`/`-Mcc`/`-Mccc` is deliberately pacman's `-Sc`/`-Scc`
 cache-prune shape. `-Mcc`, `-Mccc` and `-Mm` are confirmation-gated on their
@@ -1225,6 +1225,32 @@ into the side-car run history (§J.2, `gsa -Mh`), because the side-car DB owns
 run history by owner decision. Persistence is storage of the same structure,
 not a fourth derivation. `docs/adr/0003-run-record.md` must record this
 amendment (§L).
+
+*Amendment (2026-11-15, the stored row names its grammar — R2-vera-11).* The
+stored row carries `"format":<n>` beside `"op"` and `"record"`, written from
+the ONE literal that renders the block (`gsa_model::RECORD_FORMAT`), so a
+reader reconciling a stored line against the rendering has a single authority
+and the two can never disagree. Before this amendment the store held no marker
+at all while every live rendering announced `format: 2`: after a bump, an old
+row and a damaged one were indistinguishable, and re-rendering an old row
+through the new grammar was a guess presented as a re-render.
+
+- **A row naming a grammar this build does not render is REPORTED, never
+  reinterpreted.** Deserialization is the gate, so the marker rides the store's
+  existing corruption tolerance: `-Mh` names the row (`corrupt-row runs …` /
+  `record format <n>`) and keeps the readable rows, while the verbs that would
+  renumber over the hole — `--show`, and `--prune` — refuse with the store's
+  refusal (rule 71: an unreadable row is not an absent one).
+- **An ABSENT marker reads as the current grammar**, because the history store
+  was created at `format: 2` and no other grammar has ever written to it (§M
+  gap 4's adoption width, `docs/plans/plan-native-pm.md`). Legacy rows
+  therefore keep rendering unchanged; nothing is rewritten in place.
+
+Pinned by `gsa-state`'s `runs::tests::a_stored_row_names_its_record_format`,
+`a_row_written_in_another_grammar_is_reported_never_reinterpreted`,
+`a_row_written_before_the_marker_reads_as_the_current_grammar`,
+`gsa-maint`'s `history_and_hygiene::a_foreign_format_history_row_refuses_the_verbs_that_must_not_guess`,
+and `tests/gsa-maint-v2.sh` §g.
 
 ### H.2 Grammar
 
