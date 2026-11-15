@@ -1997,10 +1997,22 @@ pub fn snapshot_commit_before(
     // after it, which is exactly "last commit at or before Monday 00:00". It
     // is operands with the RESOLVED tip, never `last`: the candidate that
     // actually resolved may be any of them.
+    //
+    // `--first-parent` is load-bearing, not cosmetic: without it the walk
+    // covers every merged side history, so the newest commit before the
+    // boundary can be a commit from a project this mirror merely merged. On
+    // the live `rust` mirror 25 of 30 boundaries picked off-mainline and one
+    // picked a `clippy` commit, whose tree has no `compiler/` at all — a pin
+    // that is not a snapshot of this project (2026-11-15).
     let out = snapshot_git()
         .arg("-C")
         .arg(root)
-        .args(["rev-list", "-1", &format!("--before={boundary}")])
+        .args([
+            "rev-list",
+            "-1",
+            "--first-parent",
+            &format!("--before={boundary}"),
+        ])
         .arg(&tip)
         .output();
     match out {
@@ -2765,6 +2777,108 @@ mod tests {
             m.contains("not a git repository"),
             "message drops git's own words: {m}"
         );
+    }
+
+    #[test]
+    fn snapshot_pin_walks_the_mainline_not_a_merged_side_history() {
+        // `rev-list --before` without `--first-parent` orders candidates by
+        // COMMIT DATE across every merged side history, so the newest commit
+        // before the boundary can come from a project this mirror merely
+        // merged. Measured on the live `rust` mirror: 25 of 30 boundaries
+        // picked off-mainline and one picked a `clippy` commit whose tree has
+        // no `compiler/` at all (2026-11-15). The pin must be the newest
+        // MAINLINE commit.
+        //
+        // The dates are explicit because that IS the mechanism: the side
+        // commit must be strictly newer than the mainline commit before the
+        // boundary, or both traversals agree and the test proves nothing.
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-first-parent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let mirror = dir.join("mirror");
+        let git = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.env("GIT_CONFIG_COUNT", "0")
+                .arg("-C")
+                .arg(&work)
+                .args([
+                    "-c",
+                    "user.email=a@b",
+                    "-c",
+                    "user.name=a",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args);
+            if let Some(d) = date {
+                cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
+            }
+            let out = cmd.output().expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let commit = |date: &str, msg: &str| {
+            git(
+                &["commit", "--quiet", "--allow-empty", "-m", msg],
+                Some(date),
+            )
+        };
+        git(&["init", "--quiet", "--initial-branch=main"], None);
+        commit("2026-01-01T00:00:00Z", "mainline-base");
+        // The side project's commit is NEWER than mainline's next commit but
+        // still before the boundary — exactly a merged foreign history.
+        git(&["checkout", "--quiet", "-b", "side"], None);
+        commit("2026-01-03T00:00:00Z", "side-off-mainline");
+        let side = git(&["rev-parse", "HEAD"], None);
+        git(&["checkout", "--quiet", "main"], None);
+        commit("2026-01-02T00:00:00Z", "mainline-second");
+        let mainline = git(&["rev-parse", "HEAD"], None);
+        // The merge itself is dated after the boundary, so it is not a
+        // candidate and only the traversal order can decide.
+        git(
+            &["merge", "--quiet", "--no-ff", "-m", "merge-side", "side"],
+            Some("2026-01-10T00:00:00Z"),
+        );
+
+        assert!(std::process::Command::new("git")
+            .env("GIT_CONFIG_COUNT", "0")
+            .args(["clone", "--quiet", "--mirror"])
+            .arg(&work)
+            .arg(&mirror)
+            .status()
+            .expect("clone runs")
+            .success());
+
+        let picked = super::snapshot_commit_before(
+            &mirror,
+            &["refs/heads/main".to_string()],
+            "2026-01-05T00:00:00Z",
+        )
+        .expect("the pin resolves");
+
+        assert_eq!(
+            picked, mainline,
+            "the pin must be the newest MAINLINE commit, not the newer merged side tip {side}"
+        );
+        assert_ne!(
+            picked, side,
+            "the pin landed on the merged side history, which no mainline pin may do"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

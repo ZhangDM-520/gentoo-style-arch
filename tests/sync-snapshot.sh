@@ -14,7 +14,7 @@ set -euo pipefail
 # no network, and the version comes from the recipe's own `pkgver()` running
 # inside a real checkout — the fixture supplies no version of its own.
 #
-# Pinned here (five ( subshell ) sections):
+# Pinned here (seven ( subshell ) sections):
 #   1. the pin MOVES and the version follows it: a bare mirror with one commit
 #      a week before the boundary, one a second before it, and one after it;
 #      a recipe pinned at the oldest → `-Sy` rewrites `#commit=` to the
@@ -26,6 +26,10 @@ set -euo pipefail
 #      is named on the report and still leaves the pass coherent — and a
 #      coherent one reports no skew, which is the arm that caught the
 #      2026-11-12 false positive.
+#   1c. the boundary commit is the newest MAINLINE one (`--first-parent`): a
+#      mirror that merged a side history whose tip is newer than the mainline
+#      commit still pins the mainline, never the merged project's tree
+#      (2026-11-15 — 25 of 30 live `rust` boundaries were off-mainline).
 #   2. a NON-pin recipe is untouched: classified `not-a-snapshot`, the mirror
 #      is never consulted, the PKGBUILD keeps its bytes, rc 0.
 #   3. an absent mirror DEFERS, never fetches: rc 5, `source-unfetchable` +
@@ -36,6 +40,9 @@ set -euo pipefail
 #      defect), and an explicit `name::` prefix is the checkout name
 #      VERBATIM — `onlyoffice.github.io` must not become `onlyoffice`, which
 #      is what makepkg's `get_filename` guarantees.
+#   5. a mirror that EXISTS but is unusable is healed in place, then advances:
+#      a swept `refs/` is repaired before deferring, so a corrupt source cache
+#      is not reported as a bad ref spelling.
 #
 # House conventions: `( subshell )` sections, inline oracles, `fail()`
 # prefixes. `-Sy` is invoked through the §B.10 privileged wrapper with the
@@ -300,6 +307,77 @@ srcdest_for() {
     # Both fields move together: the recipe leaves the pass coherent.
     grep -Fx 'pkgver=boundary' "$recipe/PKGBUILD" >/dev/null \
         || fail "the skewed recipe did not get the derived pkgver:" "$recipe/PKGBUILD"
+)
+
+# ─── 1c. the pin walks the MAINLINE, never a merged side history ───────────
+# `rev-list -1 --before=<boundary>` without `--first-parent` answers with the
+# newest commit ANYWHERE in the merged topology, so a project whose mirror
+# merged a sibling repository can be pinned to that repository's tree. The
+# live `rust` mirror measures 25 of 30 boundaries off-mainline, one of them a
+# `clippy` commit with no `compiler/` at all (2026-11-15). This arm builds that
+# shape: a side branch whose tip is NEWER than the mainline commit and still
+# BEFORE the boundary, merged with a date AFTER it — so only the traversal
+# rule decides, and the fixture proves the mirror discriminates before it
+# asserts on the engine.
+(
+    set -euo pipefail
+    ws="$fixture/s1c/ws"
+    make_workspace "$ws" 1 1 low
+    write_stub_pacman "$ws"
+    write_stub_makepkg "$ws"
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_SNAPSHOT_MAKEPKG_LOG="$fixture/s1c/makepkg.log"
+
+    srcdest="$fixture/s1c/srcdest"
+    wt="$srcdest/.work/merged"
+    mkdir -p "$wt"
+    (cd "$wt" && git_env init -q -b main .)
+    printf 'base\n' >"$wt/tag"
+    commit_at "$wt" base "$WEEK_BEFORE"
+    base=$(git_env -C "$wt" rev-parse HEAD)
+
+    # The side history: newer than the mainline commit, older than the
+    # boundary. A project this mirror merged, not a snapshot of it.
+    (cd "$wt" && git_env checkout -q -b side)
+    printf 'side\n' >"$wt/side-marker"
+    commit_at "$wt" side "$BEFORE_BOUNDARY"
+    side=$(git_env -C "$wt" rev-parse HEAD)
+
+    (cd "$wt" && git_env checkout -q main)
+    printf 'mainline\n' >"$wt/tag"
+    commit_at "$wt" mainline "$(date -u -d "$BOUNDARY -3 days" '+%Y-%m-%dT%H:%M:%SZ')"
+    mainline=$(git_env -C "$wt" rev-parse HEAD)
+
+    # The merge is later than the boundary, so it is never itself a candidate;
+    # it only makes the side history reachable from the tip.
+    GIT_AUTHOR_DATE="$AFTER_BOUNDARY" GIT_COMMITTER_DATE="$AFTER_BOUNDARY" \
+        git_env -C "$wt" merge -q --no-ff -m merged side
+    git_env clone -q --bare "$wt" "$srcdest/demo"
+
+    # The arm is vacuous unless the side tip really is what a full traversal
+    # answers: otherwise a first-parent bug would pass unnoticed.
+    naive=$(git_env -C "$srcdest/demo" rev-list -1 --before="$BOUNDARY" HEAD)
+    [ "$naive" = "$side" ] \
+        || fail "the fixture mirror does not discriminate: a full traversal answers $naive, expected the side tip $side"
+    [ "$side" != "$mainline" ] || fail "the fixture mirror has one history, not two"
+
+    snapshot_recipe "$ws" demo "https://example.invalid/demo" "$base" base
+    srcdest_for "$ws" "$srcdest"
+
+    recipe="$ws/packages/demo"
+    run_sy "$ws" "$fixture/s1c/out" "$fixture/s1c/err" "$fixture/s1c/state"
+
+    [ "$SY_RC" = 0 ] || fail "the snapshot pin move is rc 0, got $SY_RC:" "$fixture/s1c/err"
+    grep -F "#commit=$mainline" "$recipe/PKGBUILD" >/dev/null \
+        || fail "the pin did not advance to the mainline commit $mainline:" "$recipe/PKGBUILD"
+    if grep -F "#commit=$side" "$recipe/PKGBUILD" >/dev/null; then
+        fail "the pin landed on a merged side history ($side), not the project's mainline:" "$recipe/PKGBUILD"
+    fi
+    # The version follows the pin, and `tag` at the mainline commit says
+    # "mainline" while the side commit never touched it — so a pin still on a
+    # side tree cannot coincidentally read the right version.
+    grep -Fx 'pkgver=mainline' "$recipe/PKGBUILD" >/dev/null \
+        || fail "pkgver= did not follow the mainline pin:" "$recipe/PKGBUILD"
 )
 
 # ─── 2. a recipe that is not a snapshot is untouched ───────────────────────
