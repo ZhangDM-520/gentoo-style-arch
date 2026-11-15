@@ -10,7 +10,7 @@ set -euo pipefail
 # Expectations are DERIVED from the stub event log and the run records the
 # runs produced (rule 25(j) / contract §L.3) — never from pinned counts.
 #
-# Pinned here (seven ( subshell ) sections, one per scenario; run one alone
+# Pinned here (twelve ( subshell ) sections, one per scenario; run one alone
 # with GSA_FETCH_V2_ONLY=<letter>):
 #   a. fetch-ahead-while-compiling: an upcoming recipe's `--verifysource`
 #      starts and ends while an earlier recipe is still compiling (stub
@@ -51,6 +51,12 @@ set -euo pipefail
 #      makepkg's stage headers separate the two classes, a payload whose
 #      checksum PASSED is never quarantined, a key-trust problem is not
 #      retried, and the refusal names the class, the key and the remedy.
+#   k. the disk floor is ONE decision (R2-juno-6): a paused fetch is planned
+#      `skip disk-floor`, recorded `deferred disk-floor` (never `succeeded` —
+#      nothing happened), counted apart from a routine skip in the tally, and
+#      the run is a deferral (rc 5) that keeps the package in `remaining:`.
+#   l. a satisfied floor renders the OLD tally byte-for-byte: the `deferred`
+#      key is additive (§L.2), so no consumer of `fetch-run` breaks on it.
 #
 # House conventions: `( subshell )` sections (each an isolated scenario with
 # its own workspace), inline oracle stubs (§D.2), `fail()` prefixes, and
@@ -671,5 +677,106 @@ if want j; then
         [ "$(rr2_outcome p-sig status <<<"$FIXTURE_OUTPUT")" = failed ] \
             || fail "j: the record status must be failed:" "$FIXTURE_OUTPUT"
         assert_no_transactions j
+    )
+fi
+
+if want k; then
+    # ─── k. the disk floor is ONE decision (R2-juno-6) ─────────────────────
+    # The persona's report: `-Sw zint` on a filesystem with 412 MB free said
+    # `skipped disk-floor` in the event stream and the tally, `fetch ok` in
+    # the plan and `succeeded` in the outcome — three readings of one fact,
+    # and the record (what they would script against) was the one claiming an
+    # action that never happened. The floor now decides ONCE, and all three
+    # renditions read it.
+    (
+        set -euo pipefail
+        ws="$fixture/k/ws"
+        fetch_ws "$ws"
+        add_package "$ws" p-plain "$gsa_meta_any"$'\nsource=(https://example.invalid/plain-1.0.0.tar.gz)'
+        add_package "$ws" p-vcs "$gsa_meta_any"$'\nsource=(git+https://example.invalid/x.git)'
+        # A floor no filesystem can satisfy: the pause, never a real 5 GiB
+        # measurement (the knob is the unadvertised `_GSA_*` fixture class).
+        export _GSA_DISK_FLOOR_GIB=1048576
+        : >"$GSA_FAKE_FETCH_LOG"
+
+        run_engine "$ws" -Sw p-plain p-vcs
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/k/run.txt"
+
+        # Nothing was fetched, and no process was spawned to find that out.
+        [ "$(fetch_attempts p-plain)" = 0 ] \
+            || fail "k: a paused fetch must not spawn makepkg" "$GSA_FAKE_FETCH_LOG"
+
+        # (1) The PLAN names the floor instead of promising the fetch.
+        [ "$(rr2_plan p-plain plan <<<"$FIXTURE_OUTPUT")" = skip ] \
+            || fail "k: a floor-paused candidate is planned skip, never fetch:" "$fixture/k/run.txt"
+        [ "$(rr2_plan p-plain reason <<<"$FIXTURE_OUTPUT")" = disk-floor ] \
+            || fail "k: the plan reason must name the floor:" "$fixture/k/run.txt"
+
+        # (2) The OUTCOME row says nothing happened — a deferral, not success.
+        [ "$(rr2_outcome p-plain status <<<"$FIXTURE_OUTPUT")" = deferred ] \
+            || fail "k: a floor-paused fetch is deferred, never succeeded:" "$fixture/k/run.txt"
+        [ "$(rr2_outcome p-plain rc <<<"$FIXTURE_OUTPUT")" = - ] \
+            || fail "k: a fetch that never ran produced no process code:" "$fixture/k/run.txt"
+        [ "$(rr2_outcome p-plain reason <<<"$FIXTURE_OUTPUT")" = disk-floor ] \
+            || fail "k: the outcome reason must survive:" "$fixture/k/run.txt"
+
+        # (3) The run is a deferral (rc 5), never a success: a script must not
+        # read it as "the sources are cached".
+        [ "$(rr2_scalar outcome <<<"$FIXTURE_OUTPUT")" = deferral ] \
+            || fail "k: a floor-paused run is a deferral:" "$fixture/k/run.txt"
+        [ "$FIXTURE_RC" = 5 ] \
+            || fail "k: a deferral-only fetch exits 5, got $FIXTURE_RC:" "$fixture/k/run.txt"
+
+        # (4) The continuation re-offers the paused package — that is what a
+        # deferral buys, and `remaining:` is how a queue retries it.
+        grep -F 'remaining: p-plain' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: the paused package must stay in remaining:" "$fixture/k/run.txt"
+
+        # (5) Every rendition agrees: the verdict row, the tally and the
+        # stderr note all say skipped/disk-floor for the same package.
+        assert_verdict_row p-plain skipped disk-floor k
+        grep -F 'skipped disk-floor' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: the engine's own note must name the pause:" "$fixture/k/run.txt"
+        # (4) The tally must not bury a pause in `skipped`: those rows are work
+        # a script has to retry, so they are counted as deferred — and the
+        # routine skip is not swept in with them.
+        grep -F 'skipped=1 deferred=1' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "k: the tally must count the pause as deferred, not skipped:" "$fixture/k/run.txt"
+        # A routine skip is NOT swept into the floor's verdict.
+        assert_verdict_row p-vcs skipped vcs-only k
+        [ "$(rr2_outcome p-vcs status <<<"$FIXTURE_OUTPUT")" = succeeded ] \
+            || fail "k: a routine skip stays succeeded (nothing was to be fetched):" "$fixture/k/run.txt"
+        assert_no_transactions k
+    )
+fi
+
+if want l; then
+    # ─── l. a fetch with no pause keeps the OLD tally byte-for-byte ────────
+    # The `deferred` key is additive (§L.2): a run whose floor is satisfied
+    # must render exactly the line it rendered before R2-juno-6, or every
+    # consumer of `fetch-run` breaks on a change that fixed a bug.
+    (
+        set -euo pipefail
+        ws="$fixture/l/ws"
+        fetch_ws "$ws"
+        add_package "$ws" p-plain "$gsa_meta_any"$'\nsource=(https://example.invalid/plain-1.0.0.tar.gz)'
+        add_package "$ws" p-vcs "$gsa_meta_any"$'\nsource=(git+https://example.invalid/x.git)'
+        export _GSA_DISK_FLOOR_GIB=0
+
+        run_engine "$ws" -Sw p-plain p-vcs
+        [ "$FIXTURE_RC" = 0 ] || fail_out "l: a satisfied floor must succeed (rc $FIXTURE_RC):"
+        grep -F 'fetch-run' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "l: the tally line must still be printed:" "$FIXTURE_OUTPUT"
+        grep -F 'deferred' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            && fail "l: a run with no pause must not grow a deferred field:" "$FIXTURE_OUTPUT"
+        grep -F 'fetch-run packages=2 fetched=1 failed=0 skipped=1' <<<"$FIXTURE_OUTPUT" >/dev/null \
+            || fail "l: the machine tally keeps its old shape:" "$FIXTURE_OUTPUT"
+        [ "$(rr2_plan p-plain plan <<<"$FIXTURE_OUTPUT")" = fetch ] \
+            || fail "l: a satisfiable candidate is still planned fetch:" "$FIXTURE_OUTPUT"
+        [ "$(rr2_outcome p-plain status <<<"$FIXTURE_OUTPUT")" = succeeded ] \
+            || fail "l: a fetched package is succeeded:" "$FIXTURE_OUTPUT"
+        assert_no_transactions l
     )
 fi

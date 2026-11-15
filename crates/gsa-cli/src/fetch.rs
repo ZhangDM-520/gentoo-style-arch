@@ -128,15 +128,22 @@ fn run_fetch_only_inner(
     // Candidacy is the gsa-recipe source classification (owner decision 3:
     // never grep), decided before anything fetches — so a pure-VCS recipe
     // is planned `skip vcs-only` and a recipe with nothing to fetch
-    // `skip not-a-candidate`.
+    // `skip not-a-candidate`. The disk floor is the ONE complication the
+    // plan can know before fetching, and it is decided by the same seam the
+    // fetch uses, so a plan can never promise a fetch the run will refuse
+    // (R2-juno-6: `plan tcl fetch ok` for a package the same run reported as
+    // `skipped disk-floor`).
+    let cache = gsa_fetch::engine::resolve_srcdest();
     let mut plan: Vec<PlanRow> = Vec::new();
     for (_, id) in &selection.listed {
         let recipe_dir = graph
             .index_of(id.as_str())
             .map(|idx| root.join(&graph.record(idx).path))
             .unwrap_or_else(|| root.clone());
+        let floor_paused =
+            gsa_fetch::engine::floor_pause_for(cache.as_deref(), &recipe_dir).is_some();
         let (action, reason) = match db.get(id.as_str()) {
-            Some(meta) => plan_row_for(&meta, &recipe_dir),
+            Some(meta) => plan_row_for(&meta, &recipe_dir, floor_paused),
             // No metadata: nothing can be fetched, and the engine will say
             // why (`eval-failed`) — the plan names the same class.
             None => (PlanAction::Skip, "not-a-candidate".to_string()),
@@ -241,7 +248,12 @@ fn run_fetch_only_inner(
     let _ = write!(
         out,
         "{}",
-        render::render_fetch_prose_with(&results, &selection.prerequisites_added, &named)
+        render::render_fetch_prose_with(
+            &results,
+            &selection.prerequisites_added,
+            &named,
+            crate::output::is_human(),
+        )
     );
     let rec_state = crate::install::record_state_dir(inv, err);
     record::emit_machine_record(out, &record, &rec_state, err);
@@ -256,9 +268,16 @@ fn run_fetch_only_inner(
 /// (blind-review 2026-11-11, airgapped-admin). A recipe whose metadata is
 /// missing is a skip, loudly honest rather than a fetch attempt that would
 /// fail at eval.
+///
+/// A plan row states the intended action and the complications it ALREADY
+/// knows, never the outcome: a candidate that then fails is `fetch ok` in
+/// the plan and `failed` in the outcome. The one complication knowable up
+/// front is the disk floor, and naming it is what keeps the plan from
+/// promising 34 fetches on a filesystem that will refuse them (R2-juno-6).
 fn plan_row_for(
     meta: &gsa_recipe::RecipeMeta,
     recipe_dir: &std::path::Path,
+    floor_paused: bool,
 ) -> (PlanAction, String) {
     if !meta.missing_local_sources(recipe_dir).is_empty() {
         return (
@@ -268,6 +287,9 @@ fn plan_row_for(
     }
     let candidacy = gsa_fetch::candidacy::classify(meta);
     match &candidacy {
+        FetchCandidacy::Plain(_) if floor_paused => {
+            (PlanAction::Skip, verdict::REASON_DISK_FLOOR.to_string())
+        }
         FetchCandidacy::Plain(_) => (PlanAction::Fetch, "ok".to_string()),
         FetchCandidacy::VcsOnly => (PlanAction::Skip, verdict::REASON_VCS_ONLY.to_string()),
         FetchCandidacy::NoFetchable => (
@@ -279,13 +301,22 @@ fn plan_row_for(
 
 /// The §H outcome row of one fetch verdict (record.rs's documented
 /// mapping): `ok` → `succeeded`, `failed` → `failed`, `skipped` →
-/// `succeeded` with its skip reason (so `remaining:` never re-fetches one).
-/// A skipped fetch produced no process code — `rc`/`dur` are `-` (§H.2).
+/// `succeeded` with its skip reason *only when the skip is routine*
+/// (`vcs-only`, `not-a-candidate`: nothing was to be fetched, so
+/// `remaining:` must never re-fetch it). A skip the RUN imposed —
+/// `disk-floor` — is a `deferred` row instead: the fetch never happened, so
+/// a `succeeded` would claim an action the floor prevented, and the deferral
+/// is what puts it back in the continuation (R2-juno-6: `tcl succeeded - -
+/// disk-floor` read as a completed fetch). A skipped/deferred fetch produced
+/// no process code — `rc`/`dur` are `-` (§H.2).
 fn verdict_row(id: &RecipeId, result: &FetchResult) -> OutcomeRow {
     let (status, rc, dur) = match result.verdict {
         FetchVerdict::Ok => (RowStatus::Succeeded, Some(0), Some(result.dur as i64)),
         FetchVerdict::Failed => (RowStatus::Failed, Some(1), Some(result.dur as i64)),
-        FetchVerdict::Skipped => (RowStatus::Succeeded, None, None),
+        FetchVerdict::Skipped if verdict::is_routine_skip(&result.reason) => {
+            (RowStatus::Succeeded, None, None)
+        }
+        FetchVerdict::Skipped => (RowStatus::Deferred, None, None),
     };
     OutcomeRow {
         pkg: id.clone(),
@@ -293,5 +324,55 @@ fn verdict_row(id: &RecipeId, result: &FetchResult) -> OutcomeRow {
         rc,
         dur,
         reason: result.reason.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gsa_fetch::verdict::{REASON_DISK_FLOOR, REASON_NOT_A_CANDIDATE, REASON_VCS_ONLY};
+
+    fn row(pkg: &str, verdict: FetchVerdict, reason: &str) -> OutcomeRow {
+        verdict_row(
+            &RecipeId::new(pkg).expect("a literal id"),
+            &FetchResult::new(pkg, verdict, 0, reason).expect("a literal reason"),
+        )
+    }
+
+    /// R2-juno-6: the run record said `succeeded` for a fetch the disk floor
+    /// stopped, so a script read "the sources are cached" from a package the
+    /// same run reported as skipped. A skip the RUN imposed is a deferral;
+    /// only a routine skip (nothing to fetch) is a success, because only that
+    /// one must stay out of `remaining:`.
+    #[test]
+    fn a_paused_fetch_is_deferred_while_a_routine_skip_stays_succeeded() {
+        let paused = row("tcl", FetchVerdict::Skipped, REASON_DISK_FLOOR);
+        assert_eq!(paused.status, RowStatus::Deferred);
+        assert_eq!(paused.reason, REASON_DISK_FLOOR);
+        assert_eq!(paused.rc, None, "a paused fetch ran no process");
+        assert_eq!(paused.dur, None, "a paused fetch has no duration");
+
+        for reason in [REASON_VCS_ONLY, REASON_NOT_A_CANDIDATE] {
+            let skipped = row("mesa-git", FetchVerdict::Skipped, reason);
+            assert_eq!(
+                skipped.status,
+                RowStatus::Succeeded,
+                "a routine skip ({reason}) must never re-fetch"
+            );
+        }
+    }
+
+    /// The run-level rc follows the same rows (§G.1): a deferral-only fetch
+    /// run exits 5 and never claims success, which is what makes the record
+    /// and the rc agree.
+    #[test]
+    fn a_deferral_only_fetch_run_exits_five() {
+        let rows = vec![
+            row("tcl", FetchVerdict::Skipped, REASON_DISK_FLOOR),
+            row("tk", FetchVerdict::Skipped, REASON_DISK_FLOOR),
+        ];
+        let outcome = RunOutcome::compute(&rows, false, false, false);
+        assert_eq!(outcome.outcome, "deferral");
+        assert_eq!(outcome.rc, 5);
     }
 }

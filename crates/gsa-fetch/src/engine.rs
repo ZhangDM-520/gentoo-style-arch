@@ -111,15 +111,42 @@ pub fn disk_free_gib(path: &Path) -> Option<u64> {
     Some(bytes / (1024 * 1024 * 1024))
 }
 
+/// The disk-floor pause (owner decision 6): `Some(free GiB)` when the floor
+/// REFUSES a fetch, `None` when it allows one. This is the one decision —
+/// the `-Sw` plan row, the fetch itself and the run-record outcome row all
+/// read it, so no rendition can claim a fetch that the floor stopped
+/// (R2-juno-6: the plan said `fetch ok` and the record said `succeeded` for
+/// two packages the same run reported as `skipped disk-floor`).
+pub fn disk_floor_pause(probe: &Path) -> Option<u64> {
+    // An unprobeable floor never blocks fetch-ahead; the download itself
+    // fails loudly if the disk really is full.
+    match disk_free_gib(probe) {
+        Some(gib) if gib < disk_free_min_gib() => Some(gib),
+        _ => None,
+    }
+}
+
+/// Where the floor is measured for one recipe: the resolved `SRCDEST`
+/// mirror, else makepkg's `$startdir` fallback — the recipe directory. ONE
+/// derivation, shared by the plan and the fetch.
+pub fn floor_probe_path(cache: Option<&Path>, recipe_dir: &Path) -> PathBuf {
+    cache
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| recipe_dir.to_path_buf())
+}
+
 /// The disk-floor gate (owner decision 6): true when fetch-ahead may spawn
 /// — free space on the cache filesystem is at least the floor.
 pub fn disk_floor_ok(cache_path: &Path) -> bool {
-    match disk_free_gib(cache_path) {
-        Some(gib) => gib >= disk_free_min_gib(),
-        // An unprobeable floor never blocks fetch-ahead; the download
-        // itself fails loudly if the disk really is full.
-        None => true,
-    }
+    disk_floor_pause(cache_path).is_none()
+}
+
+/// The pause for one recipe's fetch, given the resolved cache: `Some(free
+/// GiB)` when the floor stops it. The `-Sw` plan row and `fetch_recipe`
+/// both call THIS, so the plan can never promise a fetch the same run
+/// refuses (R2-juno-6).
+pub fn floor_pause_for(cache: Option<&Path>, recipe_dir: &Path) -> Option<u64> {
+    disk_floor_pause(&floor_probe_path(cache, recipe_dir))
 }
 
 /// What a verification-class failure actually indicts. makepkg runs the
@@ -583,11 +610,15 @@ pub fn fetch_recipe(pkg: &str, root: &Path, err: &mut dyn Write) -> FetchResult 
                 .expect("pkg is validated by the caller");
         }
     };
-    let floor_probe = cache.clone().unwrap_or_else(|| recipe_dir.clone());
-    if !disk_floor_ok(&floor_probe) {
+    let floor_probe = floor_probe_path(cache.as_deref(), &recipe_dir);
+    if let Some(free) = disk_floor_pause(&floor_probe) {
+        // The row must read as "nothing happened", not as a fetch: a
+        // `succeeded` here would claim an action the floor prevented
+        // (R2-juno-6 — `tcl succeeded - - disk-floor` for a fetch that never
+        // started).
         let _ = writeln!(
             err,
-            "gsa-fetch: {pkg}: skipped {REASON_DISK_FLOOR} (free space below {} GiB floor)",
+            "gsa-fetch: {pkg}: skipped {REASON_DISK_FLOOR} ({free} GiB free, below the {} GiB floor)",
             disk_free_min_gib()
         );
         return FetchResult::new(pkg, FetchVerdict::Skipped, 0, REASON_DISK_FLOOR)

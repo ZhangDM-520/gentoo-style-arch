@@ -942,6 +942,7 @@ struct PopulationTally<'a> {
     ok: usize,
     failed: usize,
     skipped: usize,
+    deferred: usize,
 }
 
 impl<'a> PopulationTally<'a> {
@@ -961,7 +962,22 @@ impl<'a> PopulationTally<'a> {
             total: rows.len(),
             ok: of(FetchVerdict::Ok),
             failed: of(FetchVerdict::Failed),
-            skipped: of(FetchVerdict::Skipped),
+            // The same split as the run-wide line: a routine skip is skipped,
+            // an imposed one is deferred.
+            skipped: rows
+                .iter()
+                .filter(|r| {
+                    r.verdict == FetchVerdict::Skipped
+                        && gsa_fetch::verdict::is_routine_skip(&r.reason)
+                })
+                .count(),
+            deferred: rows
+                .iter()
+                .filter(|r| {
+                    r.verdict == FetchVerdict::Skipped
+                        && !gsa_fetch::verdict::is_routine_skip(&r.reason)
+                })
+                .count(),
         }
     }
 }
@@ -979,6 +995,7 @@ pub fn render_fetch_prose_with(
     results: &[gsa_fetch::verdict::FetchResult],
     added: &[RecipeId],
     named: &[RecipeId],
+    human: bool,
 ) -> String {
     use gsa_fetch::verdict::FetchVerdict;
     let fetched = results
@@ -991,7 +1008,21 @@ pub fn render_fetch_prose_with(
         .count();
     let skipped = results
         .iter()
-        .filter(|r| r.verdict == FetchVerdict::Skipped)
+        .filter(|r| {
+            r.verdict == FetchVerdict::Skipped && gsa_fetch::verdict::is_routine_skip(&r.reason)
+        })
+        .count();
+    // A skip the RUN imposed (`disk-floor`) is a DEFERRAL, not a routine skip:
+    // it is the row the run record calls `deferred`, so the tally counts it
+    // there and not in `skipped` — otherwise the summary says "skipped 33" for
+    // 33 packages a script must retry (R2-juno-6's four renditions of one
+    // fact). The word appears only when it is non-zero, so a run without a
+    // pause renders the byte-identical old line.
+    let deferred = results
+        .iter()
+        .filter(|r| {
+            r.verdict == FetchVerdict::Skipped && !gsa_fetch::verdict::is_routine_skip(&r.reason)
+        })
         .count();
     // Per-population counts, so "the run failed" can never be read as "MY
     // package failed" when the failure belongs to a prerequisite the run
@@ -1014,10 +1045,15 @@ pub fn render_fetch_prose_with(
             ),
         ]
     };
-    if output::is_human() {
+    if human {
         let mut out = format!(
-            "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped\n",
-            results.len()
+            "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped{}\n",
+            results.len(),
+            if deferred > 0 {
+                format!(", {deferred} deferred by the disk floor")
+            } else {
+                String::new()
+            }
         );
         for PopulationTally {
             label,
@@ -1026,15 +1062,21 @@ pub fn render_fetch_prose_with(
             ok,
             failed: bad,
             skipped: skip,
+            deferred: paused,
         } in &tallies
         {
             out.push_str(&format!(
-                "  {label} ({what}): {total} package(s), {ok} fetched, {bad} failed, {skip} skipped\n"
+                "  {label} ({what}): {total} package(s), {ok} fetched, {bad} failed, {skip} skipped{}\n",
+                if *paused > 0 {
+                    format!(", {paused} deferred")
+                } else {
+                    String::new()
+                }
             ));
         }
         return out;
     }
-    let level = if failed > 0 {
+    let level = if failed > 0 || deferred > 0 {
         Level::Warning
     } else {
         Level::Info
@@ -1045,6 +1087,12 @@ pub fn render_fetch_prose_with(
         ("failed", failed.to_string()),
         ("skipped", skipped.to_string()),
     ];
+    // Only when it happened: a run with no pause keeps the byte-identical
+    // machine row (R2-juno-5's pin), which is what makes adding the key
+    // additive rather than a wire change.
+    if deferred > 0 {
+        pairs.push(("deferred", deferred.to_string()));
+    }
     for tally in &tallies {
         pairs.push((tally.label, tally.total.to_string()));
     }
@@ -1787,6 +1835,74 @@ mod tests {
             (tallies[1].total, tallies[1].ok, tallies[1].failed),
             (1, 0, 1),
             "the failure belongs to the added prerequisite"
+        );
+    }
+
+    /// R2-juno-6: a disk-floor pause is a DEFERRAL, so the tally must count it
+    /// there instead of burying it in `skipped` — a script reads `skipped` as
+    /// "nothing to fetch" and `deferred` as "retry me". Both the human line
+    /// and the machine row are pinned, and a run with no pause must keep the
+    /// exact pre-R2-juno-6 text (the key is additive, §L.2).
+    #[test]
+    fn a_paused_fetch_is_counted_as_deferred_and_absent_from_a_clean_run() {
+        use gsa_fetch::verdict::{
+            FetchResult, FetchVerdict, REASON_DISK_FLOOR, REASON_OK, REASON_VCS_ONLY,
+        };
+        let paused = vec![
+            FetchResult::new("tcl", FetchVerdict::Skipped, 0, REASON_DISK_FLOOR).unwrap(),
+            FetchResult::new("tk", FetchVerdict::Skipped, 0, REASON_DISK_FLOOR).unwrap(),
+            FetchResult::new("mesa-git", FetchVerdict::Skipped, 0, REASON_VCS_ONLY).unwrap(),
+        ];
+        let human = render_fetch_prose_with(&paused, &[], &[], true);
+        assert_eq!(
+            human,
+            "Fetch run: 3 package(s), 0 fetched, 0 failed, 1 skipped, 2 deferred by the disk floor\n",
+            "the human tally separates the pause from the routine skip"
+        );
+        let machine = render_fetch_prose_with(&paused, &[], &[], false);
+        assert!(
+            machine.contains("skipped=1") && machine.contains("deferred=2"),
+            "the machine row counts them apart: {machine}"
+        );
+
+        let clean = vec![
+            FetchResult::new("mesa-git", FetchVerdict::Skipped, 0, REASON_VCS_ONLY).unwrap(),
+            FetchResult::new("app", FetchVerdict::Ok, 1, REASON_OK).unwrap(),
+        ];
+        assert_eq!(
+            render_fetch_prose_with(&clean, &[], &[], true),
+            "Fetch run: 2 package(s), 1 fetched, 0 failed, 1 skipped\n",
+            "a satisfied floor renders the byte-identical old line"
+        );
+        let clean_machine = render_fetch_prose_with(&clean, &[], &[], false);
+        assert!(
+            !clean_machine.contains("deferred"),
+            "the key appears only when it happened: {clean_machine}"
+        );
+
+        // The per-population tallies carry the same split: a paused PREREQUISITE
+        // must land in `deferred`, never in the named selection's `skipped`.
+        let added = [RecipeId::new("lib").unwrap()];
+        let named = [RecipeId::new("app").unwrap()];
+        let mixed = vec![
+            FetchResult::new("lib", FetchVerdict::Skipped, 0, REASON_DISK_FLOOR).unwrap(),
+            FetchResult::new("app", FetchVerdict::Ok, 1, REASON_OK).unwrap(),
+        ];
+        let human = render_fetch_prose_with(&mixed, &added, &named, true);
+        assert!(
+            human.contains(
+                "named (from your selection): 1 package(s), 1 fetched, 0 failed, 0 skipped"
+            ),
+            "the named population fetched clean: {human}"
+        );
+        assert!(
+            human.contains("added (added build-order prerequisites): 1 package(s), 0 fetched, 0 failed, 0 skipped, 1 deferred"),
+            "the pause belongs to the added prerequisite: {human}"
+        );
+        let machine = render_fetch_prose_with(&mixed, &added, &named, false);
+        assert!(
+            machine.contains("deferred=1"),
+            "the machine row carries the run-wide pause: {machine}"
         );
     }
 }

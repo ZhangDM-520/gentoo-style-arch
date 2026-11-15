@@ -172,7 +172,7 @@ Pinned by `tests/gsa-query.sh` §h.
 | --- | --- |
 | `gsa -S <targets…> [ranges…]` | build the selection in build order; install each package's archives immediately after its build and **before any consumer builds** (install-before-dependents, `AGENTS.md` rule 11). Install decision is *checked* (§E) |
 | `gsa -Sl [targets…] [ranges…]` | list the ordered selection with the indices ranges address (today `-l`; with no selection, the whole set in build order) |
-| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) — except on a `-Sw` run, where they ARE the work and set the rc. Two honest non-`ok` outcomes (added 2026-11-11): `failed local-source-missing` when a `source=()` entry with no transport is absent from the recipe directory (the build cannot start; the plan row says `fetch local-source-missing`), and `ok unverified-sums` when a REMOTE source is pinned `SKIP` (fetched, never verified — warning-class, never a clean `ok`; a detached signature's `SKIP` is excluded, since makepkg gpg-verifies it) |
+| `gsa -Sw <targets…>` | fetch-only (live; `gsa fetch` is the alias) (`docs/plans/plan.md` §2): fetch and verify sources ahead of builds; no build, no install. Verdict rows are advisory (§D) — except on a `-Sw` run, where they ARE the work and set the rc. Two honest non-`ok` outcomes (added 2026-11-11): `failed local-source-missing` when a `source=()` entry with no transport is absent from the recipe directory (the build cannot start; the plan row says `fetch local-source-missing`), and `ok unverified-sums` when a REMOTE source is pinned `SKIP` (fetched, never verified — warning-class, never a clean `ok`; a detached signature's `SKIP` is excluded, since makepkg gpg-verifies it). **A disk-floor pause is one decision read by three renditions** (R2-juno-6): the same probe that stops the fetch plans `skip disk-floor`, the outcome row is `deferred disk-floor` (never `succeeded` — nothing happened), and the run is a deferral (rc 5) that keeps the package in `remaining:`. A routine skip (`vcs-only`, `not-a-candidate`) stays `succeeded`: there was nothing to fetch, so it must never re-fetch |
 | `gsa -Sy` | version-sync pass only: provider queries, recipe rewrites left uncommitted, disposition block printed, and the `format: 2` run record emitted (one `noop`/`rewritten` plan row and one outcome row per selected recipe — `succeeded`/`failed`/`deferred`; a deferral-only pass therefore leaves a record and its `-Mh` history row, never nothing at all: I1-ivy-3) (today's automatic pre-build sync made explicitly runnable) |
 | `gsa -Su [targets…] [ranges…]` | update: build+install the stale set (`-Qu`'s definition: the installed reference when one exists, else the newest built instance) with **no sync pass** — the committed versions build as-is (`pacman -Su` semantics) |
 | `gsa -Syu [targets…] [ranges…]` | sync first (`-Sy`), then build+install the stale set |
@@ -1386,8 +1386,7 @@ Pinned by `tests/gsa-model` rendering tests and the resume fixtures.
 | `succeeded` | 0 | `ok`, `skipped-current <evidence>`, `skip-built`, `freshness-waived`, `abi-provider-waived` |
 | `failed` | 1, 125 | `build-failed`, `install-failed`, `lane-lost`, `log-unwritable` |
 | `deferred` | 99 | `anchoring-refused`, `upstream-unverified`, `source-unfetchable` |
-| `parked` | 98 | `waits-on-failed`, `waits-on-deferred` (and `coupled-batch` if the open decision resolves that way) |
-| `never-started` | — | `dispatch-stopped`, `preflight-refused`, `interrupted-before-start`, `never-ready` |
+| `parked` | 98 | `waits-on-failed`, `waits-on-deferred` (and `coupled-batch` if the open decision resolves that way) || `never-started` | — | `dispatch-stopped`, `preflight-refused`, `interrupted-before-start`, `never-ready` |
 | `interrupted` | 129, 130, 143 | `interrupted-mid-build` |
 
 `blocked` (the `format: 1` name for `waits-on-deferred`) is superseded by
@@ -1419,6 +1418,17 @@ for every signal-ended lane, exactly as §I.3 states ("what started is
 the lane code (129/130/143, §F.1), never the reason key. (T9: `startup-refused`
 and `park-marker-unwritable` added to this list in the same pass — they were
 fixture-pinned keys missing from the recorded vocabulary.)
+
+*Amendment (2026-11-15, fetch-only rows — `disk-floor` is a deferral).* A
+fetch-only (`-Sw`) record maps its verdicts as `ok` → `succeeded`,
+`failed` → `failed`, and `skipped` → `succeeded` **only for a routine skip**
+(`vcs-only`, `not-a-candidate`: nothing was to be fetched, so `remaining:`
+must never re-fetch it). A skip the run imposed — `disk-floor` — is
+`deferred disk-floor` with `rc`/`dur` `-`: the fetch never started, so a
+`succeeded` would claim an action the disk prevented and would hide the
+package from `remaining:`. It is the only `deferred` row that carries no lane
+code, because a paused fetch spawns no lane (R2-juno-6: `tcl succeeded - -
+disk-floor` was the record calling a skipped fetch a completed one).
 
 ### H.4 Annotated example
 
