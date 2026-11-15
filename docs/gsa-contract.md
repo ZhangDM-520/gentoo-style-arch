@@ -294,7 +294,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | --- | --- |
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a REMOTE NON-SIGNATURE source pinned `SKIP`; a detached signature's `SKIP` is makepkg's normal spelling and is never a finding, and a present sum's agreement with upstream is the sync pass's question — the family prints a `scope=` row saying so), `state-integrity` (unusable side-car lines, index rows whose archive is gone or resized) (today `--audit`), and a closing `audit total <N finding(s)>` row counting every finding row. Report-only by contract (§E.4); exit 0, read the report |
 | `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
-| `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones the workspace actually BUILT (an archive shipped the name; a declared-but-never-built name is skipped with a summary row, because it would pin the STOCK package — today's hidden `--register-ignorepkg`) |
+| `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones the workspace actually BUILT (an archive shipped the name; a declared-but-never-built name is skipped with a summary row, because it would pin the STOCK package — today's hidden `--register-ignorepkg`). The report's header counts the CLOSURE it introduces (`entries=N in-use=N stale=N`), names the installed-DB census as a classification input only, and closes with ONE `ignorepkg drift missing=N addable=N unbuilt=N` summary whose `addable` is exactly the set `--backfill` plans (2026-11-15 amendment) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated on its DESTROYED SET (§K.3): a `clean` plan applies without asking; a plan that links or rewrites prints its targets and, without `--noconfirm`, stops rc 3 `confirmation-required` (on a TTY it asks one `y`/`N` question first). Must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
 | `gsa -Mc <targets…>` | prune strength 1: `src/`/`pkg/`/`build/` trees and archives of the selection (today `-c` as a wipe) |
@@ -340,6 +340,24 @@ plan/targets and stops rc 3 `confirmation-required`; `--dry-run` renders at
 rc 0; `--noconfirm` applies. The gate covers `-Mm`/`-Mccc` only: `-Mh --show`
 is a pure read with no confirmation at all. Wording-only (§L.2); pinned by
 `tests/gsa-maint-v2.sh`, no fixture changes.
+
+*Amendment (2026-11-15, one closure in one number set).* `-Mi` reported three
+unrelated numbers for one closure: a header counting the installed-DB census
+(`ignorepkg closure installed-db 378 package(s)`), a `missing` row per wanted
+name, and a `--backfill` header naming its own planned adds — so an operator
+could not tell whether the drift was 2 entries or 941, and nothing on screen
+said which names the repair would actually touch. The report now derives
+every count from ONE partition (`WantedSplit`: present / addable / unbuilt)
+shared with `--backfill`, prints a header that counts the closure it
+introduces (`entries=N in-use=N stale=N; <census> consulted for
+classification`), and closes the missing rows with ONE
+`ignorepkg drift missing=N addable=N unbuilt=N` row. `missing` equals the
+`missing` row count and, by construction, `addable + unbuilt`; `--backfill
+--dry-run` plans exactly `addable` adds, and the never-built tally equals
+`unbuilt`. `--prune` prints the same header (its stale count is its removal
+plan). No rc, vocabulary or record change — the rows keep their §F classes.
+Pinned by `tests/gsa-maint-v2.sh` §c, falsified RED three ways (header
+reverted to the census, drift row dropped, backfill adding the unbuilt names).
 
 ### B.8 Global long modifiers (combinable with the families that can act)
 

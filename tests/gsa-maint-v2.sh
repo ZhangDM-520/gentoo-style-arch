@@ -482,6 +482,9 @@ if want c; then
         make_workspace "$ws" 1 auto low
         add_package "$ws" ignorea "$gsa_meta_any" git
         add_package "$ws" ignoreb "$gsa_meta_any" git
+        # `ignorec` is declared and never built: the `unbuilt` half of the
+        # drift summary (an archive-less name `--backfill` must never add).
+        add_package "$ws" ignorec "$gsa_meta_any" git
         # `ignoreb` must look BUILT: the backfill registers only names an
         # archive shipped (a never-built declared name would pin the stock
         # package of that name, blind review 2026-11-11 F9).
@@ -494,7 +497,9 @@ if want c; then
         # The closure under test: NEVER /etc/pacman.conf (§B.7's target is
         # the conf the verb is pointed at). `ignorea` is declared by a
         # committed recipe (in use), `gsamaintv2ghost` is declared by
-        # nothing (stale), `ignoreb` is wanted but missing.
+        # nothing (stale), `ignoreb` is wanted but missing, `ignorec` is
+        # wanted, missing, and NEVER BUILT — the two halves `--backfill`
+        # treats differently.
         conf="$ws/pacman.conf"
         make_install_conf "$conf"
         printf 'IgnorePkg = ignorea gsamaintv2ghost\n' >>"$conf"
@@ -504,6 +509,37 @@ if want c; then
         has_row "$FIXTURE_OUTPUT" "ignorea in-use in-use declared-by ignorea" "declared entry is in use"
         has_row "$FIXTURE_OUTPUT" "gsamaintv2ghost stale stale archives-gone" "undeclared entry is stale"
         has_row "$FIXTURE_OUTPUT" "ignoreb missing declared-by ignoreb" "wanted name is missing"
+
+        # R2-vera-1: the header introduces the rows UNDER it and the drift
+        # summary reconciles with the repair, so an operator can tell
+        # "how many entries would change?" without computing anything.
+        # Every count is derived from this scenario's own rows.
+        report_out="$FIXTURE_OUTPUT"
+        report_entries=$(grep -c -E '^[^ ]+ (in-use|stale) ' <<<"$report_out" || true)
+        header_entries=$(sed -n 's/^ignorepkg closure entries=\([0-9]*\) .*/\1/p' <<<"$report_out")
+        [ -n "$header_entries" ] \
+            || fail "the -Mi header must name the closure size it introduces (R2-vera-1): $report_out"
+        [ "$header_entries" = "$report_entries" ] \
+            || fail "the -Mi header says $header_entries entries but classifies $report_entries (R2-vera-1): $report_out"
+        grep -Eq '^ignorepkg closure entries=[0-9]+ in-use=[0-9]+ stale=[0-9]+; installed-db .* consulted for classification$' <<<"$report_out" \
+            || fail "the -Mi header must mark the installed-DB census as an input, never the closure (R2-vera-1): $report_out"
+        missing_rows=$(grep -c ' missing declared-by ' <<<"$report_out" || true)
+        drift=$(sed -n 's/^ignorepkg drift missing=\([0-9]*\) addable=\([0-9]*\) unbuilt=\([0-9]*\)$/\1 \2 \3/p' <<<"$report_out")
+        [ -n "$drift" ] || fail "the -Mi report must state one drift summary (R2-vera-1): $report_out"
+        read -r d_missing d_addable d_unbuilt <<<"$drift"
+        [ "$d_missing" = "$missing_rows" ] \
+            || fail "drift missing=$d_missing disagrees with the $missing_rows missing rows (R2-vera-1): $report_out"
+        [ "$d_missing" = "$((d_addable + d_unbuilt))" ] \
+            || fail "drift must reconcile: missing=$d_missing ≠ addable=$d_addable + unbuilt=$d_unbuilt (R2-vera-1): $report_out"
+
+        # …and the repair's plan IS that summary's `addable` set: the dry-run
+        # backfill plans exactly as many adds as the report called addable.
+        run_engine "$ws" -Mi --backfill --dry-run --config "$conf" --state-dir "$state"
+        [ "$FIXTURE_RC" = 0 ] || fail "-Mi --backfill --dry-run is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        planned=$(grep -c ' add planned$' <<<"$FIXTURE_OUTPUT" || true)
+        [ "$planned" = "$d_addable" ] \
+            || fail "the backfill plans $planned add(s) but the report called $d_addable addable (R2-vera-1): $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "ignorepkg backfill $d_unbuilt declared name(s) never built" "unbuilt tally matches the report"
 
         # --prune removes ONLY the stale name; the declared one survives —
         # the keep-in-use pruning guard (crates/gsa-maint/src/ignorepkg.rs).

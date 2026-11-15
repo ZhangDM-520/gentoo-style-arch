@@ -122,10 +122,70 @@ fn classify(
     }
 }
 
+/// The wanted universe split against the closure — the ONE derivation the
+/// report and `--backfill` share (R2-vera-1), so the numbers the report
+/// prints ARE the sets the repair would act on. Three counts for one closure
+/// (a consulted installed-DB census, a `missing` row per declared name, and a
+/// backfill header) once left an operator unable to tell whether the answer
+/// was 2 entries or 941.
+struct WantedSplit {
+    /// Wanted names the closure already covers.
+    present: Vec<String>,
+    /// Wanted names the closure misses AND an archive ships: `--backfill`
+    /// appends these (a house package exists to protect).
+    addable: Vec<String>,
+    /// Wanted names the closure misses because nothing was ever built:
+    /// `--backfill` never adds them, because registering a declared-but-never-
+    /// built name would pin the STOCK package of that name (blind review
+    /// 2026-11-11, F9).
+    unbuilt: Vec<String>,
+}
+
+impl WantedSplit {
+    fn of(
+        wanted: &BTreeSet<String>,
+        closure: &[String],
+        shipped: &BTreeSet<String>,
+    ) -> WantedSplit {
+        let mut split = WantedSplit {
+            present: Vec::new(),
+            addable: Vec::new(),
+            unbuilt: Vec::new(),
+        };
+        for name in wanted {
+            if closure.contains(name) {
+                split.present.push(name.clone());
+            } else if shipped.contains(name) {
+                split.addable.push(name.clone());
+            } else {
+                split.unbuilt.push(name.clone());
+            }
+        }
+        split
+    }
+
+    /// Wanted names the closure misses, in wanted order — the `missing` rows
+    /// the report prints, and `addable + unbuilt` by construction.
+    fn missing(&self) -> usize {
+        self.addable.len() + self.unbuilt.len()
+    }
+}
+
+/// The `-Mi` header: what the closure HOLDS, and what the installed-DB census
+/// was consulted FOR. The census is a classification input, never the closure
+/// itself — a header counting it read as the closure size (R2-vera-1).
+fn closure_header(entries: usize, in_use: usize, stale: usize, census: &str) -> String {
+    format!(
+        "entries={entries} in-use={in_use} stale={stale}; {census} consulted for classification"
+    )
+}
+
 /// `-Mi` default: report the closure drift. Full rows over the closure and
 /// the wanted universe: `present`/`keep`-class rows for what belongs,
-/// `stale` for prunable entries, `missing` for wanted names not covered.
-/// Report-only: rc stays 0 (§E.4) and nothing is written.
+/// `stale` for prunable entries, `missing` for wanted names not covered, and
+/// ONE `drift` summary that reconciles them with the repair's plan
+/// (`missing = addable + unbuilt`). Report-only: rc stays 0 (§E.4) and
+/// nothing is written.
 pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     let closure = read_ignorepkg(conf)?;
     let declared = ctx.declared_names();
@@ -135,16 +195,43 @@ pub fn report(ctx: &MaintCtx<'_>, conf: &Path) -> Result<Vec<Row>, String> {
     let Some(installed_set) = installed else {
         return Err(note);
     };
-    let mut rows = vec![Row::new("ignorepkg", "closure", note)];
-    for name in &closure.names {
-        let (class, reason) = classify(&declared, name, &installed_set, &shipped);
+    let split = WantedSplit::of(&wanted, &closure.names, &shipped);
+    let classified: Vec<(String, &'static str, String)> = closure
+        .names
+        .iter()
+        .map(|name| {
+            let (class, reason) = classify(&declared, name, &installed_set, &shipped);
+            (name.clone(), class, reason)
+        })
+        .collect();
+    let in_use = classified.iter().filter(|(_, c, _)| *c == "in-use").count();
+    let stale = classified.len() - in_use;
+    let mut rows = vec![Row::new(
+        "ignorepkg",
+        "closure",
+        closure_header(closure.names.len(), in_use, stale, &note),
+    )];
+    for (name, class, reason) in classified {
         rows.push(Row::new(name, class, reason));
     }
-    for name in &wanted {
-        if !closure.names.contains(name) {
+    if split.missing() > 0 {
+        for name in &wanted {
+            if split.present.contains(name) {
+                continue;
+            }
             let id = declared_by(&declared, name).unwrap_or_default();
             rows.push(Row::new(name, "missing", format!("declared-by {id}")));
         }
+        rows.push(Row::new(
+            "ignorepkg",
+            "drift",
+            format!(
+                "missing={} addable={} unbuilt={}",
+                split.missing(),
+                split.addable.len(),
+                split.unbuilt.len()
+            ),
+        ));
     }
     if closure.names.is_empty() && wanted.is_empty() {
         rows.push(Row::new(
@@ -170,25 +257,24 @@ pub fn backfill(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>
     let closure = read_ignorepkg(conf)?;
     let wanted = wanted_names(ctx);
     let shipped = shipped_names(ctx)?;
+    // The SAME partition the report prints counts from (R2-vera-1): an
+    // `addable=` in the report and an `add planned` here can never disagree.
+    let split = WantedSplit::of(&wanted, &closure.names, &shipped);
     let mut rows = Vec::new();
-    let mut missing: Vec<String> = Vec::new();
-    let mut unbuilt = 0usize;
-    for name in &wanted {
-        if closure.names.contains(name) {
-            rows.push(Row::new(name, "present", "in-closure"));
-        } else if shipped.contains(name) {
-            missing.push(name.clone());
-        } else {
-            unbuilt += 1;
-        }
+    for name in &split.present {
+        rows.push(Row::new(name, "present", "in-closure"));
     }
-    if unbuilt > 0 {
+    if !split.unbuilt.is_empty() {
         rows.push(Row::new(
             "ignorepkg",
             "backfill",
-            format!("{unbuilt} declared name(s) never built — not registered"),
+            format!(
+                "{} declared name(s) never built — not registered",
+                split.unbuilt.len()
+            ),
         ));
     }
+    let missing = split.addable;
     if missing.is_empty() {
         return Ok(rows);
     }
@@ -222,17 +308,26 @@ pub fn prune(ctx: &MaintCtx<'_>, conf: &Path, apply: bool) -> Result<Vec<Row>, S
     let Some(installed_set) = installed else {
         return Err(note);
     };
-    let mut rows = vec![Row::new("ignorepkg", "closure", note)];
+    let mut rows = vec![Row::new("ignorepkg", "closure", "deferred")];
     let mut remove: Vec<String> = Vec::new();
+    let mut in_use = 0usize;
     for name in &closure.names {
         let (class, reason) = classify(&declared, name, &installed_set, &shipped);
         if class == "in-use" {
+            in_use += 1;
             rows.push(crate::protect::keep_row(name, &reason));
         } else {
             rows.push(Row::new(name, "remove", reason));
             remove.push(name.clone());
         }
     }
+    // The same header `report` prints (one derivation, R2-vera-1): the
+    // closure it classifies, split by in-use and stale.
+    rows[0] = Row::new(
+        "ignorepkg",
+        "closure",
+        closure_header(closure.names.len(), in_use, remove.len(), &note),
+    );
     if remove.is_empty() {
         return Ok(rows);
     }
