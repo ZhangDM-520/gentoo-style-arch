@@ -222,4 +222,92 @@ case $command in
 *) fail "the continuation command did not mirror the resolved --intensity (§H.2): $command" ;;
 esac
 
-printf 'anchor defer fixture: PASS (deferred a-stable, parked b-dep, built c-plain)\n'
+# ─── A swept SRCDEST mirror is attributed, never left to makepkg's words ────
+# Same dispatch discipline as the deferral above, one layer lower: a recipe
+# whose mirror directory EXISTS but is not a git repository (its `refs/` was
+# swept — the 2026-11-15 production shape) must fail its OWN lane naming
+# `mirror-unusable` and the path, and makepkg must never be spawned for it.
+# makepkg's own wording (`'<mirror>' is not a clone of '<url>'`, or a bare
+# `git clone` failure inside `extract_git`) names the symptom, not the fault.
+(
+    set -euo pipefail
+    ws="$fixture/mirror/ws"
+    make_workspace "$ws" 1 2 low
+    # A recipe with a VARIABLE-BUILT git source: 439 of 670 real recipes spell
+    # `source` this way, so the gate must read the EVALUATED array — a static
+    # scan would see no mirror here and the arm would pass vacuously.
+    add_package "$ws" swept-src "${gsa_meta_any}"$'\n'"$(printf '%s\n' \
+        '_repo=swept-src' \
+        'source=("git+https://example.invalid/${_repo}.git")')" git
+    add_package "$ws" plain-ok "$gsa_meta_any" git
+    mkdir -p "$ws/fake" "$ws/bin"
+    cat >"$ws/bin/makepkg" <<'MK'
+#!/usr/bin/env bash
+set -eu
+id=$(basename "$PWD")
+printf '%s\n' "$id" >>"$GSA_FAKE_DIR/makepkg_calls"
+: >"$PWD/$id-1.0.0-1-any.pkg.tar.zst"
+exit 0
+MK
+    chmod +x "$ws/bin/makepkg"
+    # The swept mirror: a bare repo with `refs/` removed, exactly as the host
+    # found 208 of them. One healthy mirror beside it proves the probe does
+    # not report every mirror.
+    srcdest="$fixture/mirror/srcdest"
+    mkdir -p "$srcdest"
+    git init -q --bare "$srcdest/swept-src"
+    git init -q --bare "$srcdest/plain-ok"
+    rm -rf "$srcdest/swept-src/refs"
+    # GSA_CONF_DIR is exported ONCE per fixture shell by rr2_engine_argv, so a
+    # later section must name its own directory or the earlier section's
+    # (empty) gsa.conf answers and the srcdest never resolves.
+    export GSA_CONF_DIR="$fixture/mirror/conf"
+    mkdir -p "$GSA_CONF_DIR"
+    printf 'srcdest = %s\n' "$srcdest" >"$GSA_CONF_DIR/gsa.conf"
+
+    export PATH="$ws/bin:$PATH"
+    export GSA_FAKE_DIR="$ws/fake"
+    run_engine "$ws" -B --leaf --intensity low --state-dir "$ws/state" swept-src plain-ok
+    {
+        echo "$FIXTURE_OUTPUT"
+    } >"$fixture/mirror/output.txt"
+
+    # 1. THE POINT: makepkg was never spawned for the refused recipe — a build
+    #    that cannot succeed must not run (and, under -S, must not transact).
+    if grep -qx 'swept-src' "$ws/fake/makepkg_calls" 2>/dev/null; then
+        fail "makepkg was spawned for a recipe whose mirror is unusable:" "$fixture/mirror/output.txt"
+    fi
+    # 2. The lane names the FAULT and the mirror, not makepkg's symptom.
+    reason=$(rr2_outcome swept-src reason <<<"$FIXTURE_OUTPUT")
+    case $reason in
+    "mirror-unusable swept-src $srcdest/swept-src") ;;
+    *) fail "swept-src reason '$reason' is not 'mirror-unusable <name> <mirror path>':" "$fixture/mirror/output.txt" ;;
+    esac
+    [ "$(rr2_outcome swept-src status <<<"$FIXTURE_OUTPUT")" = "failed" ] \
+        || fail "a corrupt mirror fails its own lane (nothing compiled):" "$fixture/mirror/output.txt"
+    # The record row is the attribution; git's own words and the remedy ride
+    # the lane log (§J.1), which is where an operator reads the cause.
+    lane_log="$ws/state/logs/swept-src.log"
+    [ -f "$lane_log" ] || fail "no lane log at $lane_log"
+    grep -F "not a git repository" "$lane_log" >/dev/null \
+        || fail "the refusal drops git's own words:" "$lane_log"
+    grep -F "gsa -Md --fix" "$lane_log" >/dev/null \
+        || fail "the refusal names no remedy (§I.1):" "$lane_log"
+    grep -F "$srcdest/swept-src" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "the refusal does not name the mirror path on the console:" "$fixture/mirror/output.txt"
+
+
+    # 3. A healthy mirror is not a finding: unrelated work still builds.
+    grep -qx 'plain-ok' "$ws/fake/makepkg_calls" 2>/dev/null \
+        || fail "plain-ok was never built — the gate refused a healthy mirror:" "$fixture/mirror/output.txt"
+    [ "$(rr2_outcome plain-ok status <<<"$FIXTURE_OUTPUT")" = "succeeded" ] \
+        || fail "plain-ok did not run to completion:" "$fixture/mirror/output.txt"
+
+    # 4. The build path REPORTS, never heals: repairing a shared source cache
+    #    from a lane would race every other lane reading it. The heal belongs
+    #    to `-Sy` and `-Md --fix`.
+    [ ! -d "$srcdest/swept-src/refs" ] \
+        || fail "the build path repaired the mirror — a lane must never write the shared cache"
+)
+
+printf 'anchor defer fixture: PASS (deferred a-stable, parked b-dep, built c-plain, mirror-unusable swept-src)\n'

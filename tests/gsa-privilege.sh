@@ -6,8 +6,8 @@ set -euo pipefail
 # stub `makepkg`, `GSA_STATE_DIR` overrides; the real /var/lib/gsa is never
 # read or written.
 #
-# Pinned here (seven ( subshell ) sections, run one alone with
-# GSA_PRIV_ONLY=a…g):
+# Pinned here (nine ( subshell ) sections, run one alone with
+# GSA_PRIV_ONLY=a…i):
 #   a. an unprivileged mutating verb refuses early (§G.1 rc 3) with the
 #      pacman-worded message and creates NO state;
 #   b. unprivileged read-only verbs pass the gate untouched;
@@ -25,6 +25,10 @@ set -euo pipefail
 #      entrypoint or `sudo -E` re-exec): the run refuses pre-dispatch with
 #      the build-user guidance instead of dropping to root and failing at
 #      the first makepkg as a generic build-failed.
+#   i. the `SRCDEST` mirror probe answers the MIRROR, not the caller's
+#      identity: git's `dubious ownership` guard refuses build-user mirrors
+#      to root, so a bare root shell must still see a healthy mirror as
+#      healthy and `-Md` must still report the swept one.
 #
 # Sections c–e use real `sudo -n` (passwordless by the host contract) with
 # `env PATH="$PATH" …` so the stubs and knobs survive sudo's secure_path and
@@ -314,6 +318,76 @@ if [ -z "$only" ] || [ "$only" = h ]; then
             fail "h: the failure must not surface as a post-build build-failed: $FIXTURE_OUTPUT"
         fi
         [ ! -e "$log" ] || fail "h: a refused run must not build"
+    )
+fi
+
+# ── i. the mirror probe answers the MIRROR, not the caller's identity ────
+# The `SRCDEST` mirrors are build-user data and the engine runs as root, so
+# git's `dubious ownership` guard refuses them — except when SUDO_UID happens
+# to match the owner. A probe that read that verdict as the mirror's state
+# would report every healthy mirror unusable under a bare root shell, and
+# `-Md --fix` would then "repair" the entire source cache. Both entrypoints
+# are pinned: with the sudo identity AND stripped of it.
+if [ -z "$only" ] || [ "$only" = i ]; then
+    (
+        ws="$fixture/i/ws"
+        state="$fixture/i/state"
+        srcdest="$fixture/i/srcdest"
+        conf="$fixture/i/conf"
+        make_ws "$ws"
+        mkdir -p "$srcdest" "$conf"
+        # A roster VCS source is what puts a name in scope (the doctor never
+        # lists the source cache: it also holds extracted tarballs).
+        cat >"$ws/packages/misc/pkg1/PKGBUILD" <<'PKGB'
+pkgname=pkg1
+pkgver=1.0.0
+pkgrel=1
+arch=(x86_64)
+license=('MIT')
+source=("git+https://example.invalid/healthy.git"
+        "git+https://example.invalid/swept.git")
+PKGB
+        (cd "$ws/packages/misc/pkg1" && GIT_CONFIG_COUNT=0 makepkg --printsrcinfo >.SRCINFO 2>/dev/null) ||
+            fail "i: cannot synthesize .SRCINFO"
+        # Built as the build user, exactly like makepkg leaves them: one
+        # healthy mirror, one whose `refs/` was swept.
+        git init -q --bare "$srcdest/healthy"
+        git init -q --bare "$srcdest/swept"
+        rm -rf "$srcdest/swept/refs"
+        printf 'srcdest = %s\n' "$srcdest" >"$conf/gsa.conf"
+
+        # (1) with the sudo identity — the case that always worked
+        set +e
+        out=$(cd "$ws" && sudo -n env \
+            PATH="$PATH" GSA_CONF_DIR="$conf" GSA_STATE_DIR="$state" \
+            "$engine" -Md --state-dir "$state" 2>&1)
+        rc=$?
+        set -e
+        [ "$rc" -eq 0 ] || fail "i: -Md is report-only rc 0, got $rc: $out"
+        if grep -F "mirror:$srcdest/healthy" <<<"$out" >/dev/null; then
+            fail "i: a HEALTHY mirror was reported unusable under sudo: $out"
+        fi
+        grep -F "mirror:$srcdest/swept unusable" <<<"$out" >/dev/null ||
+            fail "i: the swept mirror must still be reported: $out"
+
+        # (2) stripped of the sudo identity — a bare root shell. Without an
+        # owner-agnostic probe every mirror reads as `dubious ownership`.
+        set +e
+        out=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER \
+            PATH="$PATH" GSA_CONF_DIR="$conf" GSA_STATE_DIR="$state" \
+            "$engine" -Md --state-dir "$state" 2>&1)
+        rc=$?
+        set -e
+        [ "$rc" -eq 0 ] || fail "i: -Md is report-only rc 0, got $rc: $out"
+        if grep -F "mirror:$srcdest/healthy" <<<"$out" >/dev/null; then
+            fail "i: the probe judged the CALLER's identity, not the mirror (a bare root shell reported a healthy mirror): $out"
+        fi
+        grep -F "mirror:$srcdest/swept unusable" <<<"$out" >/dev/null ||
+            fail "i: the swept mirror must still be reported without the sudo identity: $out"
+        # The finding the flag must never invent: the sweep is not repaired by
+        # a read, and the healthy mirror is never touched.
+        [ ! -d "$srcdest/swept/refs" ] || fail "i: a report-only -Md must not repair"
+        [ -d "$srcdest/healthy/refs" ] || fail "i: the healthy mirror lost its refs/"
     )
 fi
 

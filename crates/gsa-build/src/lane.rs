@@ -382,6 +382,41 @@ pub fn run_lane_job(args: &[String], err: &mut dyn Write) -> i32 {
     let _ = writeln!(&log, "gsa --lane-job: {}", selected.log_line());
     let toolchain = selected.toolchain;
 
+    // ── the mirror gate: attribute a corrupt source cache to the mirror ───
+    // makepkg reads a bare mirror per git source and answers a refs-less one
+    // with `'<mirror>' is not a clone of '<url>'` (or a bare `git clone`
+    // failure inside `extract_git`), which names the symptom and not the
+    // fault. Classify every mirror this recipe will read BEFORE spawning, so
+    // the lane fails naming `mirror-unusable` and the path instead of running
+    // a build that cannot succeed. An ABSENT mirror is makepkg's own first
+    // clone — not a fault — so only a present-but-unreadable one refuses.
+    // The repair is `-Sy`'s (self-heal) and `-Md --fix`'s: a build must never
+    // write into a shared source cache another lane may be reading.
+    if let Some(srcdest) = gsa_model::config::resolve_srcdest() {
+        for (name, mirror) in gsa_recipe::sync::build_mirror_paths(&recipe_dir, &srcdest) {
+            if let gsa_model::mirror::MirrorState::Unusable { detail } =
+                gsa_model::mirror::mirror_state(&mirror)
+            {
+                let message = format!(
+                    "mirror-unusable: the source mirror '{name}' at {} is present but not a \
+                     usable git repository ({detail}) — repair it with 'sudo gsa -Md --fix' \
+                     (or from the next 'sudo gsa -Sy'), or delete it to re-fetch",
+                    mirror.display()
+                );
+                let _ = writeln!(err, "gsa --lane-job: {pkg}: {message}");
+                let _ = writeln!(&log, "gsa --lane-job: {message}");
+                return publish_lane_result(
+                    pkg,
+                    LaneOutcome::Failed,
+                    0,
+                    &format!("mirror-unusable {name} {}", mirror.display()),
+                    &result_path,
+                    err,
+                );
+            }
+        }
+    }
+
     // ── the build: makepkg in the recipe directory (§K.1) ────────────────
     let start = Instant::now();
     let mut cmd =

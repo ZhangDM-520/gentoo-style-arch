@@ -49,6 +49,16 @@ pub fn mirror_state(path: &Path) -> MirrorState {
         .env("GIT_TERMINAL_PROMPT", "0")
         .arg("-c")
         .arg("safe.bareRepository=all")
+        // `safe.directory=*` is the OWNER-AGNOSTIC rung, and it is what makes
+        // this probe answer the mirror's shape instead of the caller's
+        // identity: the mirrors are build-user data and the pass runs as
+        // root, so git's `dubious ownership` guard refuses them — EXCEPT when
+        // `SUDO_UID` is set and matches the owner (measured 2026-11-15).
+        // Without this, `sudo -i gsa -Sy` and `sudo -i gsa -Md --fix` would
+        // report EVERY healthy mirror unusable and then "repair" them all.
+        // The flag is scoped to this one read-only invocation.
+        .arg("-c")
+        .arg("safe.directory=*")
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--absolute-git-dir"])
@@ -129,6 +139,43 @@ mod tests {
         let dir = scratch("usable");
         let repo = dir.join("mirror");
         assert!(git(&dir, &["init", "--quiet", "--bare", "mirror"]));
+        assert_eq!(mirror_state(&repo), MirrorState::Usable);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mirror_state_is_owner_agnostic() {
+        // The mirrors are build-user data and the snapshot pass runs as root,
+        // so git's `dubious ownership` guard is the DEFAULT verdict for every
+        // healthy mirror — it only steps aside when `SUDO_UID` matches the
+        // owner. The probe must therefore read the MIRROR, never the caller:
+        // pinned here by inheritance, because the root case itself is pinned
+        // where real sudo exists (`tests/gsa-privilege.sh` §i).
+        use std::process::{Command, Stdio};
+        let dir = scratch("owner");
+        let repo = dir.join("mirror");
+        assert!(git(&dir, &["init", "--quiet", "--bare", "mirror"]));
+        // `safe.directory=*` is the owner-agnostic rung; without it this
+        // invocation fails with `dubious ownership` for a foreign owner.
+        let output = Command::new("git")
+            .env("GIT_CONFIG_COUNT", "0")
+            .env("SUDO_UID", "0")
+            .env("SUDO_GID", "0")
+            .arg("-c")
+            .arg("safe.bareRepository=all")
+            .arg("-c")
+            .arg("safe.directory=*")
+            .arg("-C")
+            .arg(&repo)
+            .args(["rev-parse", "--absolute-git-dir"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(
+            output.success(),
+            "the probe's argv must carry safe.directory=* or a foreign-owner mirror is unreadable"
+        );
         assert_eq!(mirror_state(&repo), MirrorState::Usable);
         std::fs::remove_dir_all(&dir).ok();
     }

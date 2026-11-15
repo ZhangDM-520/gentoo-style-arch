@@ -292,6 +292,107 @@ fn makepkg_git_name(entry: &SourceEntry) -> Option<String> {
     })
 }
 
+/// Every `SRCDEST` mirror this recipe's build will read, one `(source name,
+/// mirror path)` pair per git source, deduped in declaration order.
+///
+/// This is the BUILD-side companion of the snapshot pass's own per-source
+/// mirror resolution, and it exists so the build path asks the same question
+/// the pass does: a recipe whose mirror directory is present but not a
+/// repository cannot be built OR pinned, and makepkg's own words for it
+/// (`'<mirror>' is not a clone of '<url>', or a silent `git clone` failure
+/// inside `extract_git`) name the symptom without naming the fault.
+///
+/// The `source=()` array is the EVALUATED one — `pkgbuild_array_checked`,
+/// which sources the recipe through `build_command` (dropped to the build
+/// user) exactly as the snapshot pass does. A static scan would be the wrong
+/// evidence: 439 of 670 recipes in the real tree build their `source` array
+/// from variables, so a scan-only gate would guard a third of the roster and
+/// silently skip the rest. Evaluating is not a new privilege for the build
+/// path — makepkg is about to source this same PKGBUILD. An unreadable array
+/// yields no entries (nothing to attribute), never a guessed mirror.
+///
+/// Only git sources are listed: makepkg keeps a bare mirror for git alone,
+/// so probing an svn/hg checkout path would invent a directory that cannot
+/// exist.
+pub fn build_mirror_paths(recipe_dir: &Path, src_root: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = pkgbuild_array_checked(recipe_dir, "source") else {
+        return Vec::new();
+    };
+    mirror_paths_of(&entries, src_root)
+}
+
+/// [`build_mirror_paths`] over already-read entries (the seam its unit test
+/// drives, and what a caller holding the array reuses).
+pub fn mirror_paths_of(entries: &[String], src_root: &Path) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for raw in entries {
+        let Some(name) = git_mirror_name(raw) else {
+            continue;
+        };
+        if out.iter().any(|(n, _)| n == &name) {
+            continue;
+        }
+        out.push((name.clone(), src_root.join(name)));
+    }
+    out
+}
+
+/// [`build_mirror_paths`] over the STATIC scan of `pkgbuild` content.
+///
+/// For callers that hold the source text and must not spawn a shell
+/// (`-Md`'s roster pass reads every recipe in the set, where one `bash` per
+/// recipe would dominate the run). It under-reports a shell-dynamic
+/// `source=()` by design: a finding it never names is the same stand-down a
+/// failed evaluation gives, and the doctor is a report, not a gate.
+pub fn build_mirror_paths_of_pkgbuild(pkgbuild: &str, src_root: &Path) -> Vec<(String, PathBuf)> {
+    let scan = crate::scan_pkgbuild(pkgbuild);
+    let entries: Vec<String> = match scan.vars.get("source") {
+        Some(crate::ScanValue::Array(items)) => items.clone(),
+        Some(crate::ScanValue::Scalar(v)) => vec![v.clone()],
+        None => Vec::new(),
+    };
+    mirror_paths_of(&entries, src_root)
+}
+
+/// The `SRCDEST` mirror name of ONE evaluated `source=()` entry, or `None`
+/// when the entry is not a git checkout.
+///
+/// ONE derivation, shared by the build gate, `-Md`'s mirror rows and the
+/// snapshot pass: a second copy of makepkg's naming rule drifts
+/// (`AGENTS.md` §5 — the repo has paid for that class before).
+pub fn git_mirror_name(raw: &str) -> Option<String> {
+    let entry = SourceEntry::new(raw);
+    if entry.vcs() != Some(VcsProtocol::Git) {
+        return None;
+    }
+    non_empty(makepkg_git_name(&entry))
+}
+
+/// [`git_mirror_name`] over an already-classified source (a caller holding
+/// `.SRCINFO`'s evaluated array, which is the authoritative spelling — never
+/// a re-parse of the raw entry, which would have to un-split the `name::`
+/// prefix the classifier already consumed).
+pub fn git_mirror_name_of(source: &crate::ClassifiedSource) -> Option<String> {
+    if source.kind != crate::SourceKind::Vcs(crate::VcsKind::Git) {
+        return None;
+    }
+    match &source.name {
+        // makepkg prints `${netfile%%::*}` and stops: the alias is verbatim.
+        Some(name) => non_empty(Some(name.clone())),
+        None => {
+            let name = url_basename(&source.location)?;
+            non_empty(Some(match name.find(".git") {
+                Some(i) => name[..i].to_string(),
+                None => name,
+            }))
+        }
+    }
+}
+
+fn non_empty(name: Option<String>) -> Option<String> {
+    name.filter(|n| !n.is_empty())
+}
+
 fn url_basename(url: &str) -> Option<String> {
     let stripped = match url.find(['?', '#']) {
         Some(i) => &url[..i],
@@ -1760,7 +1861,7 @@ fn snapshot_git() -> Command {
 /// The pass runs as root under `sudo gsa -Sy`, but the mirror is build-user
 /// working data, so the new level is handed back (rule 60): a root-owned
 /// `refs/` would make the next build-user `git fetch` fail.
-fn ensure_mirror_refs(path: &Path) -> Result<(), String> {
+pub fn ensure_mirror_refs(path: &Path) -> Result<(), String> {
     let refs = path.join("refs");
     std::fs::create_dir_all(&refs).map_err(|e| format!("cannot create {}: {e}", refs.display()))?;
     gsa_model::privilege::own_to_build_user(&refs)
@@ -2573,6 +2674,78 @@ mod tests {
         .to_string();
         assert_eq!(after, sha, "the heal must not move HEAD");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn mirror_paths_of_lists_git_mirrors_only_and_matches_makepkg() {
+        // The build gate's evidence source: it must name the SAME directory
+        // makepkg will read, and nothing else. A tarball is not a mirror, an
+        // svn/hg source has no bare mirror, and a `name::` prefix wins
+        // verbatim (makepkg prints `${netfile%%::*}` and stops), while a bare
+        // URL is truncated at the first `.git`.
+        let entries: Vec<String> = [
+            "alias-name::git+https://example.invalid/onlyoffice.github.io#commit=abc",
+            "git+https://example.invalid/plain-repo.git#tag=v1",
+            "https://example.invalid/tarball-1.0.tar.gz",
+            "svn+https://example.invalid/svn-repo",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let root = std::path::Path::new("/src");
+        let got = super::mirror_paths_of(&entries, root);
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["alias-name", "plain-repo"],
+            "the mirror set must be the git sources, deduped, with makepkg's names"
+        );
+        assert_eq!(got[0].1, root.join("alias-name"));
+        assert_eq!(got[1].1, root.join("plain-repo"));
+    }
+
+    #[test]
+    fn build_mirror_paths_evaluates_a_shell_dynamic_source_array() {
+        // The build gate reads the EVALUATED array, not the scan: most real
+        // recipes build `source` from variables (439 of 670 in the 2026-11-15
+        // tree), so a scan-only gate would guard a third of the roster. This
+        // is the same evaluation the snapshot pass already runs through
+        // `build_command`, and makepkg is about to source the PKGBUILD
+        // anyway.
+        let dir = std::env::temp_dir().join(format!(
+            "gsa-mirror-paths-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("PKGBUILD"),
+            "pkgname=probe\npkgver=1\n_repo=dynamic-repo\nsource=(\"git+https://example.invalid/${_repo}.git\")\n",
+        )
+        .unwrap();
+        let got = super::build_mirror_paths(&dir, std::path::Path::new("/src"));
+        assert_eq!(
+            got.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["dynamic-repo"],
+            "the gate must see a source array the static scan cannot read"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_mirror_paths_of_pkgbuild_is_empty_for_a_dynamic_source_array() {
+        // The doctor's roster pass reads text and spawns no shell, so it
+        // under-reports a dynamic array by design — a finding it never names
+        // is the same stand-down a failed evaluation gives.
+        let pkgbuild = "pkgname=probe\nsource=(\"${_repos[@]}\")\n";
+        assert!(
+            super::build_mirror_paths_of_pkgbuild(pkgbuild, std::path::Path::new("/src"))
+                .is_empty()
+        );
     }
 
     #[test]
