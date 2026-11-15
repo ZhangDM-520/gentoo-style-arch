@@ -199,9 +199,16 @@ fn run_fetch_only_inner(
             render::fetch_verdict_line(&result, crate::output::is_human())
         );
         if verdict::is_warning(result.verdict, &result.reason) {
+            // A fetch run's rows ARE its work (a build run's fetch-ahead is
+            // the advisory one, docs/adr/0004-prefetch-advisory.md), so the
+            // line must not call this verdict advisory while the same run
+            // exits non-zero on it — R2-juno-5 read the contradiction as
+            // "either it is advisory and the rc should say so, or the word
+            // should go". The word goes; what a later build does is stated
+            // as fact instead.
             let _ = writeln!(
                 err,
-                "gsa: warning: fetch {}: {} {} — advisory; a later build re-fetches",
+                "gsa: warning: fetch {}: {} {} — a later build retries the fetch",
                 result.pkg, result.verdict, result.reason
             );
         }
@@ -225,7 +232,17 @@ fn run_fetch_only_inner(
         outcomes,
         &outcome,
     );
-    let _ = write!(out, "{}", render::render_fetch_prose(&results));
+    let named: Vec<RecipeId> = selection
+        .listed
+        .iter()
+        .map(|(_, id)| id.clone())
+        .filter(|id| !selection.prerequisites_added.contains(id))
+        .collect();
+    let _ = write!(
+        out,
+        "{}",
+        render::render_fetch_prose_with(&results, &selection.prerequisites_added, &named)
+    );
     let rec_state = crate::install::record_state_dir(inv, err);
     record::emit_machine_record(out, &record, &rec_state, err);
     Ok(outcome.rc)

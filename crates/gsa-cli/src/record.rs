@@ -1015,6 +1015,7 @@ mod tests {
             closure_size: n,
             expansion_added: n.saturating_sub(1),
             notes: Vec::new(),
+            prerequisites_added: Vec::new(),
         }
     }
 

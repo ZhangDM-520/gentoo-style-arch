@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use args::{Family, Hidden, Invocation, Parsed};
 use exit::Exit;
 use gsa_graph::Graph;
+use gsa_model::RecipeId;
 use gsa_recipe::RecipeDb;
 use gsa_topo::load_project;
 use select::Ctx;
@@ -745,15 +746,42 @@ fn execute(
         | Command::Upgrade
         | Command::Maint => unreachable!(),
         Command::List => {
-            let (listed, whole_set) = if inv.targets.is_empty() && inv.ranges.is_empty() {
-                (select::whole_set_listing(&ctx), true)
+            // The rows stay the selection AS GIVEN (§C.3: prerequisites are
+            // not expanded as a rule, and the listing is the selection), but
+            // a listing that showed ONE package where a run of the same argv
+            // fetched thirty-four is the plan/run disagreement R2-juno-5
+            // reports: the footer NAMES what a run would add. The same seam
+            // answers, so the listing cannot drift from the run.
+            let (listed, whole_set, added) = if inv.targets.is_empty() && inv.ranges.is_empty() {
+                (select::whole_set_listing(&ctx), true, Vec::new())
             } else {
                 let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
                     .map_err(|e| cmd_error(e.to_string()))?;
                 write_notes(err, &selection.notes);
-                (selection.listed, false)
+                // An unreadable installed DB cannot answer "what is missing":
+                // the listing then says nothing about additions and names the
+                // refusal a run would make (rule 71 — an unreadable file is
+                // never read as an absent one, and never guessed past).
+                let added = match prepare::missing_prerequisite_ids(&selection, &graph, &db, inv) {
+                    Ok(ids) => ids
+                        .iter()
+                        .filter_map(|id| RecipeId::new(id.as_str()).ok())
+                        .collect(),
+                    Err(message) => {
+                        let _ = writeln!(
+                            err,
+                            "gsa: {message} — a run of this selection refuses; the listing shows it as given"
+                        );
+                        Vec::new()
+                    }
+                };
+                (selection.listed, false, added)
             };
-            let _ = write!(out, "{}", render::render_listing(&ctx, &listed, whole_set));
+            let _ = write!(
+                out,
+                "{}",
+                render::render_listing_with(&ctx, &listed, whole_set, &added)
+            );
         }
         Command::QueryGroups => {
             no_ranges(inv)?;

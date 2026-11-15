@@ -862,8 +862,19 @@ the same installed DB as the run. An unreadable installed DB refuses (rule
 work — the build run, its `--dry-run` plan, and `-Sw` (fetch is the "before
 you disconnect" verb: fetching only the named targets leaves the build to
 discover a missing source with no network). `-Sl` is a LISTING and keeps
-showing the selection as given; the record and the fetch plan show the
-additions. Pinned by `tests/project.sh` §10 (plan, run, `--leaf`, `-Sw`).
+showing the selection as given — its rows are never expanded — but it NAMES
+the additions a run of the same argv would make in one footer line
+(`Also fetches/builds on a run (N missing build-order prerequisite(s)): …`),
+because it is the only surface an operator has before a run and a listing that
+showed one package where the run fetched thirty-four is a plan/run
+disagreement (R2-juno-5); the record and the fetch plan show the additions as
+rows. A `-Sw` summary splits its tally into `named` (what the argv asked for)
+and `added` (the prerequisites), so a failure in somebody else's package can
+never be read as the operator's own, and a fetch run's verdict is never called
+*advisory* while the same run exits non-zero on it (the advisory rule governs
+a BUILD run's fetch-ahead, `docs/adr/0004-prefetch-advisory.md`). Pinned by
+`tests/project.sh` §10 (plan, run, `--leaf`, `-Sw`, the listing footer, the
+split tally).
 
 *Amendment (2026-11-01, direction rule).* The ABI rebuild wave (`gsa-abi`'s
 coupled batches and `:=` subscription terms) obeys the same direction rule:

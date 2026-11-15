@@ -222,8 +222,17 @@ pub fn render_topology_channel(ctx: &Ctx<'_>) -> String {
 }
 
 /// The ordered selection listing (`-Sl`/`-Bl`), fish-engine shape: heading,
-/// anchored rows, and the footer that says what the indices address.
-pub fn render_listing(ctx: &Ctx<'_>, listed: &[(usize, RecipeId)], whole_set: bool) -> String {
+/// anchored rows, and the footer that says what the indices address — plus
+/// the §C.3 additions a RUN of the same argv makes (R2-juno-5). The listing
+/// is the only surface an operator has before a run, so showing the selection
+/// as given while the run fetches or builds thirty-three more packages is a
+/// plan/run disagreement: the listing carries the additions and says so.
+pub fn render_listing_with(
+    ctx: &Ctx<'_>,
+    listed: &[(usize, RecipeId)],
+    whole_set: bool,
+    added: &[RecipeId],
+) -> String {
     let mut out = String::new();
     if whole_set {
         out.push_str("All packages in build order:\n");
@@ -257,6 +266,14 @@ pub fn render_listing(ctx: &Ctx<'_>, listed: &[(usize, RecipeId)], whole_set: bo
         }
     } else {
         out.push_str("Ranges index this list: e.g. '22..38' selects entries 22-38 above.\n");
+        if !added.is_empty() {
+            let names: Vec<&str> = added.iter().map(|id| id.as_str()).collect();
+            out.push_str(&format!(
+                "Also fetches/builds on a run ({} missing build-order prerequisite(s)): {}\n",
+                added.len(),
+                names.join(" ")
+            ));
+        }
     }
     out
 }
@@ -916,10 +933,53 @@ pub fn fetch_verdict_line(result: &gsa_fetch::verdict::FetchResult, human: bool)
     }
 }
 
+/// One population's share of a `-Sw` tally: the rows the argv named, or the
+/// §C.3 prerequisites a run added (R2-juno-5).
+struct PopulationTally<'a> {
+    label: &'a str,
+    what: &'a str,
+    total: usize,
+    ok: usize,
+    failed: usize,
+    skipped: usize,
+}
+
+impl<'a> PopulationTally<'a> {
+    fn of(
+        label: &'a str,
+        what: &'a str,
+        results: &[gsa_fetch::verdict::FetchResult],
+        member: &dyn Fn(&str) -> bool,
+    ) -> Self {
+        use gsa_fetch::verdict::FetchVerdict;
+        let rows: Vec<&gsa_fetch::verdict::FetchResult> =
+            results.iter().filter(|r| member(&r.pkg)).collect();
+        let of = |verdict| rows.iter().filter(|r| r.verdict == verdict).count();
+        PopulationTally {
+            label,
+            what,
+            total: rows.len(),
+            ok: of(FetchVerdict::Ok),
+            failed: of(FetchVerdict::Failed),
+            skipped: of(FetchVerdict::Skipped),
+        }
+    }
+}
+
 /// The prose summary of a `-Sw` fetch-only run (§I.4): the verdict tally.
 /// The verdict rows above it are the per-package surface; the run record
-/// below is the machine rendering of the same outcomes.
-pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String {
+/// below is the machine rendering of the same outcomes. The tally splits into
+/// the NAMED selection and the §C.3 additions a run made on top of it
+/// (R2-juno-5: a one-recipe fetch that failed on a transitive prerequisite
+/// read as if the operator's own package had failed).
+/// `added` is the prerequisite set the selection grew by and `named` the ids
+/// the argv actually asked for; the counts are per POPULATION, so
+/// `packages=N` is never the only thing on the line.
+pub fn render_fetch_prose_with(
+    results: &[gsa_fetch::verdict::FetchResult],
+    added: &[RecipeId],
+    named: &[RecipeId],
+) -> String {
     use gsa_fetch::verdict::FetchVerdict;
     let fetched = results
         .iter()
@@ -933,30 +993,62 @@ pub fn render_fetch_prose(results: &[gsa_fetch::verdict::FetchResult]) -> String
         .iter()
         .filter(|r| r.verdict == FetchVerdict::Skipped)
         .count();
+    // Per-population counts, so "the run failed" can never be read as "MY
+    // package failed" when the failure belongs to a prerequisite the run
+    // added (R2-juno-5). A run with no additions renders exactly the old
+    // line: the split appears only when there is something to split.
+    let tallies = if added.is_empty() {
+        Vec::new()
+    } else {
+        let added_set: std::collections::BTreeSet<&str> =
+            added.iter().map(|id| id.as_str()).collect();
+        vec![
+            PopulationTally::of("named", "from your selection", results, &|pkg| {
+                named.iter().any(|id| id.as_str() == pkg)
+            }),
+            PopulationTally::of(
+                "added",
+                "added build-order prerequisites",
+                results,
+                &|pkg| added_set.contains(pkg),
+            ),
+        ]
+    };
     if output::is_human() {
-        return format!(
+        let mut out = format!(
             "Fetch run: {} package(s), {fetched} fetched, {failed} failed, {skipped} skipped\n",
             results.len()
         );
+        for PopulationTally {
+            label,
+            what,
+            total,
+            ok,
+            failed: bad,
+            skipped: skip,
+        } in &tallies
+        {
+            out.push_str(&format!(
+                "  {label} ({what}): {total} package(s), {ok} fetched, {bad} failed, {skip} skipped\n"
+            ));
+        }
+        return out;
     }
     let level = if failed > 0 {
         Level::Warning
     } else {
         Level::Info
     };
-    format!(
-        "{}\n",
-        kv_line(
-            level,
-            "fetch-run",
-            &[
-                ("packages", results.len().to_string()),
-                ("fetched", fetched.to_string()),
-                ("failed", failed.to_string()),
-                ("skipped", skipped.to_string()),
-            ],
-        )
-    )
+    let mut pairs: Vec<(&str, String)> = vec![
+        ("packages", results.len().to_string()),
+        ("fetched", fetched.to_string()),
+        ("failed", failed.to_string()),
+        ("skipped", skipped.to_string()),
+    ];
+    for tally in &tallies {
+        pairs.push((tally.label, tally.total.to_string()));
+    }
+    format!("{}\n", kv_line(level, "fetch-run", &pairs))
 }
 
 /// The prose summary (contract §I.4: loud reporting — every failed package
@@ -1659,6 +1751,42 @@ mod tests {
         assert_eq!(
             fetch_verdict_line(&skip, false),
             "mesa-git skipped 0 vcs-only\n"
+        );
+    }
+
+    /// R2-juno-5: a fetch that failed on a PREREQUISITE the run added must
+    /// never read like the operator's own package failed. The tally splits
+    /// into the named selection and the added prerequisites, and a run with
+    /// no additions keeps the old single-count line.
+    #[test]
+    fn a_fetch_tally_never_reads_an_added_prerequisites_failure_as_the_selections() {
+        use gsa_fetch::verdict::{FetchResult, FetchVerdict, REASON_OK};
+        let results = vec![
+            FetchResult::new("lib", FetchVerdict::Failed, 0, "verify-failed").unwrap(),
+            FetchResult::new("app", FetchVerdict::Ok, 1, REASON_OK).unwrap(),
+        ];
+        let added = [RecipeId::new("lib").unwrap()];
+        let named = [RecipeId::new("app").unwrap()];
+        let tallies = [
+            PopulationTally::of("named", "from your selection", &results, &|pkg| {
+                named.iter().any(|id| id.as_str() == pkg)
+            }),
+            PopulationTally::of(
+                "added",
+                "added build-order prerequisites",
+                &results,
+                &|pkg| added.iter().any(|id| id.as_str() == pkg),
+            ),
+        ];
+        assert_eq!(
+            (tallies[0].total, tallies[0].ok, tallies[0].failed),
+            (1, 1, 0),
+            "the named recipe fetched clean: the run's failure is not its own"
+        );
+        assert_eq!(
+            (tallies[1].total, tallies[1].ok, tallies[1].failed),
+            (1, 0, 1),
+            "the failure belongs to the added prerequisite"
         );
     }
 }

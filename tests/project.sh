@@ -1179,5 +1179,92 @@ EOF
     fi
     export GSA_FAKE_DB_PATH="$db"
 
-    printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact)\n'
+    # g. R2-juno-5: `-Sl` is the ONLY surface an operator has before a run,
+    # so a listing that showed ONE package where a run of the same argv
+    # fetched thirty-four is a plan/run disagreement. The ROWS stay the
+    # selection as given (§C.3) and the footer NAMES what a run would add.
+    rm -rf "$db"
+    run_engine "$ws" -Sl app
+    [ "$FIXTURE_RC" = 0 ] || fail "g: the listing failed: $FIXTURE_OUTPUT"
+    listing=$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')
+    [ "$listing" = 'app ' ] ||
+        fail "g: -Sl rows are the selection as given, got [$listing]: $FIXTURE_OUTPUT"
+    grep -F 'Also fetches/builds on a run (1 missing build-order prerequisite(s)): lib' \
+        <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "g: the listing footer must name what a run adds: $FIXTURE_OUTPUT"
+    # the installed case is unchanged: nothing is added, nothing is named
+    db_install lib
+    run_engine "$ws" -Sl app
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')" = 'app ' ] ||
+        fail "g: an installed prerequisite entered the listing: $FIXTURE_OUTPUT"
+    if grep -F 'Also fetches/builds on a run' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "g: a listing with no addition named one: $FIXTURE_OUTPUT"
+    fi
+    # an unreadable DB cannot answer "what is missing": the listing shows the
+    # selection as GIVEN and names the refusal a run would make (rule 71).
+    : >"$fixture/prereq/db-not-a-dir"
+    export GSA_FAKE_DB_PATH="$fixture/prereq/db-not-a-dir"
+    run_engine "$ws" -Sl app
+    [ "$FIXTURE_RC" = 0 ] ||
+        fail "g: a listing must not refuse on an unreadable DB, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')" = 'app ' ] ||
+        fail "g: an unreadable DB was guessed past: $FIXTURE_OUTPUT"
+    grep -F 'a run of this selection refuses' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "g: an unreadable DB must be named, not silently ignored: $FIXTURE_OUTPUT"
+    export GSA_FAKE_DB_PATH="$db"
+
+    # h. R2-juno-5: the summary splits the NAMED selection from the
+    # prerequisites the run added, so a failure in somebody else's package is
+    # never read as the operator's own. Both recipes get a plain-URL source so
+    # they are FETCH candidates, and the stub makepkg's `--verifysource` half
+    # fails for `lib` only.
+    rm -rf "$db"
+    for id in lib app; do
+        printf "pkgver=1.0.0\npkgrel=1\narch=(any)\nsource=('https://example.invalid/%s-1.0.0.tar.gz')\nsha256sums=('SKIP')\n" "$id" \
+            >"$ws/packages/$id/PKGBUILD"
+    done
+    cat >"$ws/bin/makepkg" <<'EOF'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do
+    if [ "$a" = "--verifysource" ]; then
+        case "$PWD" in
+        */lib)
+            printf '==> Retrieving sources...\n'
+            printf '  -> Found lib-1.0.0.tar.gz\n'
+            printf '==> Validating source files with sha256sums...\n'
+            printf '    lib-1.0.0.tar.gz ... FAILED\n'
+            exit 1
+            ;;
+        esac
+        exit 0
+    fi
+done
+exit 0
+EOF
+    chmod +x "$ws/bin/makepkg"
+    export GSA_FAKE_DB_PATH="$db"
+    run_engine "$ws" -Sw app
+    [ "$FIXTURE_RC" = 4 ] ||
+        fail "h: the prerequisite's fetch failure is rc 4, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    # the machine tally splits the two populations (captured output is the
+    # machine vocabulary, §L.9): the failure count is the run's, the NAMED
+    # count is what the operator asked for.
+    grep -F 'WARNING fetch-run packages=2 fetched=1 failed=1 skipped=0 named=1 added=1' \
+        <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "h: the tally must split the named selection from the additions: $FIXTURE_OUTPUT"
+    # and the failure is attributed, by name, to the ADDED prerequisite
+    grep -F 'lib failed 0 verify-failed' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "h: the added prerequisite's failed row is missing: $FIXTURE_OUTPUT"
+    grep -F 'app ok' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "h: the NAMED recipe must still fetch clean: $FIXTURE_OUTPUT"
+    # the contradiction is gone: a fetch run's row is its WORK, so no line
+    # calls it advisory while the run exits non-zero on it.
+    if grep -F 'advisory' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "h: a fetch verdict is not advisory on a fetch run: $FIXTURE_OUTPUT"
+    fi
+    grep -F 'a later build retries the fetch' <<<"$FIXTURE_OUTPUT" >/dev/null ||
+        fail "h: the warning must still say what a later build does: $FIXTURE_OUTPUT"
+
+    printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact, listing and summary agree)\n'
 )

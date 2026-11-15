@@ -170,6 +170,12 @@ pub struct Selection {
     pub expansion_added: usize,
     /// Announced substitutions (case-variant ids, package names), for stderr.
     pub notes: Vec<String>,
+    /// The §C.3 missing build-order prerequisites a RUN of this selection
+    /// adds (empty for `--leaf`, for an installed prerequisite, and for a
+    /// listing that could not ask). `-Sl` prints it, because the listing is
+    /// the only surface an operator has before a run and it must not hide a
+    /// selection that grows (R2-juno-5).
+    pub prerequisites_added: Vec<RecipeId>,
 }
 
 /// One parsed index range (`N..M`, `N..`, `..M`).
@@ -682,6 +688,7 @@ impl SelectionDraft {
                     .filter(|(_, idx, _)| !seed_set.contains(idx))
                     .count(),
                 notes,
+                prerequisites_added: Vec::new(),
             });
         }
 
@@ -742,6 +749,7 @@ impl SelectionDraft {
             closure_size,
             expansion_added,
             notes,
+            prerequisites_added: Vec::new(),
         })
     }
 }

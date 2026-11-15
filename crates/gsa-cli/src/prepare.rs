@@ -517,14 +517,7 @@ pub fn apply_missing_prerequisites(
     inv: &Invocation,
     err: &mut dyn Write,
 ) -> Result<(), String> {
-    let candidates = prerequisite_candidates(graph, selection, inv.leaf);
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    let conf = inv.config.as_deref().map(Path::new);
-    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
-    let installed = gsa_install::LocalDb::load(&db_root)?;
-    let additions = missing_prerequisites(graph, &candidates, db, &installed);
+    let additions = missing_prerequisite_ids(selection, graph, db, inv)?;
     for id in &additions {
         let _ = writeln!(
             err,
@@ -533,6 +526,28 @@ pub fn apply_missing_prerequisites(
     }
     merge_prerequisites(selection, &additions, graph);
     Ok(())
+}
+
+/// The §C.3 additions a RUN of this selection makes, WITHOUT touching the
+/// selection — the answer `-Sl` needs. The listing keeps showing the
+/// selection as given (contract §C.3: prerequisites are not expanded as a
+/// rule, and the listing is the selection), but since it is the only surface
+/// an operator has before a run it NAMES the packages a run would add
+/// (R2-juno-5). `Err` is the unreadable-installed-DB message (rule 71).
+pub fn missing_prerequisite_ids(
+    selection: &Selection,
+    graph: &Graph<'_>,
+    db: &RecipeDb,
+    inv: &Invocation,
+) -> Result<Vec<String>, String> {
+    let candidates = prerequisite_candidates(graph, selection, inv.leaf);
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conf = inv.config.as_deref().map(Path::new);
+    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
+    let installed = gsa_install::LocalDb::load(&db_root)?;
+    Ok(missing_prerequisites(graph, &candidates, db, &installed))
 }
 
 /// Merge prerequisite additions into the selection in BUILD ORDER: plan,
@@ -544,6 +559,10 @@ fn merge_prerequisites(selection: &mut Selection, additions: &[String], graph: &
     if additions.is_empty() {
         return;
     }
+    selection.prerequisites_added = additions
+        .iter()
+        .map(|id| RecipeId::new(id).expect("additions come from the topology"))
+        .collect();
     for id in additions {
         selection.listed.push((
             0,
@@ -923,6 +942,7 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
             closure_size: 0,
             expansion_added: 0,
             notes: Vec::new(),
+            prerequisites_added: Vec::new(),
         };
         for idx in ctx.graph.order() {
             selection.listed.push((

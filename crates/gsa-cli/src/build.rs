@@ -2175,6 +2175,7 @@ mod tests {
             closure_size: ids.len(),
             expansion_added: 0,
             notes: Vec::new(),
+            prerequisites_added: Vec::new(),
         }
     }
 
