@@ -293,7 +293,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | Spelling | Action |
 | --- | --- |
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a REMOTE NON-SIGNATURE source pinned `SKIP`; a detached signature's `SKIP` is makepkg's normal spelling and is never a finding, and a present sum's agreement with upstream is the sync pass's question — the family prints a `scope=` row saying so), `state-integrity` (unusable side-car lines, index rows whose archive is gone or resized) (today `--audit`), and a closing `audit total <N finding(s)>` row counting every finding row. Report-only by contract (§E.4); exit 0, read the report |
-| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart. Default reports; `--fix` applies the named repairs |
+| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones the workspace actually BUILT (an archive shipped the name; a declared-but-never-built name is skipped with a summary row, because it would pin the STOCK package — today's hidden `--register-ignorepkg`) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated on its DESTROYED SET (§K.3): a `clean` plan applies without asking; a plan that links or rewrites prints its targets and, without `--noconfirm`, stops rc 3 `confirmation-required` (on a TTY it asks one `y`/`N` question first). Must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
@@ -1732,6 +1732,40 @@ identical to a torn tail, so the repair stays a human decision, and an
 interior corrupt row (a complete line that does not parse) offers no
 truncation at all — that would delete good rows. Applying the named offset
 loses no row and the store reads clean afterwards.
+
+*Amendment (2026-11-15, the DIAGNOSIS owns the class too — R2-vera-3).* A
+corrupt row was visible only from the surfaces that GATE on their store: `-Q`
+and `-Qb` refused over a torn index row while `gsa -Md` — the verb whose job is
+reconciling runtime state — reported `doctor report N finding(s)` listing other
+defects, with the corrupt row in neither the diagnosis nor its `--fix` plan.
+The doctor now owns the class for all three stores: `Findings::corrupt_rows`
+gathers `BinpkgIndex::corrupt`, `RunHistory::read`'s and `Kv::list`'s
+offenders, and they render as `corrupt-row` findings (`<store>:<line>` subject,
+the detail in the reason) that COUNT as findings, so `doctor clean` can no
+longer be printed over a store nothing can read.
+
+`--fix` names the class and still applies nothing: a corrupt row renders as a
+`keep` row — `corrupt-row — human repair, <remedy>` — so the one verb that
+repairs hands the operator the same `truncate -s <offset>` the refusal names,
+while the engine itself never truncates (STD-R3-02 above). The remedy text is
+ONE derivation, `CorruptLine::remedy`, read by both `CorruptLine::refusal` and
+the doctor, so a remedy cannot appear in the refusal and go missing from the
+diagnosis. Likewise `CorruptLine::detail_line` composes both the `corrupt-row`
+family rows and `render`, so the family word is never doubled
+(`corrupt-row corrupt-row …`).
+
+The same arm closes the rule-71 gap beside it: an UNREADABLE side-car file
+(the run history, the kv store) used to be read with its error dropped — the
+index arm named its own read failure while its two siblings answered "no
+records" — so `Findings::store_errors` reports it as `<store> failed <message>`
+and it counts. Only the INDEX refuses the repair (`--fix` would tombstone or
+reindex against a fiction); an unreadable run history or kv store is a finding
+the diagnosis owns and no repair touches.
+
+Pinned by `gsa-maint`'s
+`doctor_and_audit::doctor_names_a_corrupt_store_row_and_never_applies_its_repair`
+and `doctor_and_audit::doctor_names_an_unreadable_side_car_store_instead_of_reading_it_as_empty`,
+and `tests/gsa-maint-v2.sh` §b.
 
 ### J.5 Write-time ownership (rule 19)
 

@@ -390,6 +390,85 @@ if want b; then
         [ "$FIXTURE_RC" -eq 0 ] \
             || fail "b: -Mm with nothing to do is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
         has_row "$FIXTURE_OUTPUT" "mirrors clean" "the mirror plan reports clean"
+
+        # ── a corrupt store row is a finding the doctor OWNS (R2-vera-3) ──
+        # A torn index row makes `-Q`/`-Qb` refuse outright, so a doctor that
+        # called the same state clean left the one defect nothing could read
+        # out of the diagnosis AND out of its own repair plan. Seeded as a
+        # TORN TAIL (no terminator) — the class `CorruptLine::remedy` can name
+        # a repair for — in a state root of its own so the assertions above
+        # keep their seeds.
+        corrupt_state="$fixture/b/corrupt-state"
+        corrupt_ws="$fixture/b/corrupt-ws"
+        make_workspace "$corrupt_ws" 1 auto low
+        maint_ws "$corrupt_ws"
+        add_package "$corrupt_ws" docz "$gsa_meta_any" git
+        run_engine "$corrupt_ws" -B --no-prefetch --leaf --state-dir "$corrupt_state" docz
+        [ "$FIXTURE_RC" = 0 ] || fail "b: the corrupt-state seed build is rc 0: $FIXTURE_OUTPUT"
+        index="$corrupt_state/index/binpkg.jsonl"
+        /usr/bin/sudo -n test -f "$index" || fail "b: the seed build wrote no binpkg index: $index"
+        # The INTACT count: this root carries findings of its own, so the
+        # corrupt row has to be one MORE than the same state without it —
+        # `doctor report` alone proves nothing about which row was counted.
+        run_engine "$corrupt_ws" -Md --state-dir "$corrupt_state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md over the intact seed is rc 0: $FIXTURE_OUTPUT"
+        intact_count=$(printf '%s\n' "$FIXTURE_OUTPUT" |
+            awk '$1 == "doctor" && $2 == "report" { print $3; exit }')
+        case $intact_count in
+        '' | *[!0-9]*) fail "b: the intact seed reports no countable finding, so the delta cannot be read ('$intact_count'): $FIXTURE_OUTPUT" ;;
+        esac
+        printf '{"recipe_id":"docz","instance":"9.9-1","path":"/nope/x.pkg.tar.zst"' |
+            /usr/bin/sudo -n tee -a "$index" >/dev/null
+
+        # The reader that gates on the store refuses — the baseline the
+        # doctor must not contradict.
+        run_engine "$corrupt_ws" -Q --state-dir "$corrupt_state"
+        [ "$FIXTURE_RC" != 0 ] || fail "b: -Q over a torn index must refuse: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "binpkg index is unreadable" "the reader names the torn index"
+
+        # The doctor reports it as its own family, and the summary counts it.
+        run_engine "$corrupt_ws" -Md --state-dir "$corrupt_state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md over a torn index is report-only rc 0: $FIXTURE_OUTPUT"
+        # The line number is DERIVED from the store the seed built: the torn
+        # tail follows whatever rows the real registration wrote.
+        torn_line=$(/usr/bin/sudo -n awk 'END { print NR }' "$index")
+        has_row "$FIXTURE_OUTPUT" "index:$torn_line corrupt-row docz line $torn_line:" \
+            "the doctor names the corrupt index row"
+        has_row "$FIXTURE_OUTPUT" "truncated tail line" "the finding says what is wrong"
+        # The remedy is the SAME derivation the store's own refusal uses, so
+        # the diagnosis is repairable rather than merely accurate.
+        has_row "$FIXTURE_OUTPUT" "sudo -n truncate -s" "the finding names the repair"
+        absent_row "$FIXTURE_OUTPUT" "corrupt-row corrupt-row" "the family word is never doubled"
+        # The summary must COUNT it, not merely coexist with it: exactly one
+        # finding more than the same state without the torn line, so a doctor
+        # that listed the row and left the count alone reddens here.
+        summary=$(printf '%s\n' "$FIXTURE_OUTPUT" | awk '$1 == "doctor" { print; exit }')
+        counted=$(printf '%s\n' "$summary" | awk '{ print $3 }')
+        case $counted in
+        '' | *[!0-9]*) fail "b: the doctor summary carries no count ('$summary'): $FIXTURE_OUTPUT" ;;
+        esac
+        [ "$counted" -eq $((intact_count + 1)) ] ||
+            fail "b: the corrupt row must be counted exactly once ($intact_count -> $counted): $FIXTURE_OUTPUT"
+
+        # `--fix` names it and does NOT apply it: a `truncate -s 70%` store is
+        # textually identical to a torn tail, so the engine hands the remedy
+        # to a human (round-3 audit STD-R3-02) while still surfacing it in the
+        # one verb that repairs.
+        before=$(/usr/bin/sudo -n sha256sum "$index" | awk '{ print $1 }')
+        run_engine "$corrupt_ws" -Md --fix --dry-run --state-dir "$corrupt_state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md --fix --dry-run is rc 0: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "index:$torn_line keep corrupt-row — human repair" \
+            "the repair plan names the corrupt row and leaves it to a human"
+        after=$(/usr/bin/sudo -n sha256sum "$index" | awk '{ print $1 }')
+        [ "$before" = "$after" ] || fail "b: a dry-run plan must not touch the store"
+        run_engine "$corrupt_ws" -Md --fix --state-dir "$corrupt_state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md --fix over a torn index is rc 0: $FIXTURE_OUTPUT"
+        has_row "$FIXTURE_OUTPUT" "index:$torn_line keep corrupt-row — human repair" \
+            "an applied repair still hands the truncation to a human"
+        after=$(/usr/bin/sudo -n sha256sum "$index" | awk '{ print $1 }')
+        [ "$before" = "$after" ] ||
+            fail "b: the engine never truncates a store (STD-R3-02): the bytes moved"
+
         assert_varlib_unchanged
     )
 fi

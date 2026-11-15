@@ -36,6 +36,18 @@ pub struct Findings {
     /// the index families stand down as a NAMED refusal of their own — never
     /// as an empty index that makes every archive look like an orphan.
     pub index_error: Option<String>,
+    /// Lines of a side-car store that could not be used at all. Tolerable
+    /// corruption was the STORE's finding and stayed invisible here, so a
+    /// torn index row disabled `-Q` (a hard refusal) while `-Md` called the
+    /// state clean and its `--fix` plan never named it (R2-vera-3).
+    pub corrupt_rows: Vec<gsa_state::CorruptLine>,
+    /// A side-car store that could not be READ at all (`<store>`, message) —
+    /// rule 71: an unreadable file is not an absent one, so this is a finding
+    /// of its own, never an empty store. Only the index refuses the repair
+    /// (`index_error`: no row of it can be trusted); the run history and the
+    /// kv store disable their own readers, which is a finding the diagnosis
+    /// owns but no repair touches.
+    pub store_errors: Vec<(String, String)>,
 }
 
 /// The output-name truth filter of the orphan scan: the makepkg archive
@@ -71,8 +83,39 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
     // rows) is the store's own finding and stays; an I/O failure is not a
     // finding about any package — it is a failed read of the evidence.
     match BinpkgIndex::load(ctx.state) {
-        Ok(index) => index_findings(ctx, &mut out, &index, loaded_db.as_ref()),
+        Ok(index) => {
+            out.corrupt_rows.extend(index.corrupt.iter().cloned());
+            index_findings(ctx, &mut out, &index, loaded_db.as_ref())
+        }
         Err(error) => out.index_error = Some(format!("cannot read the binpkg index: {error}")),
+    }
+    // The other two stores: the same rule, one place. A corrupt row in the run
+    // history or the kv store disables a reader exactly as a corrupt index row
+    // does, so the doctor names it beside its siblings instead of reporting a
+    // clean state over a store nothing can read. An UNREADABLE store is a
+    // finding of its own too (rule 71) — dropping it made the arm that reports
+    // an unreadable index report silence for its two siblings.
+    let side_cars: [(
+        &str,
+        Result<Vec<gsa_state::CorruptLine>, gsa_state::StateError>,
+    ); 2] = [
+        (
+            "runs",
+            gsa_state::RunHistory::read(ctx.state).map(|(_rows, corrupt)| corrupt),
+        ),
+        (
+            "kv",
+            gsa_state::Kv::list(ctx.state).map(|(_pairs, corrupt)| corrupt),
+        ),
+    ];
+    for (store, read) in side_cars {
+        match read {
+            Ok(corrupt) => out.corrupt_rows.extend(corrupt),
+            Err(error) => out.store_errors.push((
+                store.to_string(),
+                format!("{store} store is unreadable: {error}"),
+            )),
+        }
     }
     out
 }
@@ -219,6 +262,25 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     }
     if let Some(error) = &found.index_error {
         rows.push(Row::new("binpkg-index", "failed", error.clone()));
+    }
+    for (store, error) in &found.store_errors {
+        rows.push(Row::new(store.clone(), "failed", error.clone()));
+    }
+    // The corrupt-row family: one row per unusable line, in the store's own
+    // vocabulary (`corrupt-row <store> <name> line <n>: <detail>`), so the
+    // doctor names exactly what `-Q`/`-Qb` refuse over and `--local-db-check`
+    // reports. The remedy rides the same row when one exists (only an
+    // unterminated final line has one), from `CorruptLine::remedy`.
+    for line in &found.corrupt_rows {
+        let reason = match line.remedy() {
+            Some(remedy) => format!("{}; {remedy}", line.detail_line()),
+            None => line.detail_line(),
+        };
+        rows.push(Row::new(
+            format!("{}:{}", line.store, line.line),
+            "corrupt-row",
+            reason,
+        ));
     }
     if found.installed_known {
         for (base, version) in &found.no_pacman {
@@ -370,6 +432,24 @@ pub fn fix(ctx: &MaintCtx<'_>, apply: bool) -> Result<FixOutcome, String> {
     let hygiene_rows = hygiene::prune_stale_artifacts(ctx.state.path(), ctx.root, apply);
     failed += hygiene_rows.iter().filter(|r| r.action == "failed").count();
     rows.extend(hygiene_rows);
+    // A corrupt store line is a finding `--fix` must name and must NOT apply:
+    // a `truncate -s 70%` store is textually identical to a torn tail, so the
+    // engine hands the remedy to a human (round-3 audit, STD-R3-02) — but a
+    // repair plan that omitted it left the defect `-Q` refuses over absent
+    // from the one verb that repairs (R2-vera-3).
+    for line in &found.corrupt_rows {
+        let reason = match line.remedy() {
+            Some(remedy) => format!("corrupt-row — human repair, {remedy}"),
+            None => format!(
+                "corrupt-row — human repair, inspect {} line {}",
+                line.path, line.line
+            ),
+        };
+        rows.push(crate::protect::keep_row(
+            &format!("{}:{}", line.store, line.line),
+            &reason,
+        ));
+    }
     for row in &found.wrong_owner {
         rows.push(crate::protect::keep_row(
             &row.subject,

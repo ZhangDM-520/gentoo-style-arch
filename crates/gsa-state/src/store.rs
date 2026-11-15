@@ -66,13 +66,8 @@ impl CorruptLine {
             return None;
         }
         let lines: Vec<String> = corrupt.iter().map(CorruptLine::render).collect();
-        let torn_tail_only = corrupt.len() == 1 && corrupt[0].keep_bytes.is_some();
-        let remedy = match (torn_tail_only, corrupt[0].keep_bytes) {
-            (true, Some(keep)) => format!(
-                "; line {} never completed, so no row is lost by dropping it: \
-                 'sudo -n truncate -s {keep} {}' then re-run",
-                corrupt[0].line, corrupt[0].path
-            ),
+        let remedy = match corrupt[0].remedy() {
+            Some(text) if corrupt.len() == 1 => format!("; {text}"),
             _ => String::new(),
         };
         Some(format!(
@@ -82,17 +77,43 @@ impl CorruptLine {
         ))
     }
 
-    /// The health-report row (contract §E.2-ish prose: kind name detail…).
-    pub fn render(&self) -> String {
+    /// The exact repair for THIS row, when one can be named: only an
+    /// unterminated final line has one, because its bytes never formed a row.
+    /// A deliberately truncated store is textually identical and still
+    /// refuses — the remedy is handed to a human, never applied.
+    ///
+    /// ONE derivation: [`refusal`](Self::refusal) and the doctor's
+    /// corrupt-row finding both read it, so a remedy cannot exist in the
+    /// refusal and go missing from the diagnosis that must offer it
+    /// (R2-vera-3: `-Q` refused naming the row while `-Md` called the state
+    /// clean).
+    pub fn remedy(&self) -> Option<String> {
+        self.keep_bytes.map(|keep| {
+            format!(
+                "line {} never completed, so no row is lost by dropping it: \
+                 'sudo -n truncate -s {keep} {}' then re-run",
+                self.line, self.path
+            )
+        })
+    }
+
+    /// The detail half of [`render`](Self::render): `<name> line <n>: <detail>`.
+    /// The row grammars that already carry the family as the action column
+    /// (`corrupt-row`) print THIS, so the word is never doubled
+    /// (`corrupt-row corrupt-row …`), and the two spellings cannot drift
+    /// because `render` composes itself from it.
+    pub fn detail_line(&self) -> String {
         let name = if self.name.is_empty() {
             format!("line-{}", self.line)
         } else {
             self.name.clone()
         };
-        format!(
-            "corrupt-row {} {} line {}: {}",
-            self.store, name, self.line, self.detail
-        )
+        format!("{name} line {}: {}", self.line, self.detail)
+    }
+
+    /// The health-report row (contract §E.2-ish prose: kind name detail…).
+    pub fn render(&self) -> String {
+        format!("corrupt-row {} {}", self.store, self.detail_line())
     }
 }
 

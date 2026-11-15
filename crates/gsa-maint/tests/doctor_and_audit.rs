@@ -10,6 +10,23 @@ use common::{has_row, make_archive, srcinfo, Fixture};
 use gsa_maint::{audit, doctor};
 use gsa_state::{reindex_archives, BinpkgIndex};
 
+/// The `N` in a `doctor report N finding(s)` row (`0` for `doctor clean`).
+fn finding_count(rows: &[gsa_maint::Row]) -> usize {
+    let summary = rows
+        .iter()
+        .find(|r| r.subject == "doctor")
+        .expect("a doctor summary row");
+    if summary.action == "clean" {
+        return 0;
+    }
+    summary
+        .reason
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("a counted summary: {summary:?}"))
+}
+
 fn doctor_fixture(name: &str) -> Fixture {
     let mut fx = Fixture::new(name);
     fx.add_recipe(
@@ -120,6 +137,42 @@ fn an_unreadable_index_is_named_and_refuses_the_repair() {
         // adapter maps this Err to the rc-3 refusal class.
         assert!(doctor::fix(ctx, true).is_err());
         assert!(doctor::fix(ctx, false).is_err());
+    });
+}
+
+/// Rule 71 on the doctor's other two stores (R2-vera-3). The index arm named
+/// an unreadable binpkg index, but the run history and the kv store were read
+/// with their error dropped — so a state root whose `runs/` could not be read
+/// at all was diagnosed as if it held no records. An unreadable file is not an
+/// absent one.
+#[test]
+fn doctor_names_an_unreadable_side_car_store_instead_of_reading_it_as_empty() {
+    let fx = doctor_fixture("doctor-unreadable-side-car");
+    let state = fx.state();
+    // A directory where each store file belongs: a read failure, never the
+    // absent store a fresh root has.
+    std::fs::create_dir_all(state.runs_path()).unwrap();
+    std::fs::create_dir_all(state.kv_path()).unwrap();
+
+    fx.with_ctx(|ctx| {
+        let rows = doctor::report(ctx);
+        common::assert_row_grammar(&rows);
+        for store in ["runs", "kv"] {
+            let failure = common::find_row(&rows, store, "failed")
+                .unwrap_or_else(|| panic!("an unreadable {store} store is a finding: {rows:?}"));
+            assert!(
+                failure.reason.contains("is unreadable"),
+                "the finding says the store could not be read: {}",
+                failure.reason
+            );
+        }
+        // And it COUNTS: a clean bill over a store that could not be opened is
+        // the report that was wrong.
+        assert!(
+            rows.iter()
+                .all(|r| !(r.subject == "doctor" && r.action == "clean")),
+            "an unreadable store is never a clean diagnosis: {rows:?}"
+        );
     });
 }
 
@@ -379,6 +432,98 @@ fn audit_report_surfaces_unreadable_pkgbuild() {
                 && r.action == "alpha"
                 && r.reason.contains("unreadable")),
             "unreadable PKGBUILD must surface in audit::report instead of clean: {rows:?}"
+        );
+    });
+}
+
+/// A corrupt store row is a doctor finding (R2-vera-3). The reader that gates
+/// on the index refuses outright, so a doctor that called the same state clean
+/// left the one defect nothing could read out of both the diagnosis and its
+/// own repair plan — while the remedy existed and only the other verb printed
+/// it.
+#[test]
+fn doctor_names_a_corrupt_store_row_and_never_applies_its_repair() {
+    let fx = doctor_fixture("doctor-corrupt-row");
+    let state = fx.state();
+    let archive = fx
+        .root
+        .join("packages/git/alpha/alpha-1.0-1-any.pkg.tar.zst");
+    make_archive(&archive, "alpha", "alpha", "1.0-1");
+    let mut err = Vec::new();
+    reindex_archives(
+        &state,
+        "alpha",
+        std::slice::from_ref(&archive),
+        None,
+        &mut err,
+    )
+    .unwrap();
+
+    // A torn tail (no terminator) on top of the real row: the class whose
+    // bytes never formed a row, so `CorruptLine::remedy` can name a repair.
+    let index = gsa_state::RunHistory::path(&state)
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("index/binpkg.jsonl"))
+        .expect("index path");
+    let body = std::fs::read_to_string(&index).unwrap();
+    let torn_line = body.lines().count() + 1;
+
+    fx.with_ctx(|ctx| {
+        // The count is a DELTA against the same state with an intact store:
+        // this root carries other findings, so `doctor report` alone proves
+        // nothing about the corrupt row being one of them.
+        let intact = finding_count(&doctor::report(ctx));
+        let mut torn = body.clone();
+        torn.push_str("{\"recipe_id\":\"alpha\",\"instance\":\"9.9-1\"");
+        std::fs::write(&index, &torn).unwrap();
+
+        let rows = doctor::report(ctx);
+        common::assert_row_grammar(&rows);
+        let finding = common::find_row(&rows, &format!("index:{torn_line}"), "corrupt-row")
+            .expect("the corrupt row is a doctor finding");
+        assert!(
+            finding.reason.contains("truncated tail"),
+            "the finding says what is wrong: {}",
+            finding.reason
+        );
+        assert!(
+            finding.reason.contains("truncate -s"),
+            "the finding names the remedy the store's own refusal names: {}",
+            finding.reason
+        );
+        assert!(
+            !finding.reason.contains("corrupt-row corrupt-row"),
+            "the family word is never doubled: {}",
+            finding.reason
+        );
+
+        // It COUNTS as a finding: the corrupt row is one more than the intact
+        // store reported, so a diagnosis that merely listed it while the
+        // summary stayed put would fail here.
+        assert_eq!(
+            finding_count(&rows),
+            intact + 1,
+            "the corrupt row is one of the counted findings: {rows:?}"
+        );
+
+        // The repair plan NAMES it and applies nothing: a `truncate -s 70%`
+        // store is textually identical to a torn tail, so the truncation stays
+        // a human decision (round-3 audit, STD-R3-02).
+        let before = std::fs::read(&index).unwrap();
+        let outcome = doctor::fix(ctx, true).unwrap();
+        assert_eq!(outcome.failed, 0);
+        let kept = common::find_row(&outcome.rows, &format!("index:{torn_line}"), "keep")
+            .expect("the repair plan names the corrupt row");
+        assert!(
+            kept.reason.contains("human repair"),
+            "the plan hands the truncation to a human: {}",
+            kept.reason
+        );
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "the engine never truncates a store"
         );
     });
 }
