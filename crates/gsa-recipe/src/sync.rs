@@ -2154,12 +2154,23 @@ pub fn sync_snapshot(
 
     // The mirror: `SRCDEST/<makepkg source name>`. Absent is a deferral-style
     // refusal, never a network fetch — a pin placed from a live query at edit
-    // time cannot be reproduced from the tree.
+    // time cannot be reproduced from the tree. A directory that EXISTS but is
+    // not a readable repository is a different gap: corrupt evidence, not
+    // missing evidence, and it is named as such rather than blamed on a ref.
     let mirror = src_root.join(&source.name);
-    if !mirror.is_dir() {
-        return defer(SnapshotRefusal::MirrorMissing {
-            path: mirror.display().to_string(),
-        });
+    match gsa_model::mirror::mirror_state(&mirror) {
+        gsa_model::mirror::MirrorState::Absent => {
+            return defer(SnapshotRefusal::MirrorMissing {
+                path: mirror.display().to_string(),
+            })
+        }
+        gsa_model::mirror::MirrorState::Unusable { detail } => {
+            return defer(SnapshotRefusal::MirrorUnusable {
+                path: mirror.display().to_string(),
+                detail,
+            })
+        }
+        gsa_model::mirror::MirrorState::Usable => {}
     }
 
     let candidates = snapshot_ref_candidates(source.snapshot_ref.as_deref());
