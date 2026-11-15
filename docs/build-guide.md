@@ -1011,6 +1011,24 @@ somewhere durable first:
 gsa -S @core --state-dir "$HOME/.local/state/gentoo-style-arch"
 ```
 
+### `another gsa run holds …/run.lock` — the run lock is busy
+
+`-S`/`-B`/`-U` take one lock per state root, and a held one refuses rc 3
+`startup-refused`. The refusal names the lock, whether a live `gsa` run holds
+it, and — when nothing live does — the exact command that clears it:
+
+```
+gsa: another gsa run holds /var/lib/gsa/locks/run.lock (a second run over the
+same state root is refused); holder pid 1234 is a live gsa run; to clear it:
+let the run holding it finish; if pid 1234 is wedged, stop it and re-run
+```
+
+A stale lock says `no gsa process holds it` and prints `to clear it: rm
+/var/lib/gsa/locks/run.lock`. `gsa -Md` reports the same state as
+`run-lock:<path> …` (a live holder is `health ok`, a stale one is a
+`stale-run-lock` finding), and `gsa --stale-lock-check` prints it beside the
+pacman `db.lck` status. Never delete a lock a live run holds.
+
 ### `anchoring-refused` / `updpkgsums` cannot write the recipe store
 
 A store `PKGBUILD` the build user cannot write makes checksum refresh refuse

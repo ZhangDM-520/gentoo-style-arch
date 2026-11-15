@@ -293,7 +293,7 @@ instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
 | Spelling | Action |
 | --- | --- |
 | `gsa -Ma` | audit report: legacy paths, package drift, stale runtime artifacts, cargo/rustc recipes with no `rust-git` edge, the recipe-contract lints, installed PGO payload report, `recipe-integrity` (an absent declared local source, a REMOTE NON-SIGNATURE source pinned `SKIP`; a detached signature's `SKIP` is makepkg's normal spelling and is never a finding, and a present sum's agreement with upstream is the sync pass's question — the family prints a `scope=` row saying so), `state-integrity` (unusable side-car lines, index rows whose archive is gone or resized) (today `--audit`), and a closing `audit total <N finding(s)>` row counting every finding row. Report-only by contract (§E.4); exit 0, read the report |
-| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
+| `gsa -Md [--fix]` | doctor: runtime-state reconciliation — log ownership, stale lane/run artifacts, pacman local-DB health report, binpkg index/`sha256+size` consistency, side-car rows with no pacman counterpart, every corrupt side-car row and every unreadable side-car store (the classes `-Q*` refuses over, a corrupt row being forbidable and never applied — R2-vera-3), and the §K.3 RUN lock (`run-lock:<path> <status> …`: absent/free/a live holder are `health ok` statements, a lock no live gsa process holds is a `stale-run-lock` finding carrying the exact `rm` — 2026-11-15 amendment). The run-lock row is the documented home for a lock diagnosis, since `--stale-lock-check` is a hidden seam (§D.1). Default reports; `--fix` applies the named repairs; a corrupt row is NAMED and left to a human (STD-R3-02) |
 | `gsa -Mi [--prune\|--backfill]` | IgnorePkg closure repair of the target `pacman.conf`: default reports drift; `--prune` removes stale entries; `--backfill` adds missing ones the workspace actually BUILT (an archive shipped the name; a declared-but-never-built name is skipped with a summary row, because it would pin the STOCK package — today's hidden `--register-ignorepkg`). The report's header counts the CLOSURE it introduces (`entries=N in-use=N stale=N`), names the installed-DB census as a classification input only, and closes with ONE `ignorepkg drift missing=N addable=N unbuilt=N` summary whose `addable` is exactly the set `--backfill` plans (2026-11-15 amendment) |
 | `gsa -Ml [--tail <ref>] [--keep N]` | per-package log browse/tail; `--keep N` is the log-retention prune |
 | `gsa -Mm` | mirrors: dedupe VCS source clones into canonical mirrors (today `--link-sources`). Confirmation-gated on its DESTROYED SET (§K.3): a `clean` plan applies without asking; a plan that links or rewrites prints its targets and, without `--noconfirm`, stops rc 3 `confirmation-required` (on a TTY it asks one `y`/`N` question first). Must run as the build user, never under a root supervisor (its run lock falls back to the build-user cache root when the state root's lock is unopenable to the build user — §K.3) |
@@ -1008,7 +1008,7 @@ requires each such file to be byte-identical to the engine's own output.
 | `--install-decide` | `gsa --install-decide <checked\|force> <archive…>` | prints decision rows (§E) on stdout and touches nothing else: no pacman, sudo, flock, or makepkg. rc 0 plan / 1 refusal / 2 bad usage |
 | `--lane-job` | `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` | the lane child entry: one package, one result file. Positional payload, control characters rejected, invalid flag/job rejected with rc 2 and a message naming the argument. Writes exactly one result row through the typed codec (§F.2) |
 | `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | live (`docs/plans/plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, `verify-failed`, `sig-key-unknown`, …) — the vocabulary and the stage-aware classification rule are `docs/adr/0004-prefetch-advisory.md`. Advisory: it never writes a run-record row and never changes the run rc (`docs/plans/plan.md` §3.3) |
-| `--stale-lock-check` | `gsa --stale-lock-check` | the production pacman-lock probe without a run (holder identification via `/proc/*/fd`, never `db.lck` deletion) |
+| `--stale-lock-check` | `gsa --stale-lock-check` | the production lock probe without a run, for BOTH locks a run must take: `db.lck` (`db-path:`/`lock:`/`status:`/`holder:`, holder identification via `/proc/*/fd`, never `db.lck` deletion) and the §K.3 run lock (`run-lock:`/`run-status:`/`run-holder:` — absent/free/held, the holder's pid and whether it is a live gsa run, and the exact `rm` for a genuinely stale lock; the state root resolves through §J.3's ladder, no flag). The `db.lck` rows are byte-identical to the pre-2026-11-15 probe; the run-lock rows follow them and never change the `db.lck` verdict |
 | `--local-db-check` | `gsa --local-db-check [health\|runs]` | the production pacman local-DB health probe without a run (`health`, the default) or a run-history dump (`runs`); `--state-dir` applies |
 | `--install-register` | `gsa --install-register <conf> <subject> <names…>` | the IgnorePkg registration write path in isolation, including its bounded `db.lck` wait |
 | `--register-ignorepkg` | `gsa --register-ignorepkg <conf> <names…>` | the one-shot IgnorePkg backfill in isolation (the public verb is `gsa -Mi --backfill`; the seam stays for fixtures and for an engine older than the verb) |
@@ -1931,6 +1931,19 @@ dispatch; a failure parks a cone (§I).
   serializes build-user maintain runs among themselves but does NOT mutually
   exclude root engine runs over the same state root — a permission split
   cannot provide one mutex.
+  *Amendment (2026-11-15, the held-lock refusal).* A busy run lock refuses
+  rc 3 `startup-refused` and the refusal STATES three things, never implying
+  them: the lock path; whether the holder is a live `gsa` run — decided from
+  the `/proc/*/fd` scan for the lock's inode (`holder pid N is a live gsa
+  run` / `holder pid N is not a gsa run`), falling back to the pid the file
+  records when no process has it open; and the exact command that clears a
+  genuinely stale lock (`rm <path>`). A live holder's remedy is to let that
+  run finish, never to delete its lock. The acquiring writer truncates the
+  file before recording its pid, so a longer stale pid cannot survive the
+  overwrite. `-Md` reports the same state from the same derivation, and
+  `--stale-lock-check` adds `run-lock:`/`run-status:`/`run-holder:` rows
+  after its unchanged `db.lck` rows (R2-vera-8: the only lock verb answered
+  `db.lck status: free` while a run was refused for this lock).
 - **`sudo -n` only.** The engine never prompts for CREDENTIALS (a TTY changes
   nothing). The one question it may ask is §B.7's destroyed-set consent, and
   only on a terminal; every non-interactive caller gets the refusal instead.

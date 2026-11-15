@@ -32,7 +32,10 @@ set -euo pipefail
 #      refused; `gsa --help` hides the seams and lists the build flags.
 #   6. `--stale-lock-check` (§D.1): the pacman-lock probe reports
 #      free / present-idle / held, identifies holders via /proc fd scan, and
-#      NEVER deletes db.lck; extra arguments are rc 2.
+#      NEVER deletes db.lck; extra arguments are rc 2. It reports the §K.3
+#      RUN lock too (`run-lock:`/`run-status:`/`run-holder:`) — R2-vera-8:
+#      the verb answered `db.lck status: free` while a run was refused for
+#      `locks/run.lock`, and the refusal named no holder and no remedy.
 #   7. the makepkg PACMAN shim path survives the recipe cwd (§K.1): a
 #      relative `--state-dir` still hands makepkg an ABSOLUTE shim path —
 #      makepkg runs with the recipe's cwd, so a relative one would not exist
@@ -584,11 +587,20 @@ EOF
     chmod +x "$ws/bin/pacman-conf"
     export PATH="$ws/bin:$PATH"
 
-    # free: no db.lck at all
+    # free: no db.lck at all. The db.lck rows are pinned as WHOLE LINES:
+    # the run-lock half prints `run-status: free`, which a substring match
+    # on `status: free` would accept as this lock's answer (R2-vera-8).
     run_engine "$ws" --stale-lock-check
     [ "$FIXTURE_RC" = 0 ] || fail "the lock probe is report-only (rc 0), got $FIXTURE_RC"
-    vgrep "$FIXTURE_OUTPUT" -F "status: free" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "status: free" >/dev/null \
         || fail "a lock-free database must report status: free: $FIXTURE_OUTPUT"
+    # …and the RUN lock is reported by the same invocation (R2-vera-8): the
+    # state root the guard pins, and its lock, which nothing has taken yet.
+    state_root="$ws/../.rr2-state"
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "run-lock: $state_root/locks/run.lock" >/dev/null \
+        || fail "the probe must name the run lock it consulted: $FIXTURE_OUTPUT"
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "run-status: absent" >/dev/null \
+        || fail "a state root with no run lock must report run-status: absent: $FIXTURE_OUTPUT"
 
     # present-idle: db.lck exists, no open holder
     : >"$db/db.lck"
@@ -605,11 +617,62 @@ EOF
     run_engine "$ws" --stale-lock-check
     exec 9>&-
     [ "$FIXTURE_RC" = 0 ] || fail "the lock probe is report-only (rc 0), got $FIXTURE_RC"
-    vgrep "$FIXTURE_OUTPUT" -F "status: held" >/dev/null \
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "status: held" >/dev/null \
         || fail "an open holder must report status: held: $FIXTURE_OUTPUT"
     vgrep "$FIXTURE_OUTPUT" -F "holder: " >/dev/null \
         || fail "the probe must identify the holder: $FIXTURE_OUTPUT"
     [ -f "$db/db.lck" ] || fail "the probe deleted a held db.lck (it must never delete)"
+
+    # ── R2-vera-8: the RUN lock, and what a refusal says about it ─────────
+    # The report's repro: a plain `flock` (any non-gsa process) holds the run
+    # lock and no engine run recorded a pid in it. The holder is its OWN
+    # process — a dedicated sleeper — because an fd held by THIS shell would
+    # be inherited by the engine under test and the scan would rightly name
+    # the refusing run itself. The state root is staged root-owned exactly as
+    # a run leaves it (the engine runs as root here), so the ownership gate
+    # cannot quarantine the lock out from under the assertion; the fd is
+    # opened read-only, which is all `flock` needs.
+    lock="$state_root/locks/run.lock"
+    /usr/bin/sudo -n mkdir -p "$(dirname "$lock")"
+    /usr/bin/sudo -n touch "$lock"
+    ( exec 8<"$lock"; flock -n 8 || exit 1; exec sleep 30 ) &
+    stale_holder=$!
+    for _ in $(seq 1 100); do
+        run_engine "$ws" --stale-lock-check
+        vgrep "$FIXTURE_OUTPUT" -Fx -- "run-status: held" >/dev/null && break
+        sleep 0.05
+    done
+    [ "$FIXTURE_RC" = 0 ] || fail "a held run lock is still a report (rc 0), got $FIXTURE_RC"
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "run-status: held" >/dev/null \
+        || fail "a held run lock must report run-status: held: $FIXTURE_OUTPUT"
+    vgrep "$FIXTURE_OUTPUT" -F "run-holder: " >/dev/null \
+        || fail "the probe must name the run lock's holder: $FIXTURE_OUTPUT"
+    vgrep "$FIXTURE_OUTPUT" -F "gsa=false" >/dev/null \
+        || fail "a non-gsa holder must be judged as one: $FIXTURE_OUTPUT"
+    [ -f "$lock" ] || fail "the probe deleted the run lock"
+
+    # The same lock refuses a run — and the refusal names the holder evidence
+    # and the exact command that clears a stale lock, printed rather than
+    # implied. `p` is never dispatched, so no makepkg is needed.
+    run_engine "$ws" -B --state-dir "$state_root" p
+    [ "$FIXTURE_RC" = 3 ] || fail "a held run lock must refuse with rc 3, got $FIXTURE_RC"
+    vgrep "$FIXTURE_OUTPUT" -F "another gsa run holds $lock" >/dev/null \
+        || fail "the refusal must name the run lock: $FIXTURE_OUTPUT"
+    vgrep "$FIXTURE_OUTPUT" -F "no gsa process holds it" >/dev/null \
+        || fail "the refusal must judge whether a live gsa holds it: $FIXTURE_OUTPUT"
+    vgrep "$FIXTURE_OUTPUT" -F "to clear it: rm $lock" >/dev/null \
+        || fail "the refusal must print the exact remedy: $FIXTURE_OUTPUT"
+    kill "$stale_holder" 2>/dev/null || true
+    wait "$stale_holder" 2>/dev/null || true
+
+    # Released: the same probe no longer reports the lock as held.
+    for _ in $(seq 1 100); do
+        run_engine "$ws" --stale-lock-check
+        vgrep "$FIXTURE_OUTPUT" -Fx -- "run-status: free" >/dev/null && break
+        sleep 0.05
+    done
+    vgrep "$FIXTURE_OUTPUT" -Fx -- "run-status: free" >/dev/null \
+        || fail "a released run lock must report run-status: free: $FIXTURE_OUTPUT"
 
     # invalid invocation: rc 2 naming the argument (§D.1)
     run_engine "$ws" --stale-lock-check extra

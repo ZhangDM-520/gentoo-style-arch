@@ -348,12 +348,72 @@ if want b; then
         # A finding is a problem: the `local-db health ok` row is the health
         # statement and is excluded from the count (derived from the row
         # stream, never pinned).
+        # …and the rule is general: ANY `health ok` row is a statement (the
+        # run-lock row is one too, R2-vera-8), every other row a finding.
         findings=$(printf '%s\n' "$FIXTURE_OUTPUT" | tail -n +2 \
-            | awk '!($1 == "local-db" && $2 == "health" && $3 == "ok")' | wc -l)
+            | awk '!($2 == "health" && $3 == "ok")' | wc -l)
         case $summary in
         *" $findings finding(s)") ;;
         *) fail "doctor summary disagrees with its rows ('$summary' vs $findings rows): $FIXTURE_OUTPUT" ;;
         esac
+
+        # ── the RUN lock is in the diagnosis (R2-vera-8) ──────────────────
+        # A person refused for `locks/run.lock` had no verb that described
+        # it: `--stale-lock-check` is a hidden seam (§D.1), so the doctor —
+        # which is documented — must state the lock, name a stale holder and
+        # print the exact command. It is the one lock state a report can
+        # answer without taking the lock itself.
+        lock="$state/locks/run.lock"
+        has_row "$FIXTURE_OUTPUT" "run-lock:$lock health ok free" \
+            "an idle run lock is a health statement, never a finding"
+        # Stage the report's repro: a plain `flock` holds the run lock and no
+        # engine pid is recorded in it. Root-owned, exactly as a run leaves
+        # it (the engine runs as root here); read-only is all flock needs.
+        /usr/bin/sudo -n touch "$lock"
+        exec 8<"$lock"
+        flock -n 8 || fail "b: could not take the fixture's own run lock"
+        run_engine "$ws" -Md --state-dir "$state"
+        [ "$FIXTURE_RC" -eq 0 ] || fail "b: -Md over a held run lock is rc 0: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "run-lock:$lock stale-run-lock" >/dev/null \
+            || fail "b: a run lock no live gsa holds must be a finding: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "no gsa process holds it" >/dev/null \
+            || fail "b: the finding must judge whether a live gsa holds it: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "clear it: rm $lock" >/dev/null \
+            || fail "b: the finding must print the exact remedy: $FIXTURE_OUTPUT"
+        [ -f "$lock" ] || fail "b: the doctor deleted a held run lock"
+        exec 8<&-
+
+        # A LIVE gsa holder is the normal busy state, never a finding: the
+        # same run lock, held by a process whose argv[0] is `gsa` (a bash
+        # `exec -a` fork of flock — the command line IS the liveness
+        # evidence, so no real build is needed).
+        # The holder is ONE process: bash takes the fd and the flock, then
+        # execs the sleeper with argv[0] = gsa, so the descriptor (and the
+        # lock) survive the exec and killing the pid releases both — a
+        # `flock` over a command would leave its child holding the fd.
+        mkdir -p "$fixture/b/bin"
+        cat >"$fixture/b/bin/gsa" <<EOF
+#!/bin/bash
+exec 9<"$lock"
+flock -n 9 || exit 1
+exec -a gsa sleep 30
+EOF
+        chmod +x "$fixture/b/bin/gsa"
+        "$fixture/b/bin/gsa" &
+        live_holder=$!
+        for _ in $(seq 1 100); do
+            run_engine "$ws" -Md --state-dir "$state"
+            vgrep "$FIXTURE_OUTPUT" -F "run-lock:$lock health ok held" >/dev/null && break
+            sleep 0.05
+        done
+        vgrep "$FIXTURE_OUTPUT" -F "run-lock:$lock health ok held" >/dev/null \
+            || fail "b: a live gsa holder must be a health statement: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "is a live gsa run" >/dev/null \
+            || fail "b: the row must name the live holder: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -F "stale-run-lock" >/dev/null \
+            && fail "b: a live gsa holder is never a stale lock: $FIXTURE_OUTPUT"
+        kill "$live_holder" 2>/dev/null || true
+        wait "$live_holder" 2>/dev/null || true
 
         # --fix applies exactly the named repairs (rc 0).
         run_engine "$ws" -Md --fix --state-dir "$state"

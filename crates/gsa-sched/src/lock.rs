@@ -102,16 +102,363 @@ pub fn acquire_run_lock_file(path: &Path, scope: &str) -> Result<RunLock, RunLoc
         .map_err(|f| classify_failure(f))?;
     if !flock_exclusive_nonblocking(file.as_raw_fd()) {
         return Err(RunLockError::Busy(format!(
-            "another gsa run holds {} (a second run over the {} is refused)",
+            "another gsa run holds {} (a second run over the {} is refused); {}",
             path.display(),
-            scope
+            scope,
+            held_lock_diagnosis(path)
         )));
     }
+    // Truncate before the write: a longer pid from a previous holder would
+    // otherwise survive the overwrite and a reader would name a stranger.
+    let _ = file.set_len(0);
     let _ = writeln!(&mut { &file }, "{}", std::process::id());
     Ok(RunLock {
         file,
         path: path.to_path_buf(),
     })
+}
+
+/// What a BUSY lock file says about its holder, without taking the flock:
+/// the pid the file answers with, whether that pid is a live `gsa` run, and
+/// the command that clears a genuinely stale lock. One derivation, shared by
+/// the refusal (`acquire_run_lock_file`) and `--stale-lock-check`, so the two
+/// surfaces can never describe one file differently (R2-vera-8: an operator
+/// holding `flock` on the run lock got a refusal naming no holder, no
+/// liveness verdict and no remedy, while the only lock verb answered about
+/// `db.lck`).
+/// Who holds a busy lock — the evidence, in the order it is trustworthy:
+/// the process that demonstrably has the file OPEN (an fd scan, the same
+/// technique `db.lck`'s holder rows use), then the pid the lock file itself
+/// records. A file's recorded pid alone cannot tell a foreign holder (a
+/// plain `flock`) from a leftover file, which is why the refusal used to
+/// name nothing (R2-vera-8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockHolder {
+    /// A process has the file open: `gsa` answers whether its argv[0] is a
+    /// gsa run (a holder that is not gsa is a stale lock from the engine's
+    /// point of view).
+    Process { pid: u32, gsa: bool },
+    /// No process has it open; the lock file records this pid (or none).
+    Recorded { pid: Option<u32>, gsa: bool },
+    /// Nothing visible and nothing recorded; `scan_incomplete` says whether
+    /// the fd scan could not inspect every process.
+    Unknown { scan_incomplete: bool },
+}
+
+/// The holder evidence plus the sentence and the remedy that follow from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockDiagnosis {
+    pub holder: LockHolder,
+}
+
+impl LockDiagnosis {
+    /// Stated as one sentence, for a refusal or a report row reason. It
+    /// always answers the one question a stuck operator has: is a live gsa
+    /// run behind this, or is the lock stale?
+    pub fn describe(&self) -> String {
+        match &self.holder {
+            LockHolder::Process { pid, gsa: true } => {
+                format!("holder pid {pid} is a live gsa run")
+            }
+            LockHolder::Process { pid, gsa: false } => {
+                format!("holder pid {pid} is not a gsa run — no gsa process holds it")
+            }
+            LockHolder::Recorded { pid: Some(pid), gsa: true } => format!(
+                "the lock file records pid {pid}, a live gsa run that holds no descriptor on the file — the lock is stale"
+            ),
+            LockHolder::Recorded { pid: Some(pid), gsa: false } => format!(
+                "the lock file records pid {pid}, which is not a live gsa run — no gsa process holds it"
+            ),
+            LockHolder::Recorded { pid: None, .. } => {
+                "the lock file records no holder pid — no gsa process holds it".to_string()
+            }
+            LockHolder::Unknown {
+                scan_incomplete: true,
+            } => "the holder could not be identified (not privileged to inspect every /proc/*/fd entry)"
+                .to_string(),
+            LockHolder::Unknown {
+                scan_incomplete: false,
+            } => "nothing holds the file open and it records no holder pid".to_string(),
+        }
+    }
+
+    /// Is the lock held by a live engine run? Then the remedy is to wait;
+    /// otherwise the file is stale and the remedy is the exact command.
+    pub fn live_gsa(&self) -> bool {
+        match self.holder {
+            LockHolder::Process { gsa, .. } | LockHolder::Recorded { gsa, .. } => gsa,
+            LockHolder::Unknown { .. } => false,
+        }
+    }
+
+    /// The holder's pid, when one is known.
+    pub fn pid(&self) -> Option<u32> {
+        match self.holder {
+            LockHolder::Process { pid, .. } | LockHolder::Recorded { pid: Some(pid), .. } => {
+                Some(pid)
+            }
+            LockHolder::Recorded { pid: None, .. } | LockHolder::Unknown { .. } => None,
+        }
+    }
+
+    /// The exact command that clears a stale lock, printed and never
+    /// implied. Deleting a HELD lock is the race §K.3 forbids, so the
+    /// remedy is only offered once the holder is known not to be a live
+    /// engine run; a live holder's remedy is to let that run finish.
+    pub fn remedy(&self, path: &Path) -> String {
+        match self.pid() {
+            Some(pid) if self.live_gsa() => {
+                format!("let the run holding it finish; if pid {pid} is wedged, stop it and re-run")
+            }
+            _ => format!("rm {}", path.display()),
+        }
+    }
+}
+
+/// Diagnose a busy lock file: scan `/proc/*/fd` for a process holding THIS
+/// inode, then fall back to the pid the file records. Reads only — the
+/// caller already knows the file is busy, so this never flocks it.
+pub fn diagnose_held_lock(path: &Path) -> LockDiagnosis {
+    let recorded_pid = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok());
+    let holder = match std::fs::metadata(path) {
+        Ok(meta) => {
+            let holders = fd_holders(meta.ino(), meta.dev());
+            // A holder can FORK a child that inherits the descriptor (flock
+            // over a command does exactly that), so the scan may see two
+            // processes for one hold. The gsa one is the holder of record:
+            // naming the child would report a live engine run as foreign.
+            let chosen = holders
+                .pids
+                .iter()
+                .find(|(_, _, is_gsa)| *is_gsa)
+                .or_else(|| holders.pids.first());
+            match chosen {
+                Some((pid, _, is_gsa)) => LockHolder::Process {
+                    pid: *pid,
+                    gsa: *is_gsa,
+                },
+                None => LockHolder::Recorded {
+                    pid: recorded_pid,
+                    gsa: recorded_pid.map(is_gsa_process).unwrap_or(false),
+                },
+            }
+        }
+        // No stat, no scan: the recorded pid is all the evidence there is.
+        Err(_) => LockHolder::Recorded {
+            pid: recorded_pid,
+            gsa: recorded_pid.map(is_gsa_process).unwrap_or(false),
+        },
+    };
+    LockDiagnosis { holder }
+}
+
+/// One `/proc/*/fd` scan for the processes with one inode open — the ONE
+/// derivation behind `db.lck`'s `holder:` rows and the run lock's refusal,
+/// so the two locks are identified by the same evidence.
+struct FdHolders {
+    /// `(pid, command line rendered the way the holder row prints it,
+    /// whether argv[0]'s file name is gsa)`.
+    pids: Vec<(u32, String, bool)>,
+    skipped: usize,
+    proc_unreadable: Option<String>,
+}
+
+fn fd_holders(ino: u64, dev: u64) -> FdHolders {
+    let mut found = FdHolders {
+        pids: Vec::new(),
+        skipped: 0,
+        proc_unreadable: None,
+    };
+    let proc_dir = match std::fs::read_dir("/proc") {
+        Ok(dir) => dir,
+        Err(error) => {
+            found.proc_unreadable = Some(error.to_string());
+            return found;
+        }
+    };
+    // The refusing caller holds the lock file open by definition — its own fd
+    // is what lost the flock — so a scan that counted itself would answer
+    // "a live gsa run holds it" about the very run being refused and name no
+    // real holder (R2-vera-8's fixture caught exactly that).
+    let own_pid = std::process::id();
+    for entry in proc_dir.flatten() {
+        let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        if pid == own_pid {
+            continue;
+        }
+        let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+            Ok(fds) => fds,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                found.skipped += 1;
+                continue;
+            }
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = std::fs::metadata(fd.path()) else {
+                continue;
+            };
+            if target.ino() == ino && target.dev() == dev {
+                let raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+                let argv0 = raw
+                    .split(|b| *b == 0)
+                    .find(|s| !s.is_empty())
+                    .map(|s| String::from_utf8_lossy(s).into_owned())
+                    .unwrap_or_default();
+                let is_gsa = std::path::Path::new(&argv0)
+                    .file_name()
+                    .map(|name| name == "gsa")
+                    .unwrap_or(false);
+                let rendered = String::from_utf8_lossy(&raw).replace('\0', " ");
+                found.pids.push((pid, rendered.trim().to_string(), is_gsa));
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// Is this pid a live `gsa` process? The command line's first component's
+/// file name, so a renamed build or a wrapper still answers `gsa`; a pid
+/// that is gone or belongs to another program is not. The same evidence the
+/// orphan sweep uses (`/proc/<pid>/cmdline`), never a name heuristic on a
+/// filename.
+fn is_gsa_process(pid: u32) -> bool {
+    let Ok(bytes) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    let argv0 = bytes
+        .split(|b| *b == 0)
+        .find(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .unwrap_or_default();
+    std::path::Path::new(&argv0)
+        .file_name()
+        .map(|name| name == "gsa")
+        .unwrap_or(false)
+}
+
+fn held_lock_diagnosis(path: &Path) -> String {
+    let diagnosis = diagnose_held_lock(path);
+    format!(
+        "{}; to clear it: {}",
+        diagnosis.describe(),
+        diagnosis.remedy(path)
+    )
+}
+
+/// The pre-probe default [`RunLockState::Absent`]: `Findings::default()`
+/// builds the struct before the one probe fills it.
+impl Default for RunLockState {
+    fn default() -> Self {
+        RunLockState::Absent
+    }
+}
+
+/// The run lock's state, one derivation for every reader (`-Md`'s report and
+/// `--stale-lock-check`): R2-vera-8 found the only lock verb answering about
+/// `db.lck` while a run was refused for `locks/run.lock`, so a person with a
+/// stale holder had no diagnostic that described the lock actually in the way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunLockState {
+    /// No lock file: nothing has ever run over this root.
+    Absent,
+    /// The file exists and nothing holds it.
+    Free,
+    /// A process holds it; the diagnosis names the recorded pid, whether it
+    /// is a live `gsa` run, and the remedy for a genuinely stale lock.
+    Held(LockDiagnosis),
+}
+
+impl RunLockState {
+    /// The status word the two surfaces print for this state.
+    pub fn status(&self) -> &'static str {
+        match self {
+            RunLockState::Absent => "absent",
+            RunLockState::Free => "free",
+            RunLockState::Held(_) => "held",
+        }
+    }
+
+    /// Is this a defect a reader must act on? Only a lock held by no live
+    /// engine run is: a live holder is the normal state of a busy root, and
+    /// a free or absent lock is healthy.
+    pub fn is_finding(&self) -> bool {
+        matches!(self, RunLockState::Held(d) if !d.live_gsa())
+    }
+
+    /// The `-Md` row as `(action, reason)`: a healthy state is `health`
+    /// with an `ok …` reason (the doctor's one "this is a statement, not a
+    /// finding" shape, shared with `local-db health ok`), and a stale
+    /// holder is its own action with the remedy printed.
+    pub fn row(&self, path: &Path) -> (&'static str, String) {
+        match self {
+            RunLockState::Absent => (
+                "health",
+                format!("ok absent — no lock file at {}", path.display()),
+            ),
+            RunLockState::Free => ("health", "ok free — no holder".to_string()),
+            RunLockState::Held(diagnosis) if diagnosis.live_gsa() => (
+                "health",
+                format!(
+                    "ok held — {} (normal while a run is in flight)",
+                    diagnosis.describe()
+                ),
+            ),
+            RunLockState::Held(diagnosis) => (
+                "stale-run-lock",
+                format!(
+                    "{}; clear it: {}",
+                    diagnosis.describe(),
+                    diagnosis.remedy(path)
+                ),
+            ),
+        }
+    }
+}
+
+/// Where the §K.3 run lock lives under one state root.
+pub fn run_lock_path(state_dir: &Path) -> std::path::PathBuf {
+    state_dir.join("locks").join("run.lock")
+}
+
+/// Probe the run lock without creating it and without holding it past the
+/// call: a read-only surface (`-Md`, `--stale-lock-check`) must be able to
+/// ask. A held lock is diagnosed from the file's recorded pid, never from a
+/// second flock attempt that would misreport its own conflict.
+pub fn run_lock_state(state_dir: &Path) -> RunLockState {
+    let path = run_lock_path(state_dir);
+    match std::fs::metadata(&path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RunLockState::Absent;
+        }
+        // An unreadable lock file is not an absent one (rule 71): the caller
+        // sees a state it can report as held-with-unknown-holder rather than
+        // a clean root that stands the gate down.
+        Err(_) => return RunLockState::Held(unknown_holder()),
+    }
+    match run_lock_held(state_dir) {
+        Some(true) => RunLockState::Held(diagnose_held_lock(&path)),
+        Some(false) => RunLockState::Free,
+        // Unopenable: reported as held with no visible holder, never free.
+        None => RunLockState::Held(unknown_holder()),
+    }
+}
+
+/// The diagnosis for a lock nothing could be learned about — never rendered
+/// as "free", which would stand the gate down on an unreadable file.
+fn unknown_holder() -> LockDiagnosis {
+    LockDiagnosis {
+        holder: LockHolder::Unknown {
+            scan_incomplete: true,
+        },
+    }
 }
 
 /// The §K.3 state-root run lock (`<state>/locks/run.lock`), classified for
@@ -323,13 +670,28 @@ pub fn orphan_ppid_pgid(stat_line: &str, pid: i32) -> Option<(i32, i32)> {
     Some((ppid, pgid))
 }
 
-/// `--stale-lock-check` (contract §D.1): the production pacman-lock probe
-/// without a run. Reports `db.lck` presence and identifies any holder by an
-/// open-file-descriptor scan over `/proc/*/fd` — never by filename heuristics,
-/// never by deleting `db.lck`. Report-only on the lock report itself (rc 0);
-/// the db-root resolution failing loudly is rc 1 (a report on a silently
-/// guessed root is worse than no report).
+/// `--stale-lock-check` (contract §D.1): the production lock probe without a
+/// run — BOTH locks a run must take. `db.lck` presence and its holders
+/// (identified by an open-file-descriptor scan over `/proc/*/fd`) come first
+/// and stay byte-identical; the §K.3 run lock follows as `run-lock:` /
+/// `run-status:` / `run-holder:`, from the same derivation `-Md` prints
+/// (R2-vera-8: the verb answered `db.lck status: free` while a run was
+/// refused for `locks/run.lock`). Never deletes either file. Report-only on
+/// the lock report itself (rc 0); the db-root resolution failing loudly is
+/// rc 1 (a report on a silently guessed root is worse than no report), and an
+/// unreachable run lock (no resolvable state root) is rc 1 for the same
+/// reason.
 pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let db_rc = db_lock_probe(out, err);
+    // The run lock's half follows the db.lck rows (byte-identical above) and
+    // never changes the db.lck verdict: each lock reports its own state.
+    let run_rc = run_lock_probe(out, err);
+    db_rc.max(run_rc)
+}
+
+/// The `db.lck` half of the probe: presence, holders, and the never-delete
+/// note, unchanged from the pre-R2-vera-8 behaviour.
+fn db_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let (db_path, fallback) = match pacman_db_path() {
         Ok(resolved) => resolved,
         Err(message) => {
@@ -362,48 +724,17 @@ pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             return 1;
         }
     };
-    let ino = meta.ino();
-    let dev = meta.dev();
-    let mut holders: Vec<(i32, String)> = Vec::new();
-    let mut proc_unreadable = false;
-    let mut skipped_fds: usize = 0;
-    match std::fs::read_dir("/proc") {
-        Ok(proc_dir) => {
-            for entry in proc_dir.flatten() {
-                let pid: i32 = match entry.file_name().to_string_lossy().parse() {
-                    Ok(pid) => pid,
-                    Err(_) => continue,
-                };
-                let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
-                    Ok(fds) => fds,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(_) => {
-                        skipped_fds += 1;
-                        continue;
-                    }
-                };
-                for fd in fds.flatten() {
-                    let Ok(target) = std::fs::metadata(fd.path()) else {
-                        continue;
-                    };
-                    if target.ino() == ino && target.dev() == dev {
-                        let cmdline = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
-                            .unwrap_or_default()
-                            .replace('\0', " ");
-                        holders.push((pid, cmdline.trim().to_string()));
-                        break;
-                    }
-                }
-            }
-        }
-        Err(error) => {
-            let _ = writeln!(err, "gsa: cannot read /proc: {error}");
-            proc_unreadable = true;
-        }
+    // The same fd scan the run lock's diagnosis uses: `db.lck`'s holder rows
+    // and a refused run lock are identified by one piece of evidence.
+    let holders = fd_holders(meta.ino(), meta.dev());
+    if let Some(error) = &holders.proc_unreadable {
+        let _ = writeln!(err, "gsa: cannot read /proc: {error}");
     }
-    let rc = if !holders.is_empty() {
+    let skipped_fds = holders.skipped;
+    let proc_unreadable = holders.proc_unreadable.is_some();
+    let rc = if !holders.pids.is_empty() {
         let _ = writeln!(out, "status: held");
-        for (pid, cmdline) in holders {
+        for (pid, cmdline, _) in holders.pids {
             let _ = writeln!(out, "holder: {pid} {cmdline}");
         }
         0
@@ -429,6 +760,43 @@ pub fn pacman_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     };
     let _ = writeln!(err, "gsa: note: db.lck is never deleted by gsa");
     rc
+}
+
+/// The `locks/run.lock` half of `--stale-lock-check`: the state root the
+/// engine would use, and the lock a `-S`/`-B`/`-U` run must take. Reads only
+/// (never creates, never deletes); rc 1 when the state root cannot be
+/// resolved, because a report on a guessed root is worse than no report —
+/// the same policy the db-root half follows.
+fn run_lock_probe(out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let state_dir = match gsa_model::config::resolve_state_dir(None) {
+        Ok(dir) => dir,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: cannot resolve the state root: {message}");
+            let _ = writeln!(out, "run-lock: unresolved");
+            return 1;
+        }
+    };
+    let path = run_lock_path(&state_dir);
+    let state = run_lock_state(&state_dir);
+    let _ = writeln!(out, "run-lock: {}", path.display());
+    let _ = writeln!(out, "run-status: {}", state.status());
+    if let RunLockState::Held(diagnosis) = &state {
+        match diagnosis.pid() {
+            Some(pid) => {
+                let _ = writeln!(out, "run-holder: {pid} gsa={}", diagnosis.live_gsa());
+            }
+            None => {
+                let _ = writeln!(out, "run-holder: none recorded");
+            }
+        }
+        let _ = writeln!(err, "gsa: note: {}", diagnosis.describe());
+        let _ = writeln!(err, "gsa: note: to clear it: {}", diagnosis.remedy(&path));
+    }
+    let _ = writeln!(
+        err,
+        "gsa: note: the run lock is never deleted by gsa while it is held"
+    );
+    0
 }
 
 /// Resolve pacman's database root the way makepkg does: `pacman-conf
@@ -604,6 +972,124 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_lock_names_its_recorded_pid_and_the_exact_remedy() {
+        let dir = scratch("stale-lock");
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        let path = run_lock_path(&dir);
+        // R2-vera-8's repro: a plain `flock` holds the file and no engine run
+        // ever wrote a pid, so the refusal had no identity to report.
+        std::fs::write(&path, "").unwrap();
+        let empty = diagnose_held_lock(&path);
+        assert_eq!(empty.pid(), None);
+        assert!(!empty.live_gsa());
+        assert!(
+            empty.describe().contains("no holder pid"),
+            "an empty lock file must be named as such: {}",
+            empty.describe()
+        );
+        assert_eq!(
+            empty.remedy(&path),
+            format!("rm {}", path.display()),
+            "the remedy is the exact command, printed"
+        );
+
+        // A pid nothing owns is equally stale, and names its offender.
+        std::fs::write(&path, "999999999\n").unwrap();
+        let dead = diagnose_held_lock(&path);
+        assert_eq!(dead.pid(), Some(999_999_999));
+        assert!(!dead.live_gsa(), "an absent pid is not a live gsa run");
+        assert!(
+            dead.describe().contains("999999999"),
+            "a recorded pid is named: {}",
+            dead.describe()
+        );
+        assert_eq!(dead.remedy(&path), format!("rm {}", path.display()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_live_gsa_holder_is_recognized_and_the_remedy_is_to_wait() {
+        let dir = scratch("live-lock");
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        let path = run_lock_path(&dir);
+        std::fs::write(&path, "").unwrap();
+        // `exec -a gsa` gives the child argv[0] = "gsa" without needing a
+        // copy of this binary: the liveness test reads the command line, so
+        // whatever the executable is, the argv0 basename is the evidence.
+        let mut child = std::process::Command::new("bash")
+            .args(["-c", "exec -a gsa sleep 5"])
+            .spawn()
+            .expect("spawn the gsa-shaped holder");
+        let pid = child.id();
+        std::fs::write(&path, format!("{pid}\n")).unwrap();
+        let mut diagnosis = diagnose_held_lock(&path);
+        for _ in 0..100 {
+            if diagnosis.live_gsa() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            diagnosis = diagnose_held_lock(&path);
+        }
+        assert!(
+            diagnosis.live_gsa(),
+            "a live process whose argv[0] basename is gsa holds it: {diagnosis:?}"
+        );
+        assert!(diagnosis.describe().contains("live gsa run"));
+        assert!(
+            diagnosis
+                .remedy(&path)
+                .starts_with("let the run holding it finish"),
+            "a live holder is never told to delete its lock: {}",
+            diagnosis.remedy(&path)
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn acquiring_truncates_a_longer_stale_pid() {
+        let dir = scratch("pid-truncate");
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        let path = run_lock_path(&dir);
+        // A previous holder with a longer pid must not survive the overwrite:
+        // "1234567" + this pid would read as one longer, wrong number.
+        std::fs::write(&path, "999999999\n").unwrap();
+        let lock = acquire_run_lock_file(&path, "test root").expect("acquire");
+        let recorded: u32 = std::fs::read_to_string(&path)
+            .expect("read back")
+            .trim()
+            .parse()
+            .expect("the file holds exactly one pid");
+        assert_eq!(recorded, std::process::id());
+        drop(lock);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_lock_state_distinguishes_absent_free_and_held() {
+        let dir = scratch("run-state");
+        assert_eq!(run_lock_state(&dir), RunLockState::Absent);
+        assert_eq!(run_lock_state(&dir).status(), "absent");
+        std::fs::create_dir_all(dir.join("locks")).unwrap();
+        std::fs::write(run_lock_path(&dir), "").unwrap();
+        assert_eq!(run_lock_state(&dir), RunLockState::Free);
+        assert!(run_lock_state(&dir)
+            .row(&run_lock_path(&dir))
+            .1
+            .contains("no holder"));
+        // A hold through a separate open file description IS the conflict the
+        // kernel reports, so the same process can probe its own hold.
+        let lock = acquire_run_lock_file(&run_lock_path(&dir), "test root").expect("acquire");
+        let held = run_lock_state(&dir);
+        assert_eq!(held.status(), "held");
+        assert!(held.is_finding(), "a non-gsa hold is a finding");
+        drop(lock);
+        assert_eq!(run_lock_state(&dir), RunLockState::Free);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn orphan_ppid_pgid_is_none_when_the_ppid_cannot_be_read() {
         // A healthy stat line answers (ppid, pgid).
         assert_eq!(
@@ -724,8 +1210,11 @@ mod tests {
             "ENOTDIR on db.lck must fail instead of returning 0/free"
         );
         let out_str = String::from_utf8_lossy(&out);
+        // The db.lck verdict is the whole `status:` LINE: the run-lock half
+        // prints its own `run-status:` key, so a substring match on
+        // `status: free` would read the second lock's answer as this one's.
         assert!(
-            !out_str.contains("status: free"),
+            !out_str.lines().any(|line| line == "status: free"),
             "ENOTDIR must never misreport status: free: {out_str}"
         );
         std::env::set_var("PATH", saved_path);

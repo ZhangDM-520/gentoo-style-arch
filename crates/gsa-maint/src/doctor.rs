@@ -48,6 +48,15 @@ pub struct Findings {
     /// kv store disable their own readers, which is a finding the diagnosis
     /// owns but no repair touches.
     pub store_errors: Vec<(String, String)>,
+    /// The §K.3 run lock: its state and the holder diagnosis. A HELD lock is
+    /// normal while a run is in flight and only a lock recorded by no live
+    /// `gsa` process is a finding — but the state belongs in the doctor
+    /// either way, because `--stale-lock-check` is a hidden seam (§D.1) and
+    /// a person with no seam roster had nothing that described the lock a
+    /// refused run named (R2-vera-8).
+    pub run_lock: gsa_sched::lock::RunLockState,
+    /// The run lock's path, for the row's remedy.
+    pub run_lock_path: PathBuf,
 }
 
 /// The output-name truth filter of the orphan scan: the makepkg archive
@@ -63,6 +72,8 @@ fn is_archive_name(path: &Path) -> bool {
 /// Gather every doctor family in one read-only pass.
 pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
     let mut out = Findings::default();
+    out.run_lock = gsa_sched::lock::run_lock_state(ctx.state.path());
+    out.run_lock_path = gsa_sched::lock::run_lock_path(ctx.state.path());
     out.wrong_owner = hygiene::ownership_rows(ctx.state.path());
     out.stale = hygiene::stale_artifacts(ctx.state.path(), ctx.root);
     let loaded_db = match gsa_install::LocalDb::load(&gsa_install::localdb::pacman_db_root()) {
@@ -236,6 +247,19 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
         ));
     }
     rows.push(Row::new("local-db", "health", &found.local_db));
+    // The run lock's state, always stated (a healthy root says so), so the
+    // doctor answers "what is holding a run out?" without a hidden seam.
+    // Only a held-by-no-live-gsa lock counts as a finding — a live holder is
+    // the normal state of a busy root and must never inflate the count.
+    // The subject is one field (`run-lock:<path>`, the corrupt-row family's
+    // shape) so a reader splitting the row sees the action where it expects
+    // it — a space here put the path in the action's position.
+    let (run_lock_action, run_lock_reason) = found.run_lock.row(&found.run_lock_path);
+    rows.push(Row::new(
+        format!("run-lock:{}", found.run_lock_path.display()),
+        run_lock_action,
+        run_lock_reason,
+    ));
     for (row, detail) in &found.mismatch {
         rows.push(Row::new(
             row.archive.display().to_string(),
@@ -294,6 +318,10 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
     // A "finding" is a problem. The `local-db health ok …` row is the
     // doctor's health statement, not a defect, so a healthy root reported
     // `1 finding(s)` beside its own `ok` row (2026-11-11 blind review).
+    // The ONE statement rule: a `health` row whose reason starts with `ok`
+    // is a statement about the root, every other row is a finding. The
+    // run-lock row follows it (`health ok held — a live run`, or
+    // `stale-run-lock …` when nothing live holds it).
     let findings = rows
         .iter()
         .filter(|row| row.action != "health" || !row.reason.starts_with("ok"))
