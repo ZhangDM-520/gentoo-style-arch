@@ -1102,6 +1102,48 @@ EOF
 )
 checks=$((checks + 3))
 
+# ─── R. the PLAN names a moved provider's installed sonames (R2-maya-3) ─────
+# A major-version bump of a library provider is a C-ABI event, and nothing is
+# built at plan time — so the plan cannot state the NEW sonames. It can state
+# the ones the host has today and the gate that decides. Without this the plan
+# read as "no ABI change here" for 3.x -> 4.x (the reporter's `-S --dry-run`
+# said rc 0 with zero mentions of soname/abi/libcrypto).
+(
+    set -euo pipefail
+    # The tracked version moves past the installed one: the ONE derivation
+    # `-Qu`/`-Su` share (`prepare::stale_set`) is what the advisory reads.
+    pkgbuild="$ws/packages/libs-git/PKGBUILD"
+    cp "$pkgbuild" "$tmp/pkgbuild.bak"
+    sed -i 's/^pkgver=.*/pkgver=2.0.0/' "$pkgbuild"
+
+    gsa_db_reset
+    # Two soname provides on the INSTALLED record: a split library surface,
+    # which the advisory must list whole and sorted.
+    gsa_db libs-git 1.0.0-1 $'libgreet.so=1-64\nlibgreetx.so=1-64'
+
+    export PATH="$tmp/gsa-bin:$ws/bin:$PATH"
+    run_engine "$ws" -S --dry-run --leaf --no-sync --config "$ws/pacman.conf" libs-git
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$tmp/r.out"
+    ((FIXTURE_RC == 0)) ||
+        fail "R: the plan of a moved provider refused (rc=$FIXTURE_RC):" "$tmp/r.out"
+    grep -Fq 'libs-git: installed 0:1.0.0-1 ships libgreet.so, libgreetx.so; this plan builds 2.0.0-1' \
+        "$tmp/r.out" ||
+        fail 'R: the plan does not name the installed sonames it would move:' "$tmp/r.out"
+    grep -Fq 'abi-soname' "$tmp/r.out" ||
+        fail 'R: the advisory does not name the gate that decides:' "$tmp/r.out"
+    # A provider whose tracked version did NOT move says nothing: the advisory
+    # is about a MOVE, never about every rebuild.
+    mv "$tmp/pkgbuild.bak" "$pkgbuild"
+    run_engine "$ws" -S --dry-run --leaf --no-sync --config "$ws/pacman.conf" libs-git
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$tmp/r2.out"
+    grep -Fq 'soname advisory' "$tmp/r2.out" &&
+        fail 'R: an unmoved provider was told about its ABI:' "$tmp/r2.out"
+    grep -Fq 'ships libgreet.so' "$tmp/r2.out" &&
+        fail 'R: an unmoved provider still got the soname note:' "$tmp/r2.out"
+    true
+)
+checks=$((checks + 4))
+
 # ─── seam usage contract (§E.5 rc 2): a bad mode prints no rows ────────────
 gsa_db_reset
 gsa_provider

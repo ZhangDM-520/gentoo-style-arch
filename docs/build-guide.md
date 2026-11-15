@@ -92,6 +92,13 @@ gsa -S --dry-run @core
 gsa -B @git --intensity xhigh
 ```
 
+A `--dry-run` plan that MOVES a library provider forward says so: for every
+stale provider whose installed record ships soname provides, the plan names
+them and the gate that decides (`abi-soname` refuses a solo install of a moved
+provide, and the consumer wave rebuilds its pinned consumers — contract §E.3).
+The plan cannot name the NEW sonames, because nothing is built yet; what it
+refuses to do is stay silent, which read as "this plan promises no ABI change".
+
 Inspect without building: `gsa -Sl` (ordered selection with range indices),
 `gsa -Qi <ref…>` (merged recipe, topology, side-car and installed info — the
 home of the retired `-Si`), `gsa -Qs <pattern…>` (search installed names and

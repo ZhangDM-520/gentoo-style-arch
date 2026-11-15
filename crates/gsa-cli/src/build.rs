@@ -1110,6 +1110,11 @@ pub(crate) fn plan_only(
         }
     };
     extend_selection(&mut selection, &wave.additions);
+    // The soname advisory (R2-maya-3): the plan SAYS what a moved library
+    // provider means, instead of leaving the reader to remember that 3.x → 4.x
+    // is a C-ABI event.
+    let advisory_ids: Vec<RecipeId> = selection.listed.iter().map(|(_, id)| id.clone()).collect();
+    soname_advisory(root, ctx, inv, &advisory_ids, err);
     // The plan validates the SAME argv the run does: a bad `--lanes`,
     // `--jobs`, `--intensity` or env twin is a usage error here too (the
     // plan used to accept it and then the real run refused it), and the
@@ -2010,6 +2015,65 @@ fn parked_by(graph: &Graph<'_>, rows: &[OutcomeRow]) -> Vec<(String, Vec<String>
             (row.pkg.as_str().to_string(), responsible)
         })
         .collect()
+}
+
+/// The plan's soname advisory (R2-maya-3): a plan that MOVES a library
+/// provider forward names the sonames the host has TODAY and the gate that
+/// decides the C-ABI question — its silence read as "this plan promises no
+/// ABI change", so a 3.x → 4.x bump looked as harmless as a patch release.
+///
+/// The version comparison is `-Qu`/`-Su`'s ONE derivation
+/// (`prepare::stale_set`), so the two surfaces cannot disagree about what is
+/// moving. What a plan CANNOT know is the new sonames — nothing is built yet —
+/// so it never guesses from the version number: `abi-soname` refuses a moved
+/// provide outright and the wave rebuilds the pinned consumers (contract
+/// §E.3/§M). An unreadable installed database costs the advisory, never the
+/// plan (rule 71: say it, do not guess).
+fn soname_advisory(
+    root: &Path,
+    ctx: &select::Ctx<'_>,
+    inv: &Invocation,
+    ids: &[RecipeId],
+    err: &mut dyn Write,
+) {
+    let installed = match load_installed_db_for_update(inv.config.as_deref().map(Path::new)) {
+        Ok(db) => db,
+        Err(_) => {
+            let _ = writeln!(
+                err,
+                "gsa: note: soname advisory skipped — the installed database cannot be read, so the host's sonames are unknown"
+            );
+            return;
+        }
+    };
+    for row in prepare::stale_set(root, ctx.graph, ctx.db, &installed, ids) {
+        let Some(meta) = ctx.db.get(row.id.as_str()) else {
+            continue;
+        };
+        let mut sonames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for pkgname in meta.pkgnames() {
+            let Some(pkg) = installed.get(&pkgname) else {
+                continue;
+            };
+            for provide in &pkg.provides {
+                let name = gsa_model::abi::provide_name(provide);
+                if gsa_model::abi::is_soname_name(name) {
+                    sonames.insert(name.to_string());
+                }
+            }
+        }
+        if sonames.is_empty() {
+            continue;
+        }
+        let _ = writeln!(
+            err,
+            "gsa: note: {}: installed {} ships {}; this plan builds {} — whether those sonames move is decided at install (abi-soname refuses a solo install of a moved provide, and the consumer wave rebuilds its pinned consumers), never by the version number alone",
+            row.id.as_str(),
+            row.installed.as_deref().unwrap_or("-"),
+            sonames.into_iter().collect::<Vec<_>>().join(", "),
+            row.tracked,
+        );
+    }
 }
 
 /// A run that refused to start (contract §G.1 rc 3; §H.1: the record is
