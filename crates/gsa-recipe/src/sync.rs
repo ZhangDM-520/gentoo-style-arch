@@ -1651,6 +1651,17 @@ pub enum SnapshotRefusal {
         /// The path that was expected.
         path: String,
     },
+    /// The mirror directory exists but is not a usable git repository — its
+    /// `refs/` was removed, so git answers "not a git repository" and every
+    /// candidate ref fails. Distinct from [`Self::MirrorMissing`]: the
+    /// evidence is present and corrupt, not absent, and `ref-unresolvable`
+    /// would name a ref spelling fault that does not exist here.
+    MirrorUnusable {
+        /// The mirror path.
+        path: String,
+        /// Git's own words, so the operator sees the real evidence.
+        detail: String,
+    },
     /// The recipe has no `pkgver()` to evaluate, so the version a pin implies
     /// cannot be derived here.
     PkgverFunctionMissing,
@@ -1674,6 +1685,7 @@ impl SnapshotRefusal {
             SnapshotRefusal::RefUnresolvable { .. } => "ref-unresolvable",
             SnapshotRefusal::NoCommitBeforeBoundary { .. } => "no-commit-before-boundary",
             SnapshotRefusal::MirrorMissing { .. } => "mirror-missing",
+            SnapshotRefusal::MirrorUnusable { .. } => "mirror-unusable",
             SnapshotRefusal::PkgverFunctionMissing => "pkgver-function-missing",
             SnapshotRefusal::PkgverEvaluationFailed { .. } => "pkgver-evaluation-failed",
             SnapshotRefusal::PkgverUnsafe { .. } => "pkgver-unsafe",
@@ -1694,6 +1706,9 @@ impl SnapshotRefusal {
             }
             SnapshotRefusal::MirrorMissing { path } => format!(
                 "the source mirror '{path}' is absent — refusing to place a pin from the network at edit time"
+            ),
+            SnapshotRefusal::MirrorUnusable { path, detail } => format!(
+                "the source mirror '{path}' exists but is not a usable git repository ({detail}) — repair it with 'gsa -Md --fix', or delete it to re-fetch"
             ),
             SnapshotRefusal::PkgverFunctionMissing => {
                 "the recipe has no pkgver() function, so the version its pin implies cannot be derived — pin it by hand".to_string()
@@ -2408,6 +2423,25 @@ mod tests {
         hash_bytes, monday_boundary, rewrite_snapshot_pin, snapshot_ref_candidates, toml_section,
         toml_str_value, NvcheckerRunner, ProviderFamily,
     };
+
+    #[test]
+    fn mirror_unusable_names_the_keyword_and_the_repair() {
+        // A mirror that EXISTS but is not a git repository (its `refs/` was
+        // swept) is not a ref-spelling fault: `ref-unresolvable` sent the
+        // operator hunting a bad ref for a corrupt mirror (2026-11-15).
+        let r = super::SnapshotRefusal::MirrorUnusable {
+            path: "/src/acl".into(),
+            detail: "fatal: not a git repository".into(),
+        };
+        assert_eq!(r.keyword(), "mirror-unusable");
+        let m = r.message();
+        assert!(m.contains("/src/acl"), "message names no path: {m}");
+        assert!(m.contains("gsa -Md --fix"), "message names no remedy: {m}");
+        assert!(
+            m.contains("not a git repository"),
+            "message drops git's own words: {m}"
+        );
+    }
 
     #[test]
     fn hash_bytes_covers_the_coreutils_matrix() {
