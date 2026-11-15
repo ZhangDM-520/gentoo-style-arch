@@ -166,7 +166,17 @@ pub struct PrefetchSetup {
 pub enum InstallStep {
     /// The install decision stood (transaction ran or was skipped). The
     /// reason rides the outcome row: `ok`, `already-current`, …
-    Done(String),
+    ///
+    /// `announcements` are what the step did about each archive it decided
+    /// on — the "did this touch `/usr`, and with which bytes?" answer that
+    /// the row's reason alone cannot give (`ok` means "transacted",
+    /// `skipped-current` means "stood down"). Emitted as the typed
+    /// [`SupEvent::Archive`], so the console and the machine stream carry the
+    /// same line.
+    Done {
+        reason: String,
+        announcements: Vec<gsa_model::ArchiveAnnouncement>,
+    },
     /// Install failed or refused: the package records `failed 1 dur <reason>`
     /// and its consumer cone parks (normal failure path).
     ///
@@ -174,6 +184,17 @@ pub enum InstallStep {
     /// (§G.1 rc 3) and is reported through [`SupOutcome::refused`];
     /// `stop_dispatch` halts new dispatch exactly once (the fail-fast stop).
     Halt { reason: String, stop_dispatch: bool },
+}
+
+impl InstallStep {
+    /// A step that decided and announced nothing about an archive (a caller
+    /// with no candidate in hand).
+    pub fn done(reason: impl Into<String>) -> Self {
+        InstallStep::Done {
+            reason: reason.into(),
+            announcements: Vec::new(),
+        }
+    }
 }
 
 /// Is this install-step reason a refusal (contract §G.1 rc 3)? The CLI maps
@@ -202,6 +223,11 @@ pub enum SupEvent {
     Signal(i32),
     Teardown(&'static str),
     Diagnostic(String),
+    /// One archive an install step decided about (R2-maya-7): the typed
+    /// "did this touch `/usr`" answer. Never a run-record row — the record's
+    /// per-package row keeps the build reason (§H.3) and the plan row keeps
+    /// the planned action.
+    Archive(gsa_model::ArchiveAnnouncement),
     /// One prefetch advisory (owner decision 5): loud at failure time,
     /// advisory — the lane will retry at build time. Never a run-record row.
     PrefetchWarning(String),
@@ -966,7 +992,13 @@ impl<'a> SupCtx<'a> {
         let mut row_reason = reason;
         if let Some(hook) = self.setup.install.as_mut() {
             match hook(&pkg, &recipe_dir, false) {
-                InstallStep::Done(_) => {}
+                // A claimed build still installs, so its announcement is the
+                // same one a built package gets (rule 20: one seam).
+                InstallStep::Done { announcements, .. } => {
+                    for announcement in announcements {
+                        self.emit(&SupEvent::Archive(announcement));
+                    }
+                }
                 InstallStep::Halt {
                     reason: halt_reason,
                     stop_dispatch,
@@ -1567,7 +1599,13 @@ pub fn run(
                             }
                             if let Some(hook) = ctx.setup.install.as_mut() {
                                 match hook(&pkg, &recipe_dir, forced) {
-                                    InstallStep::Done(step_reason) => {
+                                    InstallStep::Done {
+                                        reason: step_reason,
+                                        announcements,
+                                    } => {
+                                        for announcement in announcements {
+                                            ctx.emit(&SupEvent::Archive(announcement));
+                                        }
                                         reason = step_reason;
                                     }
                                     InstallStep::Halt {
@@ -2390,7 +2428,7 @@ mod tests {
                     crate::signals::send_signal(std::process::id() as i32, crate::signals::SIGTERM);
                 std::thread::sleep(Duration::from_millis(50));
             }
-            InstallStep::Done("ok".to_string())
+            InstallStep::done("ok")
         }));
 
         let (outcome, _events, _err) = run_capturing(setup);

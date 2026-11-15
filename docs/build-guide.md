@@ -135,10 +135,23 @@ for a set whose members do not consume each other (for example after
 '*'`) — never a substitute for `-S` on a build-ordered set.
 
 Before its transaction, `-S`/`-U` compare each archive against the installed
-database: a package whose exact version is already installed with an install
-date not older than its archive skips its install (`skip already-current`).
-Add the `f` cluster letter (`gsa -Sf`, `gsa -Uf`) when the install must run
-anyway — for example after repackaging a same-version payload.
+database on VERSION AND DATES, never on content: a package whose exact
+version is already installed with an install date not older than its
+archive's mtime skips its install (`skip already-current`), and a strictly
+newer installed version skips it too (`skip not-newer`). A same-version
+REBUILD therefore installs — its fresh archive is newer than the installed
+entry, which is the freshness guard working as intended. Add the `f` cluster
+letter (`gsa -Sf`, `gsa -Uf`) when the install must run anyway — for example
+after repackaging a same-version payload.
+
+Every archive the seam decides on is ANNOUNCED, so a run always answers "did
+this touch `/usr`?" — one line per archive, naming the decision, the package,
+the version and the archive (`gsa -S` on a terminal shows `✓ install …` for a
+transaction and `· skip … (already-current <v>)` for a stand-down; a captured
+stdout shows the same fact as `INFO install decision=… pkg=… version=…
+archive=… reason=…`). The lines never replace the run record: `-S` records
+per-package BUILD rows, and the announcement is the extra fact those rows
+cannot carry.
 
 Install decisions are fail-closed and computed once: an empty archive list is
 a refusal under `-S` (`refuse empty-list` — a run that installs nothing

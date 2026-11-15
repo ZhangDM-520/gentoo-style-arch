@@ -314,9 +314,15 @@ split.
 11. **`-S` installs each package immediately after its build**, through the
     one `pacman -U --noconfirm --ask 4` executor; a refused install aborts the
     run. Never build-then-install-collectively; `gsa -Ua` is the
-    one-transaction hatch, never for interdependent sets. Checked installs skip
-    identical-or-not-newer archives (`-Sf`/`-Uf` force); unknown version
-    metadata refuses.
+    one-transaction hatch, never for interdependent sets. A checked install
+    stands down on version and dates, never on content: `already-current` needs
+    the identical version AND an install date not older than the archive's
+    mtime, `not-newer` needs a strictly newer installed version (`vercmp`), and
+    a same-version REBUILD writes a newer archive so it installs — rule 11
+    working, not a defect (`-Sf`/`-Uf` force); unknown version metadata
+    refuses. Every decided archive is ANNOUNCED (`SupEvent::Archive`), because
+    `-S` records build rows and a transaction otherwise reads like a stand-down
+    (contract §E.3's 2026-11-15 amendment).
 
 12. **Selection is mandatory.** A bare `gsa` is a usage error: pass `@group`
     and/or package refs. A selection expands to its transitive consumers;

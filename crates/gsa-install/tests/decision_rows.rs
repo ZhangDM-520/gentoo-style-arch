@@ -1093,7 +1093,8 @@ fn install_built_package_refuses_an_incomplete_output_set_pacman_free() {
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
     };
-    let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
+    let built = install_built_package(&recipe, &run).unwrap();
+    let (rows, outcome) = (built.rows, built.txn);
     assert!(
         outcome.is_none(),
         "a refused plan is pacman-free (rule 25(h))"
@@ -1134,7 +1135,8 @@ fn install_built_package_refuses_a_mixed_version_set() {
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
     };
-    let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
+    let built = install_built_package(&recipe, &run).unwrap();
+    let (rows, outcome) = (built.rows, built.txn);
     assert!(outcome.is_none());
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].decision, Decision::Refuse);
@@ -1724,7 +1726,8 @@ fn install_built_package_force_mode_refuses_unreadable_pkginfo() {
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
     };
-    let (rows, outcome) = install_built_package(&recipe, &run).unwrap();
+    let built = install_built_package(&recipe, &run).unwrap();
+    let (rows, outcome) = (built.rows, built.txn);
     assert!(outcome.is_none(), "must refuse before pacman");
     assert!(
         rows.iter().any(|r| r.decision == Decision::Refuse),

@@ -772,6 +772,54 @@ if want b; then
             txn_argv "$GSA_FAKE_PACMAN_LOG" | grep -F -- "/packages/$pkg/$pkg-" >/dev/null \
                 || fail "no transaction named $pkg's archive:" "$GSA_FAKE_PACMAN_LOG"
         done
+
+        # R2-maya-7: the run ANNOUNCES every archive it transacted. An -S
+        # run's record rows are BUILD rows (`build-install ok`), so before
+        # this a `pacman -U` that rewrote /usr and a plan that stood down
+        # reached the operator as the same silence. One `install` event per
+        # archive, naming the decision, the package, its version and the
+        # archive — derived from what this fixture staged, never a count.
+        while read -r pkg; do
+            grep < <(grep ' install ' <<<"$FIXTURE_OUTPUT") -Fq \
+                "decision=install pkg=$pkg version=0:1.0.0-1 archive=$ws/packages/$pkg/$pkg-1.0.0-1-any.pkg.tar.zst" \
+                || fail "b: $pkg's transaction must be announced with its archive (R2-maya-7):" "$fixture/b/output.txt"
+        done < <(rr2_outcome_rows <<<"$FIXTURE_OUTPUT" | awk '$2 == "succeeded" { print $1 }')
+        # …and the count matches the transactions this run actually ran, so an
+        # announcement can never be a claim without a transaction behind it.
+        [ "$(grep < <(grep ' install ' <<<"$FIXTURE_OUTPUT") -c 'decision=install')" = "$(txn_count "$GSA_FAKE_PACMAN_LOG")" ] \
+            || fail "b: one install announcement per transaction (R2-maya-7):" "$fixture/b/output.txt"
+
+        # …and a run that STANDS DOWN says so, in the same vocabulary. This is
+        # the reported case: a re-run of the same selection used to be silent
+        # whether it transacted or not. Each archived package now has an
+        # installed entry whose install date is newer than the archive it
+        # carries, so the checked skip fires and the second run must announce
+        # `skip … already-current` per archive and transact nothing (§E.3).
+        # `--skip` claims the build so no lane rewrites an archive (a fresh
+        # archive mtime would correctly defeat the skip, rule 11).
+        for pkg in lib app tool solo; do
+            db_install "$db" "$pkg" "0:1.0.0-1" >/dev/null
+            touch "$db/local/$pkg-0:1.0.0-1"
+        done
+        : >"$GSA_FAKE_PACMAN_LOG"
+        run_engine "$ws" -S --skip --state-dir "$fixture/b/state" \
+            --config "$ws/pacman.conf" lib app tool solo
+        {
+            echo "$FIXTURE_OUTPUT"
+        } >"$fixture/b/stand-down.txt"
+        [ "$FIXTURE_RC" = 0 ] || fail "b: a stand-down run is rc 0, got $FIXTURE_RC:" "$fixture/b/stand-down.txt"
+        [ "$(txn_count "$GSA_FAKE_PACMAN_LOG")" = 0 ] \
+            || fail "b: a stand-down run must not transact:" "$GSA_FAKE_PACMAN_LOG"
+        for pkg in lib app tool solo; do
+            grep < <(grep ' install ' <<<"$FIXTURE_OUTPUT") -Fq \
+                "decision=skip pkg=$pkg version=0:1.0.0-1 archive=$ws/packages/$pkg/$pkg-1.0.0-1-any.pkg.tar.zst reason=already-current_0:1.0.0-1" \
+                || fail "b: $pkg's stand-down must be announced as a skip naming its archive (R2-maya-7):" "$fixture/b/stand-down.txt"
+        done
+        # The two answers never collapse: an install and a stand-down must not
+        # read the same anywhere in the run's output.
+        if grep < <(grep ' install ' <<<"$FIXTURE_OUTPUT") -q 'decision=install'; then
+            fail "b: a stand-down run must announce no install (R2-maya-7):" "$fixture/b/stand-down.txt"
+        fi
     )
 fi
 

@@ -1285,15 +1285,54 @@ pub fn rollback_registration_names(
         .collect()
 }
 
+/// One `-S` install step's answer: the decision rows, what the transaction
+/// did (`None` when nothing transacted — all rows `skip`/`parked` — or when a
+/// `refuse` row aborted the run in the refusal class before any pacman call,
+/// rule 25(h)), and the step's [`announcement`]s.
+#[derive(Clone, Debug)]
+pub struct BuiltInstall {
+    pub rows: Vec<DecisionRow>,
+    pub txn: Option<TxnOutcome>,
+    /// One announcement per archive this step decided about, naming the
+    /// decision, the package, its version and the archive — the answer to
+    /// "did this run touch `/usr`, and with which bytes?".
+    pub announcements: Vec<gsa_model::ArchiveAnnouncement>,
+}
+
+/// The announcement one decided archive owes (R2-maya-7): a RENDERING of its
+/// decision row beside the archive's own `.PKGINFO` identity, never a second
+/// decision (§E.1). An `-S` run's run-record rows are build rows
+/// (`build-install`), so without this a transaction and a stand-down reach the
+/// operator as the same silence while `pacman` rewrites `/usr`.
+pub fn announcement(
+    row: &DecisionRow,
+    info: Option<&Pkginfo>,
+    archive: Option<&Path>,
+) -> gsa_model::ArchiveAnnouncement {
+    gsa_model::ArchiveAnnouncement {
+        decision: row.decision,
+        pkgname: info
+            .map(|i| i.pkgname.clone())
+            .unwrap_or_else(|| row.subject.clone()),
+        version: info
+            .map(|i| i.version.clone())
+            .unwrap_or_else(|| "-".to_string()),
+        archive: archive
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        // `ok` is the vocabulary's "nothing further to say" — every other
+        // reason is the evidence that makes the decision auditable.
+        detail: if row.reason == "ok" {
+            String::new()
+        } else {
+            row.reason.clone()
+        },
+    }
+}
+
 /// One `-S` install step: decide, then (on a plan without `refuse`) register
-/// the accepted names and run the one `pacman -U` transaction. Returns the
-/// decision rows and the transaction outcome — `None` when nothing
-/// transacted (all rows `skip`/`parked`) or when a `refuse` row aborted the
-/// run in the refusal class before any pacman call (rule 25(h)).
-pub fn install_built_package(
-    recipe_dir: &Path,
-    run: &InstallRun,
-) -> Result<(Vec<DecisionRow>, Option<TxnOutcome>), String> {
+/// the accepted names and run the one `pacman -U` transaction.
+pub fn install_built_package(recipe_dir: &Path, run: &InstallRun) -> Result<BuiltInstall, String> {
     // THIS PACKAGE WAS JUST BUILT: the archive the lane wrote is the newest
     // file, and the version-ranked chooser is what let a stale
     // higher-version archive lying in the recipe directory hijack the install
@@ -1309,8 +1348,8 @@ pub fn install_built_package(
     // was built" as "part of the set is missing" (2026-11-11 blind review:
     // a recipe with no archive reported `partial-set … p1`).
     if !discovered.candidates.is_empty() && !discovered.missing.is_empty() {
-        return Ok((
-            vec![row(
+        return Ok(BuiltInstall {
+            rows: vec![row(
                 "-",
                 Decision::Refuse,
                 format!(
@@ -1319,12 +1358,13 @@ pub fn install_built_package(
                     discovered.missing.join(" ")
                 ),
             )],
-            None,
-        ));
+            txn: None,
+            announcements: Vec::new(),
+        });
     }
     if discovered.mixed_versions {
-        return Ok((
-            vec![row(
+        return Ok(BuiltInstall {
+            rows: vec![row(
                 "-",
                 Decision::Refuse,
                 format!(
@@ -1332,8 +1372,9 @@ pub fn install_built_package(
                     discovered.recipe_dir.display()
                 ),
             )],
-            None,
-        ));
+            txn: None,
+            announcements: Vec::new(),
+        });
     }
     if !discovered.unreadable.is_empty() {
         let rows = discovered
@@ -1347,7 +1388,11 @@ pub fn install_built_package(
                 )
             })
             .collect();
-        return Ok((rows, None));
+        return Ok(BuiltInstall {
+            rows,
+            txn: None,
+            announcements: Vec::new(),
+        });
     }
 
     let ctx = DecisionContext {
@@ -1369,8 +1414,36 @@ pub fn install_built_package(
     let plan = plan(&discovered.candidates, &ctx, &db)?;
     let rows = plan.rows();
     if plan.refused() {
-        return Ok((rows, None));
+        return Ok(BuiltInstall {
+            rows,
+            txn: None,
+            announcements: Vec::new(),
+        });
     }
+
+    // The step's announcements (R2-maya-7): one line per decided archive, in
+    // plan order — a RENDERING of the rows above, computed once here so the
+    // supervisor only emits them (§E.1: never a second decision). A refusing
+    // plan never transacts, so its refusal already reaches the operator as
+    // the run's own failure/refusal rows; only a plan that stood or went to
+    // `pacman` owes the "did this touch /usr?" answer this adds.
+    let announcements: Vec<gsa_model::ArchiveAnnouncement> = plan
+        .candidates
+        .iter()
+        .flat_map(|group| {
+            group
+                .rows
+                .iter()
+                .filter(|r| matches!(r.decision, Decision::Install | Decision::Skip))
+                .map(move |r| {
+                    announcement(
+                        r,
+                        group.pkginfo.as_ref(),
+                        Some(group.candidate.archive.as_path()),
+                    )
+                })
+        })
+        .collect();
 
     // Rule 9: every ACCEPTED archive (install AND skip rows) has its
     // pkgbase+pkgname registered before anything can install it. Parked
@@ -1443,7 +1516,11 @@ pub fn install_built_package(
         .map(|group| group.candidate.archive.clone())
         .collect();
     if install_archives.is_empty() {
-        return Ok((rows, None));
+        return Ok(BuiltInstall {
+            rows,
+            txn: None,
+            announcements,
+        });
     }
     // Rule 25(d): the provider's install stages the consumers'
     // forced-rebuild markers via the transaction itself (§E.3 gap-G1).
@@ -1533,7 +1610,11 @@ pub fn install_built_package(
             }
         }
     }
-    Ok((rows, Some(outcome)))
+    Ok(BuiltInstall {
+        rows,
+        txn: Some(outcome),
+        announcements,
+    })
 }
 
 /// The pkgname fallback for a consumer identity without a recipe dir.
@@ -1723,5 +1804,54 @@ mod tests {
             rollback_registration_names(&names(&["bar"]), &[], &names(&["bar"])),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn an_announcement_names_the_decision_the_package_and_the_archive() {
+        // R2-maya-7: the announcement is the RENDERING of a decision row
+        // beside the archive's own identity, so "did this touch /usr, and
+        // with which bytes?" never depends on the reader knowing that `ok`
+        // means "transacted" and `skipped-current` means "stood down".
+        let info = Pkginfo {
+            pkgbase: "maya-probe".to_string(),
+            pkgname: "maya-probe".to_string(),
+            version: "0:0.1-1".to_string(),
+            provides: Vec::new(),
+            depends: Vec::new(),
+            arch: "any".to_string(),
+        };
+        let archive = Path::new("/pkgs/maya-probe-0.1-1-any.pkg.tar.zst");
+        let installed = announcement(
+            &row("maya-probe", Decision::Install, "ok"),
+            Some(&info),
+            Some(archive),
+        );
+        assert_eq!(
+            installed.describe(),
+            "install maya-probe 0:0.1-1 /pkgs/maya-probe-0.1-1-any.pkg.tar.zst"
+        );
+        // `ok` is "nothing further to say": the detail stays empty rather
+        // than echoing a key that carries no evidence.
+        assert!(installed.detail.is_empty());
+
+        // A stand-down says so, and keeps the evidence that made it one.
+        let skipped = announcement(
+            &row("maya-probe", Decision::Skip, "already-current 0:0.1-1"),
+            Some(&info),
+            Some(archive),
+        );
+        assert_eq!(
+            skipped.describe(),
+            "skip maya-probe 0:0.1-1 /pkgs/maya-probe-0.1-1-any.pkg.tar.zst (already-current 0:0.1-1)"
+        );
+        assert_ne!(installed.describe(), skipped.describe());
+
+        // An unreadable `.PKGINFO` names the SUBJECT rather than inventing a
+        // version, and a caller with no archive names `-` (the §H.3 empty
+        // marker) instead of a blank field.
+        let unknown = announcement(&row("maya-probe", Decision::Install, "ok"), None, None);
+        assert_eq!(unknown.pkgname, "maya-probe");
+        assert_eq!(unknown.version, "-");
+        assert_eq!(unknown.archive, "-");
     }
 }

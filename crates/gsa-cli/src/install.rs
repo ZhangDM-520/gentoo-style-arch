@@ -106,8 +106,16 @@ impl RegisteredNames {
 ///   cone-stop failure class (§G.1 rc 4; rc 1 under `--fail-fast`);
 /// * `SudoLost` → `Halt install-failed sudo credential expired …` with
 ///   dispatch stopped exactly once (§K.3);
-/// * otherwise the decision stood: `Done(ok | <skip reason> | <park reason>)`.
-pub fn install_step(rows: &[DecisionRow], txn: Option<&TxnOutcome>) -> InstallStep {
+/// * otherwise the decision stood: `Done { ok | <skip reason> | <park
+///   reason>, notes }` — the notes are the step's per-archive announcements
+///   (`gsa_install::announcement`), so the run's record and console answer
+///   "did this touch /usr, and with which archive?" instead of leaving a
+///   transaction indistinguishable from a stand-down.
+pub fn install_step(
+    rows: &[DecisionRow],
+    txn: Option<&TxnOutcome>,
+    announcements: Vec<gsa_model::ArchiveAnnouncement>,
+) -> InstallStep {
     if let Some(first) = rows.iter().find(|r| r.decision == Decision::Refuse) {
         return InstallStep::Halt {
             reason: format!("install-refused {}", first.reason),
@@ -128,34 +136,36 @@ pub fn install_step(rows: &[DecisionRow], txn: Option<&TxnOutcome>) -> InstallSt
             stop_dispatch: true,
         },
         Some(TxnOutcome::Ok) | None => {
-            if rows.iter().any(|r| r.decision == Decision::Install) {
-                InstallStep::Done("ok".to_string())
+            let reason = if rows.iter().any(|r| r.decision == Decision::Install) {
+                "ok".to_string()
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Skip) {
                 // §H.3: a checked skip keeps its evidence (`already-current
                 // <v>` / `not-newer <v>`) under one reason key, so a record
                 // answers "did pacman run" without knowing the vocabulary.
-                InstallStep::Done(format!(
+                format!(
                     "skipped-current {}",
                     nonempty_reason(&row.reason, "already-current")
-                ))
+                )
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Parked) {
-                InstallStep::Done(nonempty_reason(&row.reason, "parked"))
+                nonempty_reason(&row.reason, "parked")
             } else if let Some(row) = rows.iter().find(|r| r.decision == Decision::Noop) {
-                InstallStep::Done(nonempty_reason(&row.reason, "empty-list"))
+                nonempty_reason(&row.reason, "empty-list")
             } else {
-                InstallStep::Done("ok".to_string())
+                "ok".to_string()
+            };
+            InstallStep::Done {
+                reason,
+                announcements,
             }
         }
     }
 }
 
-/// The same mapping for `install_built_package`'s `Result` (contract §E.3:
+/// The same mapping for `install_built_package`'s result (contract §E.3:
 /// `Err` is the "plan failed without a row" class → `refuse plan-failed`).
-pub fn install_step_from_result(
-    result: Result<(Vec<DecisionRow>, Option<TxnOutcome>), String>,
-) -> InstallStep {
+pub fn install_step_from_result(result: Result<gsa_install::BuiltInstall, String>) -> InstallStep {
     match result {
-        Ok((rows, txn)) => install_step(&rows, txn.as_ref()),
+        Ok(built) => install_step(&built.rows, built.txn.as_ref(), built.announcements),
         Err(message) => InstallStep::Halt {
             reason: format!("install-refused plan-failed {message}"),
             stop_dispatch: true,
@@ -2198,7 +2208,7 @@ mod tests {
             row("a", Decision::Install, "ok"),
             row("b", Decision::Refuse, "pgo-hit .gcda"),
         ];
-        match install_step(&rows, Some(&TxnOutcome::Ok)) {
+        match install_step(&rows, Some(&TxnOutcome::Ok), Vec::new()) {
             InstallStep::Halt {
                 reason,
                 stop_dispatch,
@@ -2216,8 +2226,8 @@ mod tests {
         // evidence stays after it (`already-current <v>`, `not-newer <v>`),
         // and the plan row keeps the §E.2 spelling unchanged.
         let rows = vec![row("p", Decision::Skip, "already-current 1-1")];
-        match install_step(&rows, Some(&TxnOutcome::Ok)) {
-            InstallStep::Done(reason) => {
+        match install_step(&rows, Some(&TxnOutcome::Ok), Vec::new()) {
+            InstallStep::Done { reason, .. } => {
                 assert_eq!(reason, "skipped-current already-current 1-1")
             }
             other => panic!("expected done, got {other:?}"),
@@ -2243,6 +2253,7 @@ mod tests {
                 rc: 1,
                 message: "boom".into(),
             }),
+            Vec::new(),
         ) {
             InstallStep::Halt {
                 reason,
@@ -2253,11 +2264,11 @@ mod tests {
             }
             other => panic!("expected halt, got {other:?}"),
         }
-        match install_step(&rows, Some(&TxnOutcome::MutexTimeout)) {
+        match install_step(&rows, Some(&TxnOutcome::MutexTimeout), Vec::new()) {
             InstallStep::Halt { reason, .. } => assert_eq!(reason, "install-failed mutex-timeout"),
             other => panic!("expected halt, got {other:?}"),
         }
-        match install_step(&rows, Some(&TxnOutcome::SudoLost)) {
+        match install_step(&rows, Some(&TxnOutcome::SudoLost), Vec::new()) {
             InstallStep::Halt {
                 reason,
                 stop_dispatch,
@@ -2272,19 +2283,49 @@ mod tests {
     #[test]
     fn settled_decisions_carry_their_reason() {
         assert_eq!(
-            install_step(&[row("a", Decision::Install, "ok")], Some(&TxnOutcome::Ok)),
-            InstallStep::Done("ok".to_string())
+            install_step(
+                &[row("a", Decision::Install, "ok")],
+                Some(&TxnOutcome::Ok),
+                vec![gsa_model::ArchiveAnnouncement {
+                    decision: Decision::Install,
+                    pkgname: "a".to_string(),
+                    version: "0:1-1".to_string(),
+                    archive: "/pkgs/a-1-1-any.pkg.tar.zst".to_string(),
+                    detail: String::new(),
+                }]
+            ),
+            InstallStep::Done {
+                reason: "ok".to_string(),
+                announcements: vec![gsa_model::ArchiveAnnouncement {
+                    decision: Decision::Install,
+                    pkgname: "a".to_string(),
+                    version: "0:1-1".to_string(),
+                    archive: "/pkgs/a-1-1-any.pkg.tar.zst".to_string(),
+                    detail: String::new(),
+                }],
+            }
         );
         assert_eq!(
             install_step(
                 &[row("a", Decision::Skip, "already-current")],
-                Some(&TxnOutcome::Ok)
+                Some(&TxnOutcome::Ok),
+                Vec::new(),
             ),
-            InstallStep::Done("skipped-current already-current".to_string())
+            InstallStep::Done {
+                reason: "skipped-current already-current".to_string(),
+                announcements: Vec::new(),
+            }
         );
         assert_eq!(
-            install_step(&[row("a", Decision::Skip, "already-current")], None),
-            InstallStep::Done("skipped-current already-current".to_string())
+            install_step(
+                &[row("a", Decision::Skip, "already-current")],
+                None,
+                Vec::new()
+            ),
+            InstallStep::Done {
+                reason: "skipped-current already-current".to_string(),
+                announcements: Vec::new(),
+            }
         );
         match install_step_from_result(Err("disk on fire".to_string())) {
             InstallStep::Halt {

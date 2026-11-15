@@ -105,7 +105,7 @@ and a root shell without a build user is refused with guidance.",
         head: "Command surface — build + install (-S …):",
         blocks: &[
             ("gsa -S <targets…> [ranges…]", "build the selection and install each package's archives before its consumers compile (install-before-dependents; checked install)"),
-            ("gsa -Sf …", "force install: always run pacman -U, no checked skip (a checked install skips an identical or not-newer archive)"),
+            ("gsa -Sf …", "force install: always run pacman -U, no checked skip (a checked install stands down when the installed version is identical-or-newer and its install date is not older than the archive — version and dates, never a content comparison)"),
             ("gsa -Sc …", "prune strength 1 first (src/pkg/build trees and archives), then build + install"),
             ("gsa -S --dry-run <targets…> [ranges…]", "build-order plan without building"),
             ("gsa -Sl [targets…] [ranges…]", "ordered selection listing with range indices (-Bl same; nothing is built or installed)"),

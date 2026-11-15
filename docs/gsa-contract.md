@@ -1078,6 +1078,40 @@ run?" from one reason prefix — `ok` means it did, `skipped-current` means the
 plan stood down — without the reader knowing the skip vocabulary. Pinned by
 `tests/gsa-install-v2.sh` §d and `gsa-cli::install`'s unit tests.
 
+*Amendment (2026-11-15, the install announcement).* The checked comparison is
+**version and dates, never content**: an installed version identical to the
+archive's stands down only when the local-DB entry's install date is not older
+than the archive's mtime, and a strictly newer installed version stands down
+under `vercmp`. A same-version rebuild writes a NEW archive whose mtime is
+later than the installed entry, so it installs — that is rule 11 working, and
+`gsa --help` states it in those words rather than implying a byte comparison
+(a blind reviewer read "identical" as a content hash and reported the install
+as a defect).
+
+Because `-S` records per-package BUILD rows (`build-install ok`), the decision
+rows it computes never reach the record, and a transaction and a stand-down
+used to reach the operator as the same silence. Both now owe ONE
+**announcement** per decided archive — a rendering of that subject's decision
+row beside the archive's own `.PKGINFO` identity, computed once at the seam
+(`gsa_install::announcement`) and emitted as the typed
+`SupEvent::Archive`:
+
+- console: `<glyph> <decision> <pkgname> <version> <archive>` plus
+  `( <detail> )` when the row's reason is more than a bare `ok` (`✓` install,
+  `·` skip — §L.9's word-and-glyph rule);
+- machine stream: `INFO install decision=<d> pkg=<name> version=<v>
+  archive=<path> reason=<detail|->`.
+
+Neither is a run-record row and neither bumps `format`: the record's
+per-package row keeps the build reason (§H.3) and the plan row keeps the
+action PLANNED before dispatch (§H.2), while the announcement is the "did this
+touch `/usr`, and with which bytes?" answer both of those lack. One
+announcement per `install`/`skip` row — a `refuse` plan aborts before any
+`pacman` call and announces nothing (rule 25(h)). Pinned by
+`tests/gsa-install-v2.sh` §b (one announcement per transaction, and a
+stand-down run that announces `skip … already-current` for every archive and
+transacts nothing) and `gsa-cli::render`'s vocabulary tests.
+
 *Amendment (2026-10-14, gap G1 — the repair surface).* In-run repair
 coverage (rule 25(d)) never adds a decision kind: when the ABI gate's
 `abi-consumer`/`abi-stock-pinner` refusal is suppressed because the consumer

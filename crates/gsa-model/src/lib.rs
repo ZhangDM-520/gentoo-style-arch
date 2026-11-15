@@ -406,6 +406,52 @@ impl DecisionRow {
     }
 }
 
+/// One archive an install step decided about — the announcement a run owes
+/// so "did this touch /usr, and with which bytes?" has an answer that does
+/// not depend on the reader knowing the §H.3 reason vocabulary (`ok` means
+/// the transaction ran, `skipped-current` means the plan stood down).
+///
+/// A RENDERING of a [`DecisionRow`] beside the archive's own identity,
+/// computed once by the decision seam's caller — never a second decision
+/// (`AGENTS.md` rule 20). It rides the event stream in both vocabularies, so
+/// the console and a captured stdout say the same thing; it is never a
+/// run-record row, because §H.3 keeps the per-package build reason `ok` and
+/// the plan row is the action PLANNED before dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveAnnouncement {
+    /// The §E.3 decision (`install`, `skip`, …).
+    pub decision: Decision,
+    /// `.PKGINFO`'s name and canonical version, `-` when unreadable. The
+    /// name is the archive's OWN output name, which for a split recipe is
+    /// what `pacman` installed even when it differs from the recipe id.
+    pub pkgname: String,
+    pub version: String,
+    /// The archive this decision is about.
+    pub archive: String,
+    /// The row's reason when it is more than a bare `ok` (`already-current
+    /// <v>`, `not-newer <v>`, `waits-on-deferred`, …).
+    pub detail: String,
+}
+
+impl ArchiveAnnouncement {
+    /// The one workspace-free text form, shared by both vocabularies:
+    /// `<decision> <pkgname> <version> <archive>` plus the detail in
+    /// parentheses when the row carries one.
+    pub fn describe(&self) -> String {
+        let mut out = format!(
+            "{} {} {} {}",
+            self.decision.as_str(),
+            self.pkgname,
+            self.version,
+            self.archive
+        );
+        if !self.detail.is_empty() {
+            out.push_str(&format!(" ({})", self.detail));
+        }
+        out
+    }
+}
+
 /// Run-record per-package status (contract §H.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RowStatus {

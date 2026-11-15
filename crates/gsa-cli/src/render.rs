@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use gsa_model::{Group, RecipeId, RowStatus, RunRecord};
+use gsa_model::{Decision, Group, RecipeId, RowStatus, RunRecord};
 use gsa_recipe::{MetaSource, RecipeMeta, SourceKind};
 use gsa_sched::supervisor::SupEvent;
 
@@ -717,6 +717,18 @@ pub(crate) fn fmt_dur(dur: i64) -> String {
     }
 }
 
+/// The glyph one archive announcement carries (§L.9: a state keeps its word
+/// AND its glyph, so a colour-blind or `NO_COLOR` reader loses nothing).
+fn archive_glyph(decision: Decision) -> &'static str {
+    match decision {
+        Decision::Install => "✓",
+        Decision::Skip => "·",
+        Decision::Refuse => "✗",
+        Decision::Noop => "·",
+        Decision::Parked => "⚠",
+    }
+}
+
 fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String {
     // The words and glyphs are the contract; the role is a SECOND cue, so a
     // piped, colour-blind or `NO_COLOR` reader loses nothing.
@@ -761,6 +773,21 @@ fn render_event_human(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> String
         ),
         SupEvent::Teardown(reason) => (format!("⚠ teardown: {reason}"), Role::Warn),
         SupEvent::Diagnostic(message) => (format!("· {message}"), Role::Dim),
+        // An install announcement names a real state change (`install`) or a
+        // deliberate stand-down (`skip`) — never a dim aside, because it is
+        // the answer to "did this run touch /usr?".
+        SupEvent::Archive(announcement) => (
+            format!(
+                "{} {}",
+                archive_glyph(announcement.decision),
+                announcement.describe()
+            ),
+            match announcement.decision {
+                Decision::Install => Role::Ok,
+                Decision::Skip => Role::Dim,
+                _ => Role::Warn,
+            },
+        ),
         SupEvent::PrefetchWarning(message) => (format!("⚠ {message}"), Role::Warn),
         // A view heartbeat, never a message (the TTY dashboard redraws on
         // it) — it renders empty in BOTH vocabularies.
@@ -844,6 +871,28 @@ fn render_event_machine(event: &SupEvent, pkg: &dyn Fn(usize) -> String) -> Stri
             ],
         ),
         SupEvent::Diagnostic(message) => kv_line(Info, "note", &[("msg", squash(message))]),
+        SupEvent::Archive(announcement) => kv_line(
+            match announcement.decision {
+                Decision::Install => Info,
+                Decision::Skip => Info,
+                _ => Warning,
+            },
+            "install",
+            &[
+                ("decision", announcement.decision.as_str().to_string()),
+                ("pkg", squash(&announcement.pkgname)),
+                ("version", squash(&announcement.version)),
+                ("archive", squash(&announcement.archive)),
+                (
+                    "reason",
+                    if announcement.detail.is_empty() {
+                        "-".to_string()
+                    } else {
+                        squash(&announcement.detail)
+                    },
+                ),
+            ],
+        ),
         SupEvent::PrefetchWarning(message) => {
             kv_line(Warning, "prefetch-warning", &[("msg", squash(message))])
         }
@@ -1391,6 +1440,51 @@ mod tests {
 
     use super::*;
 
+    /// The R2-maya-7 archive announcement the vocabulary tests pin: a
+    /// transaction that landed.
+    fn installed_archive() -> gsa_model::ArchiveAnnouncement {
+        gsa_model::ArchiveAnnouncement {
+            decision: Decision::Install,
+            pkgname: "maya-probe".to_string(),
+            version: "0:0.1-1".to_string(),
+            archive: "/home/arch/build/pkgs/maya-probe-0.1-1-any.pkg.tar.zst".to_string(),
+            detail: String::new(),
+        }
+    }
+
+    /// The same archive with the checked skip standing down — the case that
+    /// used to be indistinguishable from a transaction in the console.
+    fn stood_down_archive() -> gsa_model::ArchiveAnnouncement {
+        gsa_model::ArchiveAnnouncement {
+            decision: Decision::Skip,
+            detail: "already-current 0:0.1-1".to_string(),
+            ..installed_archive()
+        }
+    }
+
+    #[test]
+    fn the_two_install_announcements_never_read_the_same() {
+        // A transaction and a stand-down must differ in BOTH vocabularies:
+        // one glyph/word and one `decision=` key (§L.9 — no state signalled
+        // by colour alone).
+        let pkg = |i: usize| format!("p{i}");
+        let installed = render_event_machine(&SupEvent::Archive(installed_archive()), &pkg);
+        let skipped = render_event_machine(&SupEvent::Archive(stood_down_archive()), &pkg);
+        assert!(installed.contains("decision=install"), "{installed}");
+        assert!(skipped.contains("decision=skip"), "{skipped}");
+        assert_ne!(installed, skipped);
+        // Both name the archive, which is the whole point (the row carried
+        // only `ok` before).
+        for line in [&installed, &skipped] {
+            assert!(line.contains("maya-probe-0.1-1-any.pkg.tar.zst"), "{line}");
+        }
+        // The human vocabulary keeps a word and a glyph per state.
+        let human_installed = render_event_human(&SupEvent::Archive(installed_archive()), &pkg);
+        let human_skipped = render_event_human(&SupEvent::Archive(stood_down_archive()), &pkg);
+        assert!(human_installed.starts_with('✓'), "{human_installed}");
+        assert!(human_skipped.starts_with('·'), "{human_skipped}");
+    }
+
     /// The ≤20-column hang: `width == indent` used to re-queue the same word
     /// forever. The wrapper must terminate and never exceed the width.
     #[test]
@@ -1510,6 +1604,14 @@ mod tests {
             (
                 SupEvent::Diagnostic("case-variant match: 'OKP' -> 'okp'".to_string()),
                 "INFO note msg=case-variant_match:_'OKP'_->_'okp'\n",
+            ),
+            (
+                SupEvent::Archive(installed_archive()),
+                "INFO install decision=install pkg=maya-probe version=0:0.1-1 archive=/home/arch/build/pkgs/maya-probe-0.1-1-any.pkg.tar.zst reason=-\n",
+            ),
+            (
+                SupEvent::Archive(stood_down_archive()),
+                "INFO install decision=skip pkg=maya-probe version=0:0.1-1 archive=/home/arch/build/pkgs/maya-probe-0.1-1-any.pkg.tar.zst reason=already-current_0:0.1-1\n",
             ),
             (
                 SupEvent::PrefetchWarning("prefetch p2: fetch-failed".to_string()),
@@ -1676,6 +1778,14 @@ mod tests {
             (
                 SupEvent::Diagnostic("case-variant match: 'OKP' -> 'okp'".to_string()),
                 "· case-variant match: 'OKP' -> 'okp'\n",
+            ),
+            (
+                SupEvent::Archive(installed_archive()),
+                "✓ install maya-probe 0:0.1-1 /home/arch/build/pkgs/maya-probe-0.1-1-any.pkg.tar.zst\n",
+            ),
+            (
+                SupEvent::Archive(stood_down_archive()),
+                "· skip maya-probe 0:0.1-1 /home/arch/build/pkgs/maya-probe-0.1-1-any.pkg.tar.zst (already-current 0:0.1-1)\n",
             ),
             (
                 SupEvent::PrefetchWarning("prefetch p2: fetch-failed".to_string()),
