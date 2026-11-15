@@ -1880,5 +1880,77 @@ if want o; then
     )
 fi
 
+# ─── z. a SRCDEST mirror that exists but is unusable: row + --fix ─────────
+# A bare mirror whose refs/ was removed answers "not a git repository" to
+# every question, so its source is unbuildable AND unpinnable (2026-11-15:
+# 208 of 505 host mirrors, invisible to all 1403 pre-existing doctor rows).
+(
+    set -euo pipefail
+    ws="$fixture/z/ws"
+    make_workspace "$ws" 1 1 low
+    stub_pacman "$ws"
+    write_stub_makepkg "$ws"
+    export PATH="$ws/bin:$PATH"
+    state="$fixture/z/state"
+    srcdest="$fixture/z/srcdest"
+    mkdir -p "$srcdest"
+    # The ROSTER decides what is a mirror, never a directory listing: the
+    # source cache also holds extracted tarballs and hg checkouts, and a
+    # listing-based scan reported those as unusable mirrors (it also leaked
+    # the HOST cache into this clean-root fixture). Each name below is a
+    # declared VCS source name, so the doctor looks at exactly these.
+    add_package "$ws" healthy-mirror \
+        'source=("healthy-mirror::git+https://example.invalid/healthy-mirror.git")'
+    add_package "$ws" swept-mirror \
+        'source=("swept-mirror::git+https://example.invalid/swept-mirror.git")'
+    # One healthy mirror (a real bare repo) and one swept one.
+    git -C "$srcdest" init -q --bare healthy-mirror
+    git -C "$srcdest" init -q --bare swept-mirror
+    rm -rf "$srcdest/swept-mirror/refs"
+    # Neither a loose download nor a non-repository tree is a mirror.
+    printf 'not-a-repo\n' >"$srcdest/some-download.tar.gz"
+    mkdir -p "$srcdest/extracted-tree"
+    printf 'x\n' >"$srcdest/extracted-tree/README"
+    printf 'srcdest = %s\n' "$srcdest" >"$ws/../.rr2-conf/gsa.conf"
+
+    run_engine "$ws" -Md --state-dir "$state"
+    [ "$FIXTURE_RC" = 0 ] || fail "z: -Md is report-only rc 0 (§E.4), got $FIXTURE_RC: $FIXTURE_OUTPUT"
+    grep -F "mirror:$srcdest/swept-mirror unusable" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "z: the unusable mirror is not named:" <<<"$FIXTURE_OUTPUT"
+    grep -F "not a git repository" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "z: git's own words are missing from the row:" <<<"$FIXTURE_OUTPUT"
+    if grep -F "mirror:$srcdest/healthy-mirror" <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "z: a HEALTHY mirror was reported:" <<<"$FIXTURE_OUTPUT"
+    fi
+    if grep -F "some-download.tar.gz" <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "z: a loose download was probed as a mirror:" <<<"$FIXTURE_OUTPUT"
+    fi
+    if grep -F "extracted-tree" <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "z: a non-repository tree was reported as an unusable mirror:" <<<"$FIXTURE_OUTPUT"
+    fi
+
+    # The dry run plans the repair and writes nothing.
+    run_engine "$ws" -Md --fix --dry-run --state-dir "$state"
+    grep -F "repair refs-restore" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "z: the repair plan does not name refs-restore:" <<<"$FIXTURE_OUTPUT"
+    [ ! -d "$srcdest/swept-mirror/refs" ] \
+        || fail "z: --dry-run created refs/ — a plan must not write"
+
+    run_engine "$ws" -Md --fix --state-dir "$state"
+    grep -F "repaired refs-restored" <<<"$FIXTURE_OUTPUT" >/dev/null \
+        || fail "z: the repair was not reported:" <<<"$FIXTURE_OUTPUT"
+    [ -d "$srcdest/swept-mirror/refs" ] || fail "z: refs/ was not restored"
+    # GIT_CONFIG_COUNT=0: agent shells inject safe.bareRepository=explicit,
+    # which refuses every bare repo and would redden a working repair.
+    GIT_CONFIG_COUNT=0 git -C "$srcdest/swept-mirror" rev-parse --absolute-git-dir >/dev/null 2>&1 \
+        || fail "z: the mirror is still unreadable after --fix"
+
+    # And the finding is gone, on a read that is not the repair itself.
+    run_engine "$ws" -Md --state-dir "$state"
+    if grep -F "mirror:$srcdest/swept-mirror" <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "z: the repaired mirror still reports a finding:" <<<"$FIXTURE_OUTPUT"
+    fi
+)
+
 # ─── the fixture never touched the real state root (§J.3) ──────────────────
 assert_varlib_unchanged

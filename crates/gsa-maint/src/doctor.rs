@@ -57,6 +57,73 @@ pub struct Findings {
     pub run_lock: gsa_sched::lock::RunLockState,
     /// The run lock's path, for the row's remedy.
     pub run_lock_path: PathBuf,
+    /// `SRCDEST` mirrors that exist but are not usable git repositories.
+    ///
+    /// A bare mirror whose `refs/` was removed answers "not a git
+    /// repository" to every question, so the source is unbuildable AND
+    /// unpinnable and no other doctor family mentions it (2026-11-15: 208 of
+    /// 505 host mirrors, and `-Md`'s 1403 findings named none of them).
+    pub mirrors: Vec<(PathBuf, String)>,
+}
+
+/// Every roster `SRCDEST` mirror that exists but is not a usable repository.
+///
+/// The roster decides WHAT to look at, never a directory listing: the source
+/// cache also holds extracted tarball trees and Mercurial checkouts
+/// (`texmf-dist`, `tlpkg`, `nspr`'s `.hg` on the 2026-11-15 host), and a
+/// naive scan reported those as "unusable mirrors" — a false positive that
+/// also leaked the HOST cache into every fixture (found by the fixture's
+/// clean-root arm).
+///
+/// A name is a candidate only when it is BOTH a roster VCS source name and
+/// carries the bare-repository shape (`HEAD` + `objects/`). The shape test is
+/// what keeps a swept mirror in scope: it keeps both. The git probe then
+/// decides usable-vs-unusable, and is never run for a non-mirror.
+fn unusable_mirrors(ctx: &MaintCtx<'_>) -> Vec<(PathBuf, String)> {
+    let Some(srcdest) = gsa_model::config::resolve_srcdest() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = Vec::new();
+    for (id, _dir) in ctx.recipe_dirs() {
+        let Some(meta) = ctx.db.get(&id) else {
+            continue;
+        };
+        // ONE mirror-name derivation, shared with the snapshot pass and the
+        // build gate: a second copy of makepkg's `get_filename` rule drifts.
+        // `meta.sources()` is `.SRCINFO`'s EVALUATED array, so a recipe whose
+        // `source` is built from variables is still covered — the doctor
+        // spawns no shell per recipe.
+        for source in meta.sources() {
+            if let Some(name) = gsa_recipe::sync::git_mirror_name_of(&source) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        let path = srcdest.join(&name);
+        if !looks_like_bare_mirror(&path) {
+            continue;
+        }
+        if let gsa_model::mirror::MirrorState::Unusable { detail } =
+            gsa_model::mirror::mirror_state(&path)
+        {
+            out.push((path, detail));
+        }
+    }
+    out
+}
+
+/// The bare-repository shape, independent of whether git can read it.
+///
+/// `HEAD` plus `objects/` is what a swept mirror keeps and an extracted
+/// tarball never has, so the shape is the admission test and `HEAD` alone is
+/// not (a directory holding a file literally named `HEAD` is not a mirror).
+fn looks_like_bare_mirror(path: &Path) -> bool {
+    path.is_dir() && path.join("HEAD").is_file() && path.join("objects").is_dir()
 }
 
 /// The output-name truth filter of the orphan scan: the makepkg archive
@@ -74,6 +141,7 @@ pub fn findings(ctx: &MaintCtx<'_>) -> Findings {
     let mut out = Findings::default();
     out.run_lock = gsa_sched::lock::run_lock_state(ctx.state.path());
     out.run_lock_path = gsa_sched::lock::run_lock_path(ctx.state.path());
+    out.mirrors = unusable_mirrors(ctx);
     out.wrong_owner = hygiene::ownership_rows(ctx.state.path());
     out.stale = hygiene::stale_artifacts(ctx.state.path(), ctx.root);
     let loaded_db = match gsa_install::LocalDb::load(&gsa_install::localdb::pacman_db_root()) {
@@ -315,6 +383,13 @@ pub fn report(ctx: &MaintCtx<'_>) -> Vec<Row> {
             ));
         }
     }
+    for (path, detail) in &found.mirrors {
+        rows.push(Row::new(
+            format!("mirror:{}", path.display()),
+            "unusable",
+            detail,
+        ));
+    }
     // A "finding" is a problem. The `local-db health ok …` row is the
     // doctor's health statement, not a defect, so a healthy root reported
     // `1 finding(s)` beside its own `ok` row (2026-11-11 blind review).
@@ -453,6 +528,29 @@ pub fn fix(ctx: &MaintCtx<'_>, apply: bool) -> Result<FixOutcome, String> {
                         format!("reindex refused: {error}"),
                     ));
                 }
+            }
+        }
+    }
+
+    // A mirror that is a directory but not a repository is repaired by
+    // restoring the one level git requires: every loose ref is already in
+    // `packed-refs`, so nothing is lost and nothing is re-fetched. One
+    // failure must not abort the others, so each is counted and reported.
+    for (path, detail) in &found.mirrors {
+        let shown = path.display().to_string();
+        if !apply {
+            rows.push(Row::new(shown, "repair", "refs-restore"));
+            continue;
+        }
+        match gsa_recipe::sync::ensure_mirror_refs(path) {
+            Ok(()) => rows.push(Row::new(shown, "repaired", "refs-restored")),
+            Err(error) => {
+                failed += 1;
+                rows.push(Row::new(
+                    shown,
+                    "failed",
+                    format!("refs-restore: {error} (was: {detail})"),
+                ));
             }
         }
     }
