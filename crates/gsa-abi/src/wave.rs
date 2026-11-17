@@ -128,6 +128,20 @@ impl WavePlan {
         self.waves.is_empty()
     }
 
+    /// `--leaf` reads the wave as DIAGNOSTIC only (contract §B.8/§C.3: "build
+    /// exactly the named recipes, no consumer expansion"). `waves` (staged
+    /// swaps and the `abi-wave` rows a caller renders before this call) and
+    /// `stale_records` are facts about the world and survive; everything that
+    /// would GROW or REFUSE the plan — `additions`, `uncovered` — is dropped.
+    /// One decision site: both verbs (`-S`/`-B` through `wave_check`, `-U`
+    /// through its swap plan) apply this and nothing else.
+    pub fn exact(mut self) -> WavePlan {
+        self.additions.clear();
+        self.uncovered.clear();
+        self.waves.clear();
+        self
+    }
+
     /// The §E.3 under-coverage refusal rows, one per uncovered member:
     /// `<member> refuse abi-consumer-uncovered <provider>`.
     pub fn refusal_rows(&self) -> Vec<DecisionRow> {
@@ -816,6 +830,37 @@ mod tests {
         assert_eq!(plan.additions, vec!["c2".to_string()]);
         assert!(plan.uncovered.is_empty());
         assert!(plan.refusal_rows().is_empty());
+    }
+
+    /// `--leaf` (contract §B.8/§C.3) makes the wave diagnostic only: no
+    /// addition, no refusal, no staged swap — while the facts a caller
+    /// renders (`abi-wave` rows from `waves`, `abi-stale-record` rows) are
+    /// not lost before it can print them.
+    #[test]
+    fn exact_drops_plan_growth_and_keeps_the_diagnostic_facts() {
+        let plan = WavePlan {
+            waves: vec![Wave {
+                providers: vec!["p".to_string()],
+                members: vec![WaveMember {
+                    id: "c1".to_string(),
+                    basis: MemberBasis::Recorded,
+                }],
+                coupled_noted: Vec::new(),
+                fallback: false,
+            }],
+            additions: vec!["c2".to_string()],
+            uncovered: vec![("p".to_string(), vec!["out-of-tree".to_string()])],
+            stale_records: vec![("p".to_string(), "ghost".to_string())],
+        };
+        let exact = plan.exact();
+        assert!(exact.additions.is_empty(), "no wave addition under --leaf");
+        assert!(exact.uncovered.is_empty(), "no refusal under --leaf");
+        assert!(exact.waves.is_empty(), "nothing to stage under --leaf");
+        assert_eq!(
+            exact.stale_records,
+            vec![("p".to_string(), "ghost".to_string())],
+            "the dead-record diagnostic survives"
+        );
     }
 
     #[test]

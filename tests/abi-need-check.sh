@@ -108,6 +108,29 @@ make_pkgroot() {
     } >"$dir/.PKGINFO"
 }
 
+# make_bin_path DIR FILENAME LINK-AGAINST [RECORDED] — a consumer ELF whose
+# DT_NEEDED is an ABSOLUTE PATH, the shape a DT_SONAME-less DSO produces when
+# it is linked by path (`mpv` records `/usr/lib/libmujs.so` because mujs ships
+# no DT_SONAME — issue #3). Linking against a real file with no SONAME records
+# its path; linking against a stub whose SONAME is a path records that path
+# (RECORDED) without needing the file to exist yet.
+make_bin_path() {
+    local dir=$1 file=$2 link=$3 recorded=${4:-$3}
+    mkdir -p "$dir"
+    printf 'int main(void){return 0;}\n' |
+        cc -x c - -x none -Wl,--no-as-needed "$link" -o "$dir/$file"
+    readelf -dW "$dir/$file" | grep -q "NEEDED.*\[$recorded\]" ||
+        fail "synthesis failed to record DT_NEEDED $recorded"
+}
+
+# make_stub_with_soname OUT SONAME — a throwaway DSO carrying SONAME, for a
+# consumer that must record a path WITHOUT that path existing on the host.
+make_stub_with_soname() {
+    mkdir -p "$(dirname "$1")"
+    printf 'int gsa_fixture_anchor;\n' |
+        cc -shared -x c - -Wl,-soname,"$2" -o "$1"
+}
+
 run() {
     # run OUTVAR ERRVAR -- args… ; captures status without tripping set -e
     local outvar=$1 errvar=$2
@@ -760,5 +783,65 @@ run out err -- --quiet "$tmp/p" || status=$?
 [[ $status == 1 ]] || fail "a data file covered a loader name (want 1), got $status: $out"
 [[ $out == *"needs 'libfakeelf-fixture.so.1'"* ]] || fail "data-file cover finding lost: $out"
 rm -rf "$tmp/p/usr/share/ardour9" "$tmp/p/usr/bin/fakeelf-consumer"
+
+# ── 20. a PATH-STYLE DT_NEEDED resolves at its exact path (issue #3) ──────
+# A shared object with NO DT_SONAME linked by absolute path records that
+# path as its DT_NEEDED (`readelf -d mpv | grep NEEDED.*/` →
+# `/usr/lib/libmujs.so`). The loader opens exactly that file: it consults
+# neither the default libdirs nor ld.so.cache for a name containing '/'. The
+# hook used to prefix a libdir onto the absolute name (`/usr/lib//usr/lib/…`)
+# and fall back to a cache keyed on the literal path, so both halves missed
+# and a file that exists at the recorded path aborted the transaction.
+mkdir -p "$tmp/hostpath/usr/lib"
+make_lib_bare "$tmp/hostpath/usr/lib" libnopath-fixture.so
+make_bin_path "$tmp/h/usr/bin" path-consumer "$tmp/hostpath/usr/lib/libnopath-fixture.so"
+make_pkgroot "$tmp/h" pkg-path-style
+status=0
+run out err -- --quiet "$tmp/h" || status=$?
+[[ $status == 0 ]] || fail "an existing path-style DT_NEEDED did not resolve (want 0), got $status: $out"
+[[ $out == *'libnopath-fixture.so'* ]] && fail "the resolved path-style name still reported: $out"
+
+# Negative control: the SAME consumer with the file gone stays fatal — that
+# is the vanished-provider case the hook exists for, not a false alarm.
+rm -f "$tmp/hostpath/usr/lib/libnopath-fixture.so"
+status=0
+run out err -- --quiet "$tmp/h" || status=$?
+[[ $status == 1 ]] || fail "a vanished path-style provider resolved (want 1), got $status: $out"
+[[ $out == *"needs '$tmp/hostpath/usr/lib/libnopath-fixture.so'"* ]] ||
+    fail "the absent path-style finding lost its exact path: $out"
+
+# Class guard: the file exists but is not the consumer's ELF class. A data
+# file (or a lib32 object) standing at the recorded path is not loadable by
+# a 64-bit consumer, so it stays fatal — "exists" alone is not resolution.
+mkdir -p "$tmp/cl"
+printf '\x7fELF\x01\x01\x01' >"$tmp/cl/libclass-fixture.so"
+make_stub_with_soname "$tmp/cl-stub.so" "$tmp/cl/libclass-fixture.so"
+make_bin_path "$tmp/clpkg/usr/bin" class-consumer "$tmp/cl-stub.so" "$tmp/cl/libclass-fixture.so"
+make_pkgroot "$tmp/clpkg" pkg-path-class
+status=0
+run out err -- --quiet "$tmp/clpkg" || status=$?
+[[ $status == 1 ]] || fail "an ELF32-class file resolved a 64-bit path-style need (want 1), got $status: $out"
+
+# Transaction-internal: a payload that SHIPS the SONAME-less provider at the
+# exact absolute path the consumer records covers it before the files land.
+# The consumer is linked against a stub whose SONAME is the INSTALL path
+# (`/usr/lib/…`), which no host file carries here.
+make_lib_bare "$tmp/tx/usr/lib" libinpay-fixture.so
+make_stub_with_soname "$tmp/tx-stub.so" /usr/lib/libinpay-fixture.so
+make_bin_path "$tmp/tx/usr/bin" tx-consumer "$tmp/tx-stub.so" /usr/lib/libinpay-fixture.so
+make_pkgroot "$tmp/tx" pkg-path-in-payload
+status=0
+run out err -- --quiet "$tmp/tx" || status=$?
+[[ $status == 0 ]] || fail "a payload-shipped path-style provider did not cover its consumer (want 0), got $status: $out"
+
+# Negative control: the same consumer with the provider in NO package of the
+# transaction stays fatal — the cover set is not "any path-style name seen".
+mkdir -p "$tmp/txo/usr/bin"
+cp "$tmp/tx/usr/bin/tx-consumer" "$tmp/txo/usr/bin/tx-consumer"
+make_pkgroot "$tmp/txo" pkg-path-unshipped
+status=0
+run out err -- --quiet "$tmp/txo" || status=$?
+[[ $status == 1 ]] || fail "an unshipped path-style name resolved (want 1), got $status: $out"
+[[ $out == *"needs '/usr/lib/libinpay-fixture.so'"* ]] || fail "unshipped path-style finding lost: $out"
 
 printf 'abi-need-check fixture: ok\n'

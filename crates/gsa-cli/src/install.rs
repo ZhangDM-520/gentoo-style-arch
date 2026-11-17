@@ -885,6 +885,30 @@ fn run_upgrade_inner(
     for (provider, consumer) in &swap_plan.stale_records {
         let _ = writeln!(out, "abi-stale-record {provider} {consumer} dead-record");
     }
+    // `--leaf` is exact selection (contract §B.8/§C.3): the wave is
+    // DIAGNOSTIC only here too. Its `abi-wave` rows render (they are how an
+    // operator learns what to rebuild), but no member becomes a candidate,
+    // no member refuses, and no staged swap is derived — one decision site,
+    // `gsa_abi::WavePlan::exact`.
+    if inv.leaf {
+        for wave in &swap_plan.waves {
+            for member in &wave.members {
+                for provider in &wave.providers {
+                    let _ = writeln!(
+                        out,
+                        "abi-wave {provider} {} {}",
+                        member.id,
+                        member.basis.wire()
+                    );
+                }
+            }
+        }
+    }
+    let swap_plan = if inv.leaf {
+        swap_plan.exact()
+    } else {
+        swap_plan
+    };
     if !swap_plan.uncovered.is_empty() {
         return Ok(finish_refused(
             inv,

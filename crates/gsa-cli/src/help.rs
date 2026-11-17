@@ -128,6 +128,7 @@ and a root shell without a build user is refused with guidance.",
             ("gsa -U <ref…|archive-path…>", "install the named packages' newest complete archive sets (or the named paths) in ONE pacman -U transaction"),
             ("gsa -Ua", "install every index-complete archive set in the workspace in one transaction (force mode)"),
             ("gsa -Uf", "force: bypass the same-version already-installed skip"),
+            ("gsa -U --leaf <ref…|archive-path…>", "install exactly the named archives: an ABI wave still prints its abi-wave rows but adds no member and refuses none"),
             ("-- <pacman args…>", "forwarded verbatim to every pacman -U of an install run (-S/-U), e.g. -Ua -- --overwrite '*'"),
         ],
     },
@@ -163,12 +164,12 @@ Selection targets (contract §C; exact lookup only — a typo is never auto-corr
         ],
     },
     Section {
-        head: "A selection expands to its transitive consumers (the reverse build-order closure); --leaf suppresses the expansion and keeps exactly what you named.
+        head: "A selection expands to its transitive consumers (the reverse build-order closure); --leaf suppresses the expansion and keeps exactly what you named — the ABI wave included: its abi-wave rows still print, its members join no plan.
 
 Long modifiers (contract §B.8). A build run accepts:",
         blocks: &[
             ("--dry-run", "build-order plan without building"),
-            ("--leaf", "suppress consumer expansion — keep exactly what you named"),
+            ("--leaf", "suppress consumer expansion — keep exactly what you named (the ABI wave stays diagnostic: no addition, no refusal)"),
             ("--skip", "skip-if-fresh resume: claim a complete verified-fresh archive set; waiver reasons freshness-waived / abi-provider-waived ride the record rows"),
             ("--skip-built", "claim anything already built — newest complete set at any version, no upstream probes; a recipe commit newer than the set rebuilds"),
             ("--vcs-skip-tolerance N", "the --skip waive threshold, positive integers only; beats GSA_VCS_SKIP_TOLERANCE"),

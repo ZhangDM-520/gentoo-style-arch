@@ -944,6 +944,9 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
             closure_size: 0,
             expansion_added: 0,
             notes: Vec::new(),
+            // A whole-set pass is not a leaf selection; `--leaf` cannot reach
+            // this branch (it needs a non-empty selection, §B.8).
+            leaf: false,
             prerequisites_added: Vec::new(),
         };
         for idx in ctx.graph.order() {

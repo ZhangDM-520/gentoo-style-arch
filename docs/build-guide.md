@@ -74,7 +74,12 @@ it. A selection expands to the named packages plus their transitive
 a package cannot break what it consumes while its consumers carry the ABI
 risk. Prerequisites are never pulled in: they are assumed installed and
 current, so bootstrap and fresh builds use `@` group runs (`gsa -S @git`).
-`--leaf` suppresses the expansion and keeps exactly the named recipes.
+`--leaf` suppresses the expansion and keeps exactly the named recipes. The
+ABI rebuild wave (§E.3) follows the same rule: its `abi-wave` rows still
+print — that is how you learn which consumers to rebuild — but no member
+joins the plan and no `refuse abi-consumer-uncovered` row is raised for a
+package you did not name. `gsa -U --leaf <archive…>` says the same thing for
+an install from archives.
 
 An `@app` build (or `--dry-run`) on a TTY prompts to multi-select before the
 pipeline runs: all unchecked + Enter = the whole group, any checked = only

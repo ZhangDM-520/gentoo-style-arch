@@ -1773,6 +1773,12 @@ pub(crate) struct WaveStateError(pub String);
 /// `gsa-abi`'s one computation (record mismatches ∪ content truth ∪
 /// coupled batches, fail-toward-whole-closure when records are missing) —
 /// this seam only feeds it the state truth and renders its answer.
+///
+/// `selection.leaf` (contract §B.8/§C.3) makes the wave DIAGNOSTIC only: the
+/// `abi-wave`/`abi-stale-record` rows still print, but no member joins the
+/// plan and no `refuse abi-consumer-uncovered` row gates a package the
+/// operator did not name. `gsa_abi::WavePlan::exact` is the one decision
+/// (`--leaf` is exact selection, the wave included).
 pub(crate) fn wave_check(
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -1945,12 +1951,19 @@ pub(crate) fn wave_check(
             }
         }
     }
-    for row in plan.refusal_rows() {
-        let _ = writeln!(out, "{}", row.render());
+    // §E.3 refusal rows for a wave the operator DID ask for. `--leaf` is
+    // exact selection (§B.8/§C.3): an unnamed member never gates the run.
+    if !selection.leaf {
+        for row in plan.refusal_rows() {
+            let _ = writeln!(out, "{}", row.render());
+        }
     }
     for (provider, consumer) in &plan.stale_records {
         let _ = writeln!(out, "abi-stale-record {provider} {consumer} dead-record");
     }
+    // Diagnostics are already rendered; `--leaf` then takes the wave out of
+    // the plan (no additions, no refusal rows) — one decision site.
+    let plan = if selection.leaf { plan.exact() } else { plan };
     Ok(WaveCheck {
         additions: plan.additions,
         uncovered: !plan.uncovered.is_empty(),
@@ -2269,6 +2282,7 @@ mod tests {
             closure_size: ids.len(),
             expansion_added: 0,
             notes: Vec::new(),
+            leaf: false,
             prerequisites_added: Vec::new(),
         }
     }
@@ -2465,7 +2479,7 @@ mod tests {
             &selection,
             &absent,
             None,
-            &std::collections::BTreeMap::new()
+            &std::collections::BTreeMap::new(),
         )
         .is_ok());
         let _ = std::fs::remove_dir_all(&dir);

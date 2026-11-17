@@ -486,11 +486,12 @@ fn classify(inv: &Invocation) -> Disposition {
                 | Command::BuildInstall
                 | Command::Fetch
                 | Command::Update
+                | Command::Upgrade
                 | Command::Maint
         )
     {
         return Disposition::Bad(
-            "--leaf applies to selections (-S/-B builds and their listings, -Mc's pruning selection)"
+            "--leaf applies to selections (-S/-B builds, -U installs and their listings, -Mc's pruning selection)"
                 .to_string(),
         );
     }
@@ -1420,6 +1421,11 @@ mod tests {
         let (code, _out, err) = run_capture(&["-Ms", "--leaf"]);
         assert_eq!(code, 2);
         assert!(err.contains("--leaf applies to -Mc"), "{err}");
+        // `-U` is a selection too (contract §B.6/§B.8, 2026-11-18): the gate
+        // lets it through to the workspace, not to the usage class.
+        let (code, _out, err) = run_capture(&["-Q", "--leaf", "mesa-git"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("--leaf applies to"), "{err}");
         // A flag outside a verb's roster keeps the usage refusal and names
         // the owner — per-verb acceptance is §B.7's, not the family's.
         let (code, _out, err) = run_capture(&["-Mc", "--skip", "mesa-git"]);

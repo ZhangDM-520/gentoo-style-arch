@@ -873,6 +873,12 @@ pub fn build_txn_record(
     if inv.dry_run {
         command.push_str(" --dry-run");
     }
+    // `--leaf` mirrors only in its true form (§H.2's flag-rule table, gap
+    // G4). A `-U --leaf` resume that dropped it would re-arm the very wave
+    // the operator suppressed (2026-11-18).
+    if inv.leaf {
+        command.push_str(" --leaf");
+    }
     command.push_str(&mirror_flags(inv, None));
 
     // `remaining:` — every row not `succeeded`, in row order (§H.2). The
@@ -1015,6 +1021,7 @@ mod tests {
             closure_size: n,
             expansion_added: n.saturating_sub(1),
             notes: Vec::new(),
+            leaf: false,
             prerequisites_added: Vec::new(),
         }
     }

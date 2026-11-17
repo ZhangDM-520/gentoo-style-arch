@@ -332,8 +332,8 @@ is `-Sy`'s and `-Md --fix`'s (§B.4/§B.7). Pinned by `tests/anchor-defer.sh`.
 | `gsa -Ua` | install ALL index-complete archives in the workspace in one transaction (today `-ia`) — the group-install escape hatch: it cannot satisfy install-before-dependents and must never stand in for `-S` on a set whose members depend on each other (`AGENTS.md` rule 11) |
 | `gsa -Uf` | force: bypass the same-version already-installed skip (today `-fi` as applied to installs) |
 
-`-U` accepts `--state-dir`, `--build-dir`, `--config`, `--no-register-ignorepkg`
-and `--fail-fast`; `--build-dir` is flag-only here (an install run asks
+`-U` accepts `--state-dir`, `--build-dir`, `--config`, `--no-register-ignorepkg`,
+`--fail-fast` and `--leaf` (amendment 2026-11-18 below); `--build-dir` is flag-only here (an install run asks
 nothing) so the archives a `-B --build-dir X` run wrote are found again —
 without it the same `-U` answered `empty-list`, which reads as "everything is
 current" (added 2026-11-11). `-Ua` runs in force mode inherently (no
@@ -341,6 +341,14 @@ same-version skip), matching today's `-ia` pipeline. An empty eligible set is
 `noop empty-list` under `-Ua` and a refusal under `-S` (§E). *Open decision (2026-10-28, I2):* an archive with
 no index row (the unregistered named-path case) stands down at the §J.4 gate
 instead of refusing — see Open decisions, "index-complete vs the §J.4 gate".
+
+*Amendment (2026-11-18, `-U --leaf`).* An install from archives names exact
+archives (§B.6's first row), so it accepts `--leaf` with the same meaning the
+build verbs give it: the §E.3 wave's `abi-wave` rows render, but no wave member
+becomes a candidate and none renders `refuse abi-consumer-uncovered` for a
+package the operator did not name. Without `--leaf` the staged swap is
+unchanged: a half-covered wave still refuses. The continuation mirrors the flag
+in its true form only (§H.2).
 
 ### B.7 `-M` — maintain
 
@@ -418,7 +426,7 @@ reverted to the census, drift row dropped, backfill adding the unbuilt names).
 | Modifier | Meaning |
 | --- | --- |
 | `--dry-run` | render the plan without building, installing, fetching, or mutating anything (today `-n`); an install run (`-U`, `-S`) also renders its §E decision rows, while a build plan carries plan rows only — the archives do not exist yet, so there is no install decision to compute |
-| `--leaf` | leaf-only selection: build exactly the named recipes, no consumer expansion (today `--no-deps`) |
+| `--leaf` | leaf-only selection: build exactly the named recipes, no consumer expansion (today `--no-deps`); the §E.3 ABI wave is diagnostic under it (amendment 2026-11-18) |
 | `--skip` | skip-if-fresh resume (today `-s`): skip a package whose archive set is fresh against its recorded VCS baselines; the recipe gate is CONTENT based (the archive's `.BUILDINFO` `pkgbuild_sha256sum` vs the current PKGBUILD's hash, mtime only as the no-record fallback — amendment 2026-11-11 below); the `freshness-waived` and `abi-provider-waived` waiver reasons and the `upstream-unverified` deferral are kept verbatim (`docs/build-guide.md` "Skip and resume") |
 | `--skip-built` | skip anything already built: newest complete, payload-valid output set at any version; no upstream probes, no waivers; a recipe commit newer than the set rebuilds (kept verbatim) |
 | `--vcs-skip-tolerance N` | the `--skip` waive threshold (positive integers only; overrides `GSA_VCS_SKIP_TOLERANCE`) |
@@ -975,6 +983,20 @@ derives fail-closed; the install recorder derives from the installed
 surface). Pinned by `tests/gsa-abi-v2.sh` sections g/h and `gsa-abi`'s
 `records_moved`/`Subscriptions::token_for` unit tests.
 
+*Amendment (2026-11-18, exact selection includes the wave).* `--leaf` means
+what §B.8 and this section have always said — the plan is exactly what was
+named — and the §E.3 ABI wave is no exception. Under `--leaf` the wave is
+**diagnostic**: the `abi-wave <provider> <member> <basis>` and
+`abi-stale-record` rows still render (they are how an operator learns what to
+rebuild), while `additions` never enter the plan, an unnamed member never
+renders `refuse abi-consumer-uncovered`, and `abi=must` coupled-batch members
+are suppressed with every other basis — `--leaf` is absolute. `-U --leaf`
+(§B.6 amendment) means the same for an install from archives: nothing is
+staged beyond the named archives. The wave's own computation is unchanged and
+a NON-leaf run keeps the §E.3 refusal. One decision site:
+`gsa_abi::WavePlan::exact`. Pinned by `tests/gsa-abi-v2.sh` sections h/i and
+`tests/abi-batch-policy.sh` B1/B5.
+
 Ranges (`22..38`, `22..`, `..15`) index the **selection** in build order after
 expansion, exactly as the `-Sl` listing prints them. A range requires a
 selection to anchor it; a bare range is a usage error. A range that runs past
@@ -1138,6 +1160,13 @@ subject (§H.2, same date).
 | `refuse` | fail-closed: this row and everything downstream of it abort before any `pacman` call. Reasons include `empty-list`, `pgo-*` (baked profiling destination), `abi-soname`, `abi-consumer`, `abi-consumer-uncovered` (a moving/removed soname provide with a linked consumer outside the transaction — rule 25(d)), `abi-stock-pinner` (an out-of-tree package pins the moving provide exactly — 2026-10-14 amendment: named here as the code emits it, `gsa-abi::rows::abi_refusal_rows`), `partial-set`, `unreadable-pkginfo` (rule 25(h) + rule 71: unreadable archive metadata never becomes a clean skip — added 2026-11-14), `discover-failed`, `plan-failed`, and any `severity: refuse` QA keyword (§E.4) |
 | `noop` | nothing to do and that is not a failure — `empty-list` under `-Ua` |
 | `parked` | **new**: the package is parked — `waits-on-failed` (cone-stop) or `waits-on-deferred` / a deferral reason (`anchoring-refused`, `upstream-unverified`, `source-unfetchable`). The seam neither installs nor refuses; the row records the park |
+
+*Amendment (2026-11-18, the `--leaf` exemption).* `abi-consumer-uncovered` is
+the §E.3 under-coverage refusal for a wave the run CARRIES. Under `--leaf`
+(§C.3 amendment, same date) the wave is diagnostic: no row is emitted for a
+member the operator did not name, and a NON-leaf invocation of the same argv
+still refuses by name. Pinned by `tests/gsa-abi-v2.sh` §i's control and
+`tests/abi-batch-policy.sh` B2/B3.
 
 *Amendment (2026-11-11, did pacman run?).* A checked same-version skip keeps
 the §E.3 decision row exactly as above (`skip already-current <v>` /

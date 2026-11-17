@@ -120,7 +120,9 @@ pub const FLAGS: &[FlagSpec] = &[
         name: "leaf",
         description: "build exactly the named recipes, no consumer expansion",
         takes_value: false,
-        families: BUILD,
+        // `-U` names exact archives and must be able to say the same about
+        // the ABI wave (§B.6/§B.8; 2026-11-18).
+        families: &[Family::S, Family::B, Family::U],
     },
     FlagSpec {
         name: "machine",
@@ -1224,6 +1226,19 @@ mod tests {
         assert!(parse_err(&["-Qx"]).contains("unknown option letter 'x'"));
         assert!(parse_err(&["-Sl", "--frobnicate"]).contains("unknown flag '--frobnicate'"));
         assert!(parse_err(&["-Sl", "-x"]).contains("unknown short option '-x'"));
+    }
+
+    /// `-U` names exact archives and accepts `--leaf` for the same reason
+    /// the build verbs do: the ABI wave must not volunteer work (contract
+    /// §B.6/§B.8; 2026-11-18). Queries stay without it.
+    #[test]
+    fn leaf_applies_to_install_from_archives() {
+        let inv = parse_ok(&["-U", "--leaf", "mesa-git"]);
+        assert!(inv.leaf);
+        // A query is not a selection: the family gate refuses it (pinned
+        // through the CLI in `lib.rs`, where dispositions are observable).
+        let inv = parse_ok(&["-Q", "--leaf", "mesa-git"]);
+        assert!(inv.leaf, "the parser is family-agnostic; the gate decides");
     }
 
     #[test]

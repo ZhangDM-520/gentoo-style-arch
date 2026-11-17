@@ -14,8 +14,8 @@ set -euo pipefail
 # subscription records it seeded, and every token compared is read from the
 # engine's own `-Qa` surface — never hardcoded.
 #
-# Pinned here (eight ( subshell ) sections; run one alone with
-# GSA_ABI_V2_ONLY=a…h):
+# Pinned here (nine ( subshell ) sections; run one alone with
+# GSA_ABI_V2_ONLY=a…i):
 #   a. token stability + the `abi-rev=` override (§J.4): the same archive
 #      answers the same `-Qa` token twice; bumping `abi-rev=` moves the
 #      effective token and LEAVES the derived hash unchanged (the override
@@ -45,11 +45,18 @@ set -euo pipefail
 #      carries it. Records matching the shipped token set are NO move: no
 #      wave rows, and the `--leaf` plan stays exactly the named recipe
 #      (the wave-flood class this wall retires).
-#   h. the placeholder-record wall (2026-11-03): a `-` subscription
-#      placeholder carries NO token truth — record-less, never a token
-#      that could mismatch. With matching records it gates nothing; under
-#      a REAL move it fails toward the whole closure (rule 25(c)) as an
-#      `unrecorded` member — never under-expand.
+#   h. the placeholder-record wall (2026-11-03) and the exact-selection
+#      wall (2026-11-18, issue #4): a `-` subscription placeholder carries
+#      NO token truth — record-less, never a token that could mismatch.
+#      With matching records it gates nothing; under a REAL move it still
+#      fails toward the whole closure (rule 25(c)) as an `unrecorded`
+#      member — never under-expand — and `--leaf` keeps that wave
+#      DIAGNOSTIC: the rows render, the plan stays exactly the named
+#      recipe, and an unnamed member never refuses.
+#   i. `-U --leaf` (2026-11-18, issue #4 second half): an install from
+#      archives names exact archives, so the wave must not stage a consumer
+#      whose archive the operator did not build; without `--leaf` the same
+#      state still refuses the half-covered swap (§E.3).
 #
 # Red-first (contract §L.4): the fail-toward default is mutation-probed —
 # breaking it makes section (c) fail naming the under-expansion; the probe
@@ -75,7 +82,7 @@ fail() {
     exit 1
 }
 
-# Section filter: GSA_ABI_V2_ONLY=<a..h> runs exactly one section.
+# Section filter: GSA_ABI_V2_ONLY=<a..i> runs exactly one section.
 want() { [ -z "${GSA_ABI_V2_ONLY:-}" ] || [ "${GSA_ABI_V2_ONLY}" = "$1" ]; }
 
 # ─── Stub-knob vocabulary (§D.2: declared here in the change that adds them) ─
@@ -1000,9 +1007,13 @@ $FIXTURE_OUTPUT"
         [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "lib2" ] \
             || fail "h: --leaf plans exactly the named recipe (no wave additions): $FIXTURE_OUTPUT"
 
-        # Contrast (the over-suppression wall): a REAL record mismatch still
-        # drags the wave — and the placeholder consumer rides it as a
-        # record-less member (fail-toward, never under-expand).
+        # Contrast (the exact-selection wall, 2026-11-18 — issue #4): a REAL
+        # record mismatch computes the same derived wave, but `--leaf` keeps
+        # the plan EXACT (contract §B.8/§C.3: "build exactly the named
+        # recipes, no consumer expansion"). The `abi-wave` rows still render
+        # — they are how an operator learns what to rebuild — and the
+        # placeholder consumer is still named `unrecorded` (fail-toward,
+        # never under-expand) in that diagnostic; it just joins no plan.
         {
             printf 'c4|0:1.0.0-1|lib2|-\n'
             printf 'c5|0:1.0.0-1|lib2|stale-token\n'
@@ -1012,12 +1023,110 @@ $FIXTURE_OUTPUT"
         expected=$(expected_wave_members "$ws" "$state" lib2 "$t_lib2")
         got=$(wave_members "$FIXTURE_OUTPUT" lib2)
         [ "$got" = "$expected" ] \
-            || fail "h: a real move drags the derived wave (placeholder = record-less): want [$expected], got [$got]:
+            || fail "h: a real move still computes the derived wave (diagnostics): want [$expected], got [$got]:
 $FIXTURE_OUTPUT"
         vgrep "$FIXTURE_OUTPUT" -Eq '^abi-wave lib2 c4 unrecorded$' \
-            || fail "h: the placeholder member plans as record-less (unrecorded):
+            || fail "h: the placeholder member is still named record-less (unrecorded):
+$FIXTURE_OUTPUT"
+        [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "lib2" ] \
+            || fail "h: --leaf plans EXACTLY the named recipe — the wave is diagnostic (issue #4): $FIXTURE_OUTPUT"
+        [[ "$FIXTURE_OUTPUT" != *'refuse abi-consumer-uncovered'* ]] \
+            || fail "h: --leaf rendered a refusal for a member the operator did not name:
+$FIXTURE_OUTPUT"
+
+        # The control: the SAME state without `--leaf` grows the plan by
+        # exactly the computed wave — that delta is what `--leaf` suppresses.
+        run_engine "$ws" -B --dry-run lib2
+        [ "$FIXTURE_RC" = 0 ] || fail "h: the non-leaf plan is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        nonleaf=$(rr2_scalar order <<<"$FIXTURE_OUTPUT" | tr ' ' '\n' | tail -n +2 | sort | paste -sd' ' -)
+        expected_flat=$(printf '%s\n' "$expected" | sort | paste -sd' ' -)
+        [ "$nonleaf" = "$expected_flat" ] \
+            || fail "h: without --leaf the wave joins the plan (issue #4 control): want [$expected_flat], got [$nonleaf]:
 $FIXTURE_OUTPUT"
         echo "section h ok"
+    )
+fi
+
+
+if want i; then
+    # ─── 9. `-U --leaf`: exact archives, diagnostic wave (issue #4) ────────
+    # `-U` names exact archives (§B.6), so it can say the same thing about
+    # the ABI wave that `-S --leaf` says: the wave's `abi-wave` rows render,
+    # no member becomes a candidate and no member refuses. Without `--leaf`
+    # the same state still refuses a half-covered swap (§E.3) — that is the
+    # control this section turns on.
+    (
+        set -euo pipefail
+        ws="$fixture/i/ws"; state="$fixture/i/state"; db="$fixture/i/db"
+        make_workspace "$ws" 1 auto low
+        abi_ws "$ws" "$db" "$fixture/i/stage"
+        export GSA_STATE_DIR="$state"
+        add_package "$ws" lib "$gsa_meta_any" git
+        add_package "$ws" app1 "$gsa_meta_any" git
+        add_package "$ws" app2 "$gsa_meta_any" git
+        set_topology_record "$ws" lib git "" ""
+        set_topology_record "$ws" app1 git "lib" ""
+        set_topology_record "$ws" app2 git "app1" ""
+
+        stage="$fixture/i/stage-lib"
+        stage_pkginfo "$stage" lib lib "1.0.0-1" 'provides = libx.so=1-64'
+        mkdir -p "$stage/usr/lib"
+        write_elf64 "$stage/usr/lib/libx.so" libx.so.1
+        make_archive "$ws/packages/lib/lib-1.0.0-1-any.pkg.tar.zst" "$stage"
+        stage="$fixture/i/stage-app1"
+        stage_pkginfo "$stage" app1 app1 "1.0.0-1" 'provides = libapp1.so=1-64'
+        mkdir -p "$stage/usr/lib"
+        write_elf64 "$stage/usr/lib/libapp1.so" libapp1.so.1 libx.so
+        make_archive "$ws/packages/app1/app1-1.0.0-1-any.pkg.tar.zst" "$stage"
+        stage="$fixture/i/stage-app2"
+        stage_pkginfo "$stage" app2 app2 "1.0.0-1"
+        mkdir -p "$stage/usr/lib"
+        write_elf64 "$stage/usr/lib/libapp2.so" libapp2.so.2 libapp1.so
+        make_archive "$ws/packages/app2/app2-1.0.0-1-any.pkg.tar.zst" "$stage"
+
+        i_lib=$(db_entry "$db" lib "0:1.0.0-1" 'libx.so=1-64')
+        i_app1=$(db_entry "$db" app1 "0:1.0.0-1" 'libapp1.so=1-64')
+        i_app2=$(db_entry "$db" app2 "0:1.0.0-1")
+        mkdir -p "$fixture/i/dbfiles/lib/usr/lib" "$fixture/i/dbfiles/app1/usr/lib" \
+            "$fixture/i/dbfiles/app2/usr/lib"
+        write_elf64 "$fixture/i/dbfiles/lib/usr/lib/libx.so" libx.so.1
+        write_elf64 "$fixture/i/dbfiles/app1/usr/lib/libapp1.so" libapp1.so.1 libx.so
+        write_elf64 "$fixture/i/dbfiles/app2/usr/lib/libapp2.so" libapp2.so.2 libapp1.so
+        db_file "$i_lib" "$fixture/i/dbfiles/lib/usr/lib/libx.so"
+        db_file "$i_app1" "$fixture/i/dbfiles/app1/usr/lib/libapp1.so"
+        db_file "$i_app2" "$fixture/i/dbfiles/app2/usr/lib/libapp2.so"
+
+        # Pass 1: everything lands and records its `:=` subscriptions.
+        run_engine "$ws" -Uf --state-dir "$state" --config "$ws/pacman.conf" lib app1 app2
+        [ "$FIXTURE_RC" = 0 ] || fail "i: pass 1 rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        # The move: zero provide drift, so only the record term fires.
+        set_topology_record "$ws" lib git "" "abi-rev=1"
+
+        # `--leaf` is accepted on -U (2026-11-18) and keeps the plan exact.
+        run_engine "$ws" -U --dry-run --leaf --state-dir "$state" --config "$ws/pacman.conf" lib
+        [ "$FIXTURE_RC" = 0 ] || fail "i: -U --leaf plan rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = "lib" ] \
+            || fail "i: -U --leaf plans exactly the named archive: $FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^abi-wave lib app1 recorded$' \
+            || fail "i: the wave's diagnostic row still renders under --leaf:
+$FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^abi-wave lib app2 closure$' \
+            || fail "i: the wave closure row still renders under --leaf:
+$FIXTURE_OUTPUT"
+        [[ "$FIXTURE_OUTPUT" != *'refuse abi-consumer-uncovered'* ]] \
+            || fail "i: -U --leaf refused a member the operator did not name:
+$FIXTURE_OUTPUT"
+
+        # Control: WITHOUT --leaf the wave is a candidate set, and its
+        # archives are gone — the half-covered swap refuses by name, rc 3.
+        rm -f "$ws/packages/app1/"*.pkg.tar.zst "$ws/packages/app2/"*.pkg.tar.zst
+        run_engine "$ws" -U --dry-run --state-dir "$state" --config "$ws/pacman.conf" lib
+        [ "$FIXTURE_RC" = 3 ] || fail "i: a half-covered swap must refuse without --leaf (§E.3), got $FIXTURE_RC:
+$FIXTURE_OUTPUT"
+        vgrep "$FIXTURE_OUTPUT" -Eq '^app1 refuse abi-consumer-uncovered lib$' \
+            || fail "i: the refusal is not named per member:
+$FIXTURE_OUTPUT"
+        echo "section i ok"
     )
 fi
 

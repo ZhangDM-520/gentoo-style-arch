@@ -20,11 +20,12 @@ set -euo pipefail
 #      itself excepted); report-only (§E.4: an audit never refuses, exit 0).
 #   B. ABI-batch policy on the engine (the pre-dispatch wave check,
 #      crates/gsa-cli/src/build.rs `wave_check` + the gsa-abi wave planner):
-#      an abi=must batch member omitted from a --leaf selection still RIDES
-#      IN (wave `coupled-must` basis — the anchor can never build without its
-#      member), and a same-pass member the topology cannot build refuses the
-#      run BEFORE dispatch (`refuse abi-consumer-uncovered`, §E.2–E.3, §G.1
-#      rc 3). Read-only surfaces keep rendering.
+#      a --leaf selection stays EXACT — the computed wave (its `recorded`
+#      and `coupled-must` rows) renders as diagnostics and joins no plan
+#      (2026-11-18, issue #4) — while a wave member the topology cannot
+#      build refuses a NON-leaf run BEFORE dispatch (`refuse
+#      abi-consumer-uncovered`, §E.2–E.3, §G.1 rc 3). Read-only surfaces
+#      keep rendering.
 #   C. Dispatcher probe (FISH-DRIVEN, DEVIATION 2): with -i, a successful lane
 #      for llvm-git re-runs check_rustc_sanity BEFORE anything else dispatches;
 #      a failing probe with no remediation chain stops dispatch, drains
@@ -64,18 +65,17 @@ set -euo pipefail
 # §E.2 `refuse` rows (`abi-soname` / `abi-consumer` /
 # `abi-consumer-uncovered`), §H.2 `outcome`/`rc` scalars + outcome rows, and
 # §G.1 rc 3. The two rr-format1 sites (E) re-pin through rr2_* (`format: 2`).
-# DEVIATION 1 (inventory KEEP cell :242-244 "refusal-before-dispatch" —
-# trigger flip, §E.2–E.3 target): the fish tag gate REFUSED a [abi=must
-# anchor] --leaf selection whenever an installed abi=must member was omitted
-# (no state required; "refuse, never silently expand"). The engine's
-# coupled-batch term instead HEALS the omission — the member joins the plan
-# as a wave addition with basis `coupled-must`, even under --leaf — and
-# refuses only what the topology cannot build at all (`refuse
-# abi-consumer-uncovered`, rc 3, every row `never-started`, nothing
-# dispatched). B1/B2 re-pin both halves; the fish trigger (installed-member
-# omission refusing with no state) has no engine surface and retires with
-# this note. The wave mechanics themselves are tests/gsa-abi-v2.sh's subject;
-# B pins this fixture's batch-policy meaning.
+# DEVIATION 1 (RETIRED 2026-11-18, issue #4): the fish tag gate REFUSED a
+# [abi=must anchor] --leaf selection whenever an installed abi=must member was
+# omitted ("refuse, never silently expand"). The engine first flipped that to
+# "heal by riding": the member joined the plan as a `coupled-must` wave
+# addition even under --leaf. Both readings contradicted §B.8/§C.3's exact
+# selection, so the owner ruled the wave diagnostic under --leaf: `--leaf`
+# plans exactly the named recipes, the `abi-wave` rows still render, and no
+# unnamed member is added or refused. B1 re-pins that (with a non-leaf
+# control), B2/B3 keep the under-coverage refusal on the non-leaf invocation.
+# The wave mechanics themselves are tests/gsa-abi-v2.sh's subject; B pins
+# this fixture's batch-policy meaning.
 # DEVIATION 2 (inventory KEEP cell :356-361 "probe-stop-drain" — section C
 # stays FISH-DRIVEN, the abi-postinstall-probe.sh pattern): the engine's
 # rustc sanity probe (crates/gsa-recipe/src/toolchain.rs `rustc_sanity_probe`)
@@ -494,11 +494,15 @@ $FIXTURE_OUTPUT"
     [ -n "$tok" ] || fail "B: -Qa derived no token for llvm-git:
 $FIXTURE_OUTPUT"
 
-    # B1: the omitted member RIDES IN (DEVIATION 1). q1 records a STALE token
-    # of llvm-git (the observable move); rust-git's own record MATCHES, so
-    # only its abi=must batch membership can pull it in — under --leaf, which
-    # suppresses consumer expansion. The anchor can never build without its
-    # member, and the run builds the complete batch.
+    # B1: `--leaf` is EXACT SELECTION — the wave included (2026-11-18, issue
+    # #4; DEVIATION 1 retired). q1 records a STALE token of llvm-git (the
+    # observable move) and rust-git's own record MATCHES, so the computed
+    # wave is q1 (recorded) plus rust-git (coupled-must, its batch
+    # membership). Both rows still render — that is how an operator learns
+    # what to rebuild — but `--leaf` means "exactly what I named": neither
+    # joins the plan and neither refuses. The contract outranks the old
+    # heal-by-riding behaviour (§B.8/§C.3: "build exactly the named
+    # recipes, no consumer expansion").
     # The seeded subscription records are fixture-side writes into the
     # engine-owned state tree (W5: state/ is root-owned after the build pass
     # above), so they land through the real sudo — the record must exist
@@ -512,27 +516,47 @@ $FIXTURE_OUTPUT"
     : >"$GSA_FAKE_PACMAN_LOG"
     run_engine "$dir" -B --no-prefetch --leaf llvm-git
     [ "$FIXTURE_RC" -eq 0 ] ||
-        fail "B1: the batch member rode in and the batch must build (rc=$FIXTURE_RC):
+        fail "B1: --leaf builds exactly what was named (rc=$FIXTURE_RC):
 $FIXTURE_OUTPUT"
     waves=$(grep '^abi-wave ' <<<"$FIXTURE_OUTPUT" | sort)
     [ "$waves" = "abi-wave llvm-git q1 recorded
 abi-wave llvm-git rust-git coupled-must" ] ||
-        fail "B1: the wave must drag the stale subscriber (recorded) and the batch member (coupled-must):
+        fail "B1: the wave is still COMPUTED and named (diagnostics) under --leaf:
 $FIXTURE_OUTPUT"
-    for id in llvm-git rust-git q1; do
-        grep -Fqx "BUILD $id" "$GSA_FAKE_MAKEPKG_LOG" ||
-            fail "B1: $id never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
-    done
     rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
         fail "B1: no complete format: 2 run record:
 $FIXTURE_OUTPUT"
+    [ "$(record_scalar order)" = "llvm-git" ] ||
+        fail "B1: --leaf plans exactly the named recipe — no wave addition (issue #4): $(record_scalar order)"
+    for id in rust-git q1; do
+        grep -Fqx "BUILD $id" "$GSA_FAKE_MAKEPKG_LOG" &&
+            fail "B1: $id rode a --leaf plan: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    done
+    grep -Fqx "BUILD llvm-git" "$GSA_FAKE_MAKEPKG_LOG" ||
+        fail "B1: llvm-git never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    [ "$(rr2_outcome llvm-git status <<<"$FIXTURE_OUTPUT")" = succeeded ] ||
+        fail "B1: llvm-git did not succeed:
+$FIXTURE_OUTPUT"
+
+    # The control: the SAME state without --leaf. Consumer expansion brings
+    # rust-git and q1 in (§C.3) and the coupled-must row keeps binding; the
+    # anchor still builds first.
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    run_engine "$dir" -B --no-prefetch llvm-git
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "B1 control: the non-leaf run must build (rc=$FIXTURE_RC):
+$FIXTURE_OUTPUT"
+    for id in llvm-git rust-git q1; do
+        grep -Fqx "BUILD $id" "$GSA_FAKE_MAKEPKG_LOG" ||
+            fail "B1 control: $id never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    done
     llvm_pos=$(order_pos llvm-git) || fail "B1: llvm-git missing from the order scalar"
     rust_pos=$(order_pos rust-git) || fail "B1: rust-git missing from the order scalar"
     [ "$llvm_pos" -lt "$rust_pos" ] ||
         fail "B1: the anchor must build before its member (order: $(record_scalar order))"
     for id in llvm-git rust-git q1; do
         [ "$(rr2_outcome "$id" status <<<"$FIXTURE_OUTPUT")" = succeeded ] ||
-            fail "B1: $id did not succeed:
+            fail "B1 control: $id did not succeed:
 $FIXTURE_OUTPUT"
     done
 
@@ -548,7 +572,11 @@ $FIXTURE_OUTPUT"
         | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
     : >"$GSA_FAKE_MAKEPKG_LOG"
     : >"$GSA_FAKE_PACMAN_LOG"
-    run_engine "$dir" -B --no-prefetch --leaf llvm-git
+    # NAMED explicitly is what makes the under-coverage a refusal; under
+    # `--leaf` the wave is diagnostic and an unnamed ghost does not gate
+    # (issue #4's ruling) — this check is the non-leaf contract, so the
+    # invocation drops the modifier.
+    run_engine "$dir" -B --no-prefetch llvm-git
     [ "$FIXTURE_RC" -eq 3 ] ||
         fail "B2: an under-covered batch must refuse with rc 3 (§G.1), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
@@ -586,7 +614,7 @@ $FIXTURE_OUTPUT"
     # record and builds nothing — but the gate is selection-level on the
     # engine, so the dry-run refuses with the same class (DEVIATION 7).
     : >"$GSA_FAKE_MAKEPKG_LOG"
-    run_engine "$dir" -B --dry-run --leaf llvm-git
+    run_engine "$dir" -B --dry-run llvm-git
     [ "$FIXTURE_RC" -eq 3 ] ||
         fail "B3: the dry-run shares the selection-level refusal class (§G.1), got $FIXTURE_RC:
 $FIXTURE_OUTPUT"
@@ -652,9 +680,9 @@ $FIXTURE_OUTPUT"
 # qt5-base-git→{qt5-a,qt5-b}, the real topology's three-anchor shape in
 # miniature. A severity bucket would treat all four abi=must records as one
 # batch: a qt5-base-git token move plans llvm-git and rust-git under
-# `coupled-must` (B5), and a failing qt5 member parks the llvm stack under
-# `coupled-batch` (B6). Both pins are exact-set assertions — the bucket
-# fails each of them.
+# `coupled-must` (B5a diagnostics, B5b plan), and a failing qt5 member parks
+# the llvm stack under `coupled-batch` (B6). The batch pins are exact-set
+# assertions — the bucket fails each of them.
 (
     set -euo pipefail
     dir="$fixture/anchored"
@@ -702,25 +730,45 @@ $FIXTURE_OUTPUT"
     } | /usr/bin/sudo -n tee "$GSA_STATE_DIR/abi/subscriptions" >/dev/null
     : >"$GSA_FAKE_MAKEPKG_LOG"
     : >"$GSA_FAKE_PACMAN_LOG"
+    # B5a (`--leaf`, exact selection — issue #4): the wave is the qt5
+    # anchor's batch and NOTHING else, and under --leaf it is DIAGNOSTIC:
+    # the rows name the batch, the plan is exactly qt5-base-git, and the
+    # llvm stack never enters.
     run_engine "$dir" -B --no-prefetch --leaf qt5-base-git
     [ "$FIXTURE_RC" -eq 0 ] ||
-        fail "B5: the qt5 batch must build (rc=$FIXTURE_RC):
+        fail "B5a: --leaf builds exactly what was named (rc=$FIXTURE_RC):
 $FIXTURE_OUTPUT"
     rr2_body <<<"$FIXTURE_OUTPUT" >/dev/null ||
-        fail "B5: no complete format: 2 run record:
+        fail "B5a: no complete format: 2 run record:
 $FIXTURE_OUTPUT"
     waves=$(grep '^abi-wave ' <<<"$FIXTURE_OUTPUT" | sort)
     [ "$waves" = "abi-wave qt5-base-git q5 recorded
 abi-wave qt5-base-git qt5-a coupled-must
 abi-wave qt5-base-git qt5-b coupled-must" ] ||
-        fail "B5: a qt5-base-git move must plan its OWN anchored batch only (E2), never the llvm stack:
+        fail "B5a: a qt5-base-git move computes its OWN anchored batch only (E2), never the llvm stack:
+$FIXTURE_OUTPUT"
+    [ "$(record_scalar order)" = "qt5-base-git" ] ||
+        fail "B5a: --leaf plans exactly the named recipe (issue #4): $(record_scalar order)"
+    grep -Fqx "BUILD qt5-base-git" "$GSA_FAKE_MAKEPKG_LOG" ||
+        fail "B5a: qt5-base-git never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    if grep -Eq '^BUILD (qt5-a|qt5-b|q5|llvm-git|rust-git)$' "$GSA_FAKE_MAKEPKG_LOG"; then
+        fail "B5a: a --leaf run planned a package the operator did not name: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+    fi
+
+    # B5b (the non-leaf control): consumer expansion plus the coupled-must
+    # rows bring the anchor's batch in — E2's anchored-batch shape, and the
+    # llvm stack (a DIFFERENT anchor) still never enters.
+    : >"$GSA_FAKE_MAKEPKG_LOG"
+    run_engine "$dir" -B --no-prefetch qt5-base-git
+    [ "$FIXTURE_RC" -eq 0 ] ||
+        fail "B5b: the qt5 batch must build (rc=$FIXTURE_RC):
 $FIXTURE_OUTPUT"
     for id in qt5-base-git qt5-a qt5-b q5; do
         grep -Fqx "BUILD $id" "$GSA_FAKE_MAKEPKG_LOG" ||
-            fail "B5: $id never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+            fail "B5b: $id never reached the stub makepkg: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
     done
     if grep -Eq '^BUILD (llvm-git|rust-git)$' "$GSA_FAKE_MAKEPKG_LOG"; then
-        fail "B5: a qt5-base-git move planned the llvm stack: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
+        fail "B5b: a qt5-base-git move planned the llvm stack: $(cat "$GSA_FAKE_MAKEPKG_LOG")"
     fi
 
     # B6: park isolation (contract §I.1: a failed member parks its batch

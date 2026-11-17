@@ -99,7 +99,8 @@ _Avoid_: group flag, second selection grammar
 
 **Leaf-only mode** (`--leaf`):
 A selection modifier that suppresses consumer expansion and builds exactly
-the named recipes.
+the named recipes — the ABI wave included: its `abi-wave` rows still render,
+its members join no plan and refuse nothing.
 _Avoid_: no-deps mode, dependency pruning ("dependency" is pacman's)
 
 **Pruning strengths**:

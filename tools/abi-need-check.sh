@@ -428,15 +428,21 @@ for target in "${targets[@]}"; do
                 # line for any tracked payload FILE (the resolve loop needs the
                 # non-ELF ones to skip), so a data file read
                 # `/usr/bin/ardour9` must never cover a loader name.
+                # The absolute form too: a path-style NEEDED (`/usr/lib/x`)
+                # names the file by its INSTALL path, which is exactly
+                # `/$relpath` (issue #3) — that is how a transaction that
+                # ships the provider covers its own consumer before the
+                # files land.
                 case $class in
-                    ELF64 | ELF32) tx_sonames+=("${relpath##*/}") ;;
+                    ELF64 | ELF32) tx_sonames+=("${relpath##*/}" "/$relpath") ;;
                 esac
                 ;;
             "link"$'\x1f'*)
                 # The LINK's own name is the loader name a consumer records;
                 # the file it resolves to keeps its regular-file name above.
+                # Its install path covers a path-style NEEDED the same way.
                 relpath=${line#*"$US"}
-                tx_sonames+=("${relpath##*/}")
+                tx_sonames+=("${relpath##*/}" "/$relpath")
                 ;;
         esac
     done <<<"$blob"
@@ -457,10 +463,38 @@ fi
 # Class-aware and dangling-aware: a 64-bit consumer is never satisfied by a
 # lib32 basename (audit root cause 1, 2026-10-22) and a dangling symlink is
 # not a file (audit root cause 3).
+# file_elf_class PATH — ELF64|ELF32, or empty when PATH is not an ELF. The
+# loader refuses a non-ELF as a shared object, so "not an ELF" resolves
+# nothing; the whole read is the 5-byte header (EI_MAG + EI_CLASS).
+file_elf_class() {
+    local bytes cls
+    bytes=$(od -An -tx1 -N5 -- "$1" 2>/dev/null | tr -d ' \n')
+    [[ $bytes == 7f454c46* ]] || return 0
+    cls=${bytes:8:2}
+    case $cls in
+        01) printf 'ELF32\n' ;;
+        02) printf 'ELF64\n' ;;
+    esac
+}
+
 host_resolves() {
     # $1 = soname, $2 = libdirs (colon separated), $3 = elf dir (for $ORIGIN)
     # $4 = ELF class (ELF64|ELF32) for the cache fallback
     local soname=$1 dir elf_dir=$3 path class=${4:-ELF64}
+    # A PATH-STYLE name is already where the loader will look: a
+    # DT_SONAME-less DSO linked by absolute path (`-l/usr/lib/libmujs.so`)
+    # records the path itself as DT_NEEDED, and ld.so opens exactly that
+    # file — it consults neither the default dirs nor ld.so.cache for a name
+    # containing '/'. Prefixing a libdir onto it can only ever miss
+    # (`/usr/lib//usr/lib/libmujs.so`), which is issue #3's fatal. Existence
+    # plus the consumer's ELF class is the whole answer; an absent path (or a
+    # non-ELF/garbage one) stays fatal — that is the vanished-provider case
+    # this hook exists for.
+    if [[ $soname == /* ]]; then
+        [[ -e $soname ]] || return 1
+        [[ $(file_elf_class "$soname") == "$class" ]]
+        return
+    fi
     local IFS=':'
     for dir in $2; do
         dir=${dir//\$ORIGIN/$elf_dir}
@@ -624,6 +658,9 @@ load_abi_exclusions() {
 # unversioned soname) first, then the family stem (`libfoo.so.3` -> `libfoo.so`).
 abi_excluded() {
     local name=$1 id
+    # The registry names libraries (a soname or its stem), never install
+    # paths: a path-style loader name is judged by its basename (issue #3).
+    [[ $name == /* ]] && name=${name##*/}
     for id in ${abi_ids[@]+"${abi_ids[@]}"}; do
         [[ $id == "$name" ]] && return 0
     done
@@ -768,9 +805,10 @@ for root in "${roots[@]}"; do
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \
                     "$pkg" "${relpath##*/}" "$needed"
                 pkg_findings=$((pkg_findings + 1))
-                # Attribution input for the summary: the family stem, never the
-                # versioned name.
-                stem=$needed
+                # Attribution input for the summary: the family stem, never
+                # the versioned name — and never the directory part of a
+                # path-style name, which no provide entry spells.
+                stem=${needed##*/}
                 while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
                 missing_stems[$stem]=1
             fi

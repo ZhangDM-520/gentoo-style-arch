@@ -123,7 +123,9 @@ These are part of the maintainer contract, not implementation details:
   record and range order are all the one topological order).
 - A selection expands to its transitive **consumers** (reverse build-order
   edges); prerequisites are assumed installed and current. `--leaf`
-  suppresses the expansion and builds exactly the named recipes.
+  suppresses the expansion and builds exactly the named recipes — the
+  computed ABI wave (§E.3) is diagnostic under it: the `abi-wave` rows
+  render, no member joins the plan and none refuses.
 - The `-S` family installs each package before its consumers compile.
 - `core` packages run alone with a separate memory-aware job budget.
 - **Cone-stop is the default failure policy**: a failed package parks its
