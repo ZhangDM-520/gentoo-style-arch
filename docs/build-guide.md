@@ -243,7 +243,8 @@ old-format baseline each forces a rebuild with a named diagnostic; anomaly
 diagnostics print even in quiet output. A partial output set never reaches
 install discovery at all.
 
-Two flags reshape the skip decision (2026-10-06, `docs/JOURNAL.md`):
+Two flags reshape the skip decision (2026-10-06, retired to the maintainer's
+private warehouse):
 
 - `--skip-built` claims "built remains built" with the freshness analysis
   **off**: the newest complete, payload-valid output set at **any** version is
@@ -277,8 +278,8 @@ answer, the recipe is *deferred* (lane rc 99, run-record reason
 `upstream-unverified`): nothing is skipped, built, or installed, its
 consumers wait, the rest of the run continues, and the run exits non-zero — an
 unverifiable upstream parks one recipe, it never fails the run and never
-licenses a skip (2026-10-02, `docs/JOURNAL.md`). A valid baseline whose ref
-moved follows the normal build path. On a genuine
+licenses a skip (2026-10-02, retired to the maintainer's private warehouse). A
+valid baseline whose ref moved follows the normal build path. On a genuine
 skip, `-S --skip` continues through the existing install path; a one-time
 legacy rebuild follows the normal build/install path.
 

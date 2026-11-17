@@ -699,8 +699,9 @@ pub fn stale_ignorepkg(input: &QaInput<'_>) -> CheckResult {
 }
 
 /// `declared-deps` (archive scope): the DT_NEEDED-vs-declared-deps axis
-/// (AGENTS.md rule 54's guard, the 2026-10-14 orphan incident —
-/// `docs/JOURNAL.md` "orphan-removal broke shared libs"). With `!autodeps` an
+/// (AGENTS.md rule 54's guard, the 2026-10-14 orphan incident — recorded in
+/// the maintainer's private warehouse as "orphan-removal broke shared libs").
+/// With `!autodeps` an
 /// archive's `depends` is exactly what its PKGBUILD declares, so a lib a
 /// build system auto-detects and links into the payload with no declared
 /// runtime dep leaves its provider dep-installed, later orphan-flagged

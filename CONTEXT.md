@@ -6,7 +6,8 @@ set. The set itself — recipes and declarative topology — lives in its own
 repository (`ZhangDM-520/gsa-recipe`), which keeps the same glossary for its
 readers; the terms below are the data model this engine implements, so they
 appear in code, the contract and the run record. Implementation lives in
-`docs/architecture.md`, history in `docs/JOURNAL.md`, rules in `AGENTS.md`.
+`docs/architecture.md`, history in the maintainer's private warehouse, rules in
+`AGENTS.md`.
 
 ## Language
 

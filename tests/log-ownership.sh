@@ -64,7 +64,8 @@ set -euo pipefail
 # stage real root-owned files through /usr/bin/sudo (W5): the two classes
 # diverge by design (its ownership gate is uid-based), which is why the
 # engine section pins `log-unwritable` via an immutable same-owner log while
-# the root-mode branch needs real root and is argued in docs/JOURNAL.md.
+# the root-mode branch needs real root and is argued in the maintainer's
+# private warehouse.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/fixture-lib.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/rr-v2.bash"

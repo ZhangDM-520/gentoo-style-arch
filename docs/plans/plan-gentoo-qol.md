@@ -6,10 +6,11 @@
 > `docs/MEMORY.md` and `docs/NOTE.md` citations — including line ranges — name
 > the documents as they stood when it was written; both were retired on
 > 2026-11-09. The live equivalents are `AGENTS.md` (the same rule numbers) and
-> `docs/JOURNAL.md` (the incident history); the pre-retirement text is in the
-> `pre-split-2026-11` tag. It lives in `docs/plans/` since 2026-11-10, so a
-> citation names it by that path (`docs/plans/plan.md` §2.1). This header is
-> the only edit; the body is untouched.
+> the incident history, retired to the maintainer's private warehouse on
+> 2026-11-17; the pre-retirement text is in the `pre-split-2026-11` tag. It
+> lives in `docs/plans/` since 2026-11-10, so a citation names it by that path
+> (`docs/plans/plan.md` §2.1). This header is the only edit; the body is
+> untouched.
 
 
 **Question answered:** how does Gentoo (Portage / eclasses / infrastructure) improve

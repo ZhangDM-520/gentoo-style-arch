@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Regression fixture for the 2026-09-25 LLVM-snapshot ABI-skew incident
-# (docs/JOURNAL.md, 2026-09-25): the run's own `llvm-git` install landed a new
-# LLVM C++ ABI mid-run and instantly broke the installed `rustc`
+# (retired to the maintainer's private warehouse): the run's own `llvm-git`
+# install landed a new LLVM C++ ABI mid-run and instantly broke the installed
+# `rustc`
 # (`librustc_driver` cannot resolve `llvm::cl::ParseCommandLineOptions…,
 # version LLVM_24.0`). The preflight probe (check_rustc_sanity) had passed at
 # run start and was never re-run, and recipes that compile Rust could be
@@ -1024,7 +1025,8 @@ has_member() { # $1 = comma list (groups or edges field), $2 = wanted member
 }
 
 # a. compile toolchains carry core,build-tools. The set is hard-coded on
-# purpose — the toolchain records of the 2026-10-04 migration (docs/JOURNAL.md);
+# purpose — the toolchain records of the 2026-10-04 migration (retired to the
+# maintainer's private warehouse);
 # a new toolchain record means adding its id here.
 toolchain_set=(
     cmake-git gcc-snapshot llvm-git meson-git mold-git qt5-tools qt6-tools

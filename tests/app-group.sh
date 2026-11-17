@@ -9,8 +9,8 @@ set -euo pipefail
 # fish build-all.fish driver is gone from this fixture. See
 # docs/gsa-fixture-migration.md row `tests/app-group.sh`.
 #
-# Pins (decisions recorded in docs/JOURNAL.md 2026-09-23; bracket = the surface
-# that pins each today):
+# Pins (decisions recorded in the maintainer's private warehouse 2026-09-23;
+# bracket = the surface that pins each today):
 #   1. loader demands config/topology.conf (a missing file = rc 2 naming it;
 #      a record naming no group is rc 2 naming the record and its line; the
 #      roster is the builder's six names — git, stable, core, misc, app,

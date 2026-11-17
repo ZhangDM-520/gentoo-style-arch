@@ -6,7 +6,8 @@ provenance, not specification: the authoritative interface is
 [`../gsa-contract.md`](../gsa-contract.md), the operating docs are
 [`../build-guide.md`](../build-guide.md) and
 [`../architecture.md`](../architecture.md), and the project memory is
-`AGENTS.md` plus [`../JOURNAL.md`](../JOURNAL.md).
+`AGENTS.md`; the incident history was retired to the maintainer's private
+warehouse on 2026-11-17.
 
 | Record | What it designed |
 | --- | --- |
@@ -46,8 +47,7 @@ Rules for these files:
   done | wc -l                                  # 148; pipe to `grep -c '^crates/'` for 75
   ```
 
-`tests/memory-layout.sh` gates the layout: the memory files must exist, the
-retired docs must stay retired, and a live citation of a retired path fails the
-battery. These records are excluded from that citation scan on purpose — their
-`docs/MEMORY.md` / `docs/NOTE.md` mentions are dated provenance, annotated in
-their own headers.
+`tests/memory-layout.sh` gates the layout: the agent bookkeeping paths must
+stay absent and `AGENTS.md` must exist. These records are kept regardless —
+their `docs/MEMORY.md` / `docs/NOTE.md` mentions are dated provenance, annotated
+in their own headers.

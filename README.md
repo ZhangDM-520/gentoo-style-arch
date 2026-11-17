@@ -79,8 +79,8 @@ sudo pacman -U packages/core/gsa-pm/gsa-pm-*.pkg.tar.zst
 
 | Repository | Holds | Memory |
 | --- | --- | --- |
-| `gentoo-style-arch` (this one) | `crates/`, `tests/`, `tools/`, engine docs | `AGENTS.md`, `docs/JOURNAL.md` |
-| `gsa-recipe` | `packages/`, `config/`, `lib/`, recipe fixtures and docs | its own `AGENTS.md`, `docs/JOURNAL.md` |
+| `gentoo-style-arch` (this one) | `crates/`, `tests/`, `tools/`, engine docs | `AGENTS.md`; the history lives in the maintainer's private warehouse |
+| `gsa-recipe` | `packages/`, `config/`, `lib/`, recipe fixtures and docs | its own `AGENTS.md`; the history lives in the maintainer's private warehouse |
 
 The boundary is the canonical recipe store: a build-user working copy fetched
 from `recipe_url` (default: the recipe repository) and refreshed in place by

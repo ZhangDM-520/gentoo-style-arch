@@ -454,16 +454,17 @@ fn status_text(status: &std::process::ExitStatus) -> String {
 /// loud — the probe's verbatim incident message is part of the log contract,
 /// `tests/toolchain-remediation.sh` asserts it). Every `Failed` detail embeds
 /// it so no failure rendering can drop the recovery options.
-const SKEW_NOTE: &str =
-    "Almost certainly llvm-libs-git is NEWER than rust-git (LLVM snapshots have no
-stable C++ ABI — see docs/JOURNAL.md 2026-09-07 – 09). Every build using rustc
-in this run would fail or miscompile.
+const SKEW_NOTE: &str = "Almost certainly llvm-libs-git is NEWER than rust-git (LLVM snapshots have
+no stable C++ ABI — see the 2026-09-07 – 09 incident record in the maintainer's
+private warehouse). Every build using rustc in this run would fail or
+miscompile.
 Recovery: rebuild rust-git — its bootstrap uses the DOWNLOADED official
 stage0, so no working system rustc is needed (gsa -S --leaf rust-git; for a
 direct makepkg use a scratch copy of the recipe OUTSIDE the repo — an
 in-tree build collides with the engine's own Rust workspace). LAST resort:
 downgrade-rebuild llvm-libs at the snapshot rust-git was built against
-(old version in /var/log/pacman.log; procedure in docs/JOURNAL.md).
+(old version in /var/log/pacman.log; the procedure is in the maintainer's
+private warehouse).
 Bypass anyway: --allow-broken-rustc";
 
 /// Removes the probe scratch (rm -f semantics) and folds any leftover into

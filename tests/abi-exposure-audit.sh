@@ -78,8 +78,9 @@ add_package "$ws" libs-git "$gsa_meta_any"
 
 # db_install DBROOT NAME VERSION [PROVIDE…] [ — DEPEND…] — one fabricated
 # pacman local-DB entry (`<db>/local/<name>-<ver>/{desc,files}`), the shape
-# crates/gsa-install/src/localdb.rs reads (docs/JOURNAL.md: fixtures never read
-# host state). The entries after a lone `--` are %DEPENDS% rows.
+# crates/gsa-install/src/localdb.rs reads (the maintainer's private warehouse:
+# fixtures never read host state). The entries after a lone `--` are %DEPENDS%
+# rows.
 db_install() {
     local db=$1 name=$2 version=$3
     shift 3

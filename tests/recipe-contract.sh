@@ -478,11 +478,12 @@ EOF
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── G. declared-deps: the DT_NEEDED-vs-declared-deps axis, red/green ───────
-# The guard for AGENTS.md rule 54's gap (docs/JOURNAL.md 2026-10-14
-# "orphan-removal broke shared libs"): with !autodeps an archive's depends is
-# exactly what its PKGBUILD declares, so a payload link whose provider is not
-# in the declared-depends closure leaves the provider dep-installed,
-# orphan-flagged and removable. The staged shape is the incident's, in a
+# The guard for AGENTS.md rule 54's gap (the maintainer's private warehouse,
+# 2026-10-14 "orphan-removal broke shared libs"): with !autodeps an archive's
+# depends is exactly what its PKGBUILD declares, so a payload link whose
+# provider is not in the declared-depends closure leaves the provider
+# dep-installed, orphan-flagged and removable. The staged shape is the
+# incident's, in a
 # synthetic workspace: prov-git ships usr/lib/libfoo.so.3 and declares
 # provides = libfoo.so; app-git's usr/lib/libapp.so.1 NEEDs libfoo.so.3
 # (undeclared → undeclared-link), libghost.so.1 (nothing provides it →

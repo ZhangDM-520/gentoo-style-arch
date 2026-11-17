@@ -122,8 +122,9 @@ or a filesystem write.
 
 ## Documentation
 
-`docs/JOURNAL.md` gets one dense dated line per action; the detail belongs in
-the action export, not in the line. `AGENTS.md` holds the rules and pitfalls —
-update it when an operational contract changes, and record the incident that
-justified a new rule in the journal line. `docs/gsa-contract.md` changes are
-amendments: they are dated, and the rule they encode is named.
+The action history lives in the maintainer's private warehouse: one dense dated
+line per action, with the detail in the action export, not in the line.
+`AGENTS.md` holds the rules and pitfalls — update it when an operational
+contract changes, and record the incident that justified a new rule in the same
+warehouse entry. `docs/gsa-contract.md` changes are amendments: they are dated,
+and the rule they encode is named.
