@@ -123,6 +123,21 @@ make_bin_path() {
         fail "synthesis failed to record DT_NEEDED $recorded"
 }
 
+# make_bin_path32 DIR FILENAME LINK — the `-m32` twin of `make_bin_path`: a
+# real ELF32 DSO recording LINK as a path-style DT_NEEDED. The class assertions
+# are the point: a header-shaped stub would let the class case pass for the
+# wrong reason.
+make_bin_path32() {
+    local dir=$1 file=$2 link=$3
+    mkdir -p "$dir"
+    printf 'int gsa_fixture_anchor32;\n' |
+        cc -m32 -shared -x c - -x none -Wl,--no-as-needed "$link" -o "$dir/$file"
+    readelf -hW "$dir/$file" | grep -q 'Class: *ELF32' ||
+        fail "synthesis did not produce an ELF32 consumer: $dir/$file"
+    readelf -dW "$dir/$file" | grep -q "NEEDED.*\[$link\]" ||
+        fail "synthesis failed to record path-style DT_NEEDED $link"
+}
+
 # make_stub_with_soname OUT SONAME — a throwaway DSO carrying SONAME, for a
 # consumer that must record a path WITHOUT that path existing on the host.
 make_stub_with_soname() {
@@ -810,17 +825,54 @@ run out err -- --quiet "$tmp/h" || status=$?
 [[ $out == *"needs '$tmp/hostpath/usr/lib/libnopath-fixture.so'"* ]] ||
     fail "the absent path-style finding lost its exact path: $out"
 
-# Class guard: the file exists but is not the consumer's ELF class. A data
-# file (or a lib32 object) standing at the recorded path is not loadable by
-# a 64-bit consumer, so it stays fatal — "exists" alone is not resolution.
+# The exact path is the WHOLE answer: `ld.so` opens it and never consults the
+# cache for a name containing '/'. A cache row carrying the same BASENAME but
+# pointing at a different file must not resolve it — that fallback was
+# proposed in review and rejected here, because it turns a real miss green
+# (measured: rc 0 on this shape with the fallback in place).
+mkdir -p "$tmp/bn/usr/lib" "$tmp/bn/usr/bin" "$tmp/bnstub"
+make_lib "$tmp/bn/usr/lib" libdecoy-fixture.so libdecoy-fixture.so
+make_stub_with_soname "$tmp/bn-stub.so" "$tmp/hostpath/usr/lib/libnopath-fixture.so"
+make_bin_path "$tmp/bn/usr/bin" basename-consumer "$tmp/bn-stub.so" "$tmp/hostpath/usr/lib/libnopath-fixture.so"
+cat >"$tmp/bnstub/ldconfig" <<EOF
+#!/usr/bin/env bash
+printf '1 libs found in cache\n'
+printf '\tlibnopath-fixture.so (libc6,x86-64) => $tmp/bn/usr/lib/libdecoy-fixture.so\n'
+EOF
+chmod +x "$tmp/bnstub/ldconfig"
+make_pkgroot "$tmp/bn" pkg-path-basename-decoy
+status=0
+PATH="$tmp/bnstub:$PATH" run out err -- --quiet "$tmp/bn" || status=$?
+[[ $status == 1 ]] || fail "a basename cache row resolved a path-style need (want 1), got $status: $out"
+[[ $out == *"needs '$tmp/hostpath/usr/lib/libnopath-fixture.so'"* ]] ||
+    fail "basename-decoy finding lost its exact path: $out"
+
+# Class guard: the file EXISTS at the recorded path but is not the consumer's
+# ELF class. Both directions are linked for real (`-m32` yields a genuine
+# ELF32 object, not a header-shaped stub): a 64-bit consumer must not be
+# satisfied by a 32-bit file, and a 32-bit consumer must be satisfied by it —
+# so the refusal is a class decision, not a blanket refusal of path-style
+# names. "Exists" alone is not resolution.
 mkdir -p "$tmp/cl"
-printf '\x7fELF\x01\x01\x01' >"$tmp/cl/libclass-fixture.so"
+printf 'int gsa_fixture_anchor;\n' |
+    cc -m32 -shared -x c - -o "$tmp/cl/libclass-fixture.so"
+readelf -hW "$tmp/cl/libclass-fixture.so" | grep -q 'Class: *ELF32' ||
+    fail 'synthesis did not produce an ELF32 provider (the class case would pass for the wrong reason)'
 make_stub_with_soname "$tmp/cl-stub.so" "$tmp/cl/libclass-fixture.so"
 make_bin_path "$tmp/clpkg/usr/bin" class-consumer "$tmp/cl-stub.so" "$tmp/cl/libclass-fixture.so"
 make_pkgroot "$tmp/clpkg" pkg-path-class
 status=0
 run out err -- --quiet "$tmp/clpkg" || status=$?
-[[ $status == 1 ]] || fail "an ELF32-class file resolved a 64-bit path-style need (want 1), got $status: $out"
+[[ $status == 1 ]] || fail "an ELF32 file resolved a 64-bit path-style need (want 1), got $status: $out"
+[[ $out == *"needs '$tmp/cl/libclass-fixture.so'"* ]] ||
+    fail "64-bit class-mismatch finding lost: $out"
+
+make_bin_path32 "$tmp/cl32pkg/usr/lib" class32-consumer "$tmp/cl/libclass-fixture.so"
+make_pkgroot "$tmp/cl32pkg" pkg-path-class32
+status=0
+run out err -- --quiet "$tmp/cl32pkg" || status=$?
+[[ $status == 0 ]] || fail "an ELF32 consumer did not resolve its own class at the path (want 0), got $status: $err $out"
+[[ $out != *'libclass-fixture.so'* ]] || fail "the resolved ELF32 path-style name still reported: $out"
 
 # Transaction-internal: a payload that SHIPS the SONAME-less provider at the
 # exact absolute path the consumer records covers it before the files land.
