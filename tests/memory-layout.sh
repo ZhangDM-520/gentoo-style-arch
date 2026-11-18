@@ -17,12 +17,12 @@ set -euo pipefail
 # diverges from the warehouse and that nobody reading the public tree can
 # reconcile.
 #
-# `docs/plans/` is deliberately NOT in the absent list. It holds archive-class
-# design records that `crates/` and `docs/gsa-contract.md` cite by path and
-# section (measured 2026-11-14: 148 citation lines, 75 from `crates/`). Those
-# are provenance, not bookkeeping, and the retirement classification keeps
-# design docs: deleting one breaks the compilation comments and contract
-# paragraphs that cite it.
+# The agent-era doc class is retired with it (2026-11-18): `docs/plans/`, the
+# ADRs, the fixture inventory and the review/audit records were agent-produced
+# design and campaign records, and git history is their archive. `crates/` and
+# `docs/gsa-contract.md` still cite them by path and section — those citations
+# are provenance, so they stay and resolve through `git show <commit>:<path>`
+# rather than a re-created file.
 #
 # The assertions are on the CONTRACT — path presence and absence — never on
 # prose wording, and they carry no host path, no `~` reference and no
@@ -48,9 +48,12 @@ fail() {
 
 # Existence alone would pass on a truncated file, so the entry point also
 # clears a floor: a stub that lost its body must fail loudly, not silently.
+# The floor is deliberately far below the file's real length — AGENTS.md is an
+# agent-facing README, not a rules dump, and it shrinks as bodies move to the
+# warehouse.
 lines=$(wc -l <"$root/AGENTS.md")
-((lines >= 100)) ||
-    fail "AGENTS.md is a stub: $lines line(s), want at least 100 (entry point truncated?)"
+((lines >= 40)) ||
+    fail "AGENTS.md is a stub: $lines line(s), want at least 40 (entry point truncated?)"
 
 # ─── 2. The retired bookkeeping paths are absent ───────────────────────────
 # A re-created path is a second source of truth: it would silently diverge from
@@ -68,12 +71,17 @@ for f in \
     docs/pitfalls.md \
     docs/rules.md \
     docs/queue.md \
+    docs/plans \
+    docs/adr \
+    docs/audit \
+    docs/audits \
+    docs/gsa-fixture-migration.md \
     scratchpad.md \
     MEMORY.md \
     NOTE.md \
     CURRENT.md; do
     if [[ -e $root/$f ]]; then
-        fail "$f is retired agent bookkeeping (moved to the maintainer's private warehouse on 2026-11-17) — delete it rather than restoring a second source of truth in the public tree"
+        fail "$f is retired agent bookkeeping (archived outside this tree) — delete it rather than restoring a second source of truth in the public tree"
     fi
 done
 

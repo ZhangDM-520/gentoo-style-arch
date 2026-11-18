@@ -14,9 +14,10 @@ plans. It never evaluates recipe shell and never touches pacman's database.
 | `gsa-graph` | Consumer expansion (reverse build-order closure), one canonical topological sort with cycle refusal, coupled-batch and `app-cluster` grouping |
 | `gsa-cli` | The `gsa` binary: hand-rolled action-pass argv grammar (§B), selection semantics (§C), the read-only command surface and its renderings |
 
-Not yet in this workspace (later phases, deliberately not stubbed):
-`gsa-sched`, `gsa-build`, `gsa-install`, `gsa-fetch`, `gsa-state`, `gsa-qa`,
-`gsa-maint`, `gsa-abi` (`docs/plans/plan-native-pm.md` §3.1).
+Beyond the read-only core the workspace holds the build and install domain
+(`gsa-sched`, `gsa-build`, `gsa-install`, `gsa-fetch`), side-car state and the
+maintenance surface (`gsa-state`, `gsa-qa`, `gsa-maint`), and the ABI view
+(`gsa-abi`); `docs/architecture.md` owns the split.
 
 Build and check: `cargo build`, `cargo test`, `cargo fmt --check`.
 Run: `./target/release/gsa --help`.

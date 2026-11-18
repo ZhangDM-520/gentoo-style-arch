@@ -30,11 +30,9 @@ builds with `cargo`.
 - **`tools/`** — the ABI pre-transaction checker and its hook, installed by the
   `gsa-pm` package.
 - **`docs/`** — `gsa-contract.md` (the authoritative interface),
-  `build-guide.md`, `architecture.md`, `portability.md`, the fixture
-  migration inventory, the decision records (`adr/`), and `JOURNAL.md` (one
-  dense line per action). `docs/plans/` holds the four archive-class design
-  records that code comments cite by section — provenance, never
-  specification (see `docs/plans/README.md`).
+  `build-guide.md`, `architecture.md` and `portability.md`. The design
+  records, the ADRs and the fixture inventory are archived in git history;
+  the action history lives in the maintainer's private warehouse.
 
 What is deliberately absent: recipes, upstream source trees, package archives,
 signatures and build output. The engine consumes a recipe workspace and never
@@ -96,9 +94,7 @@ build sees until the store syncs.
 | `docs/build-guide.md` | Operations: families, inspect/dry-run/build, installation semantics, environment surface, troubleshooting |
 | `docs/architecture.md` | The crate split and the scheduler's invariants |
 | `docs/portability.md` | Intensity profiles and their formulas, CPU/ISA policy |
-| `docs/gsa-fixture-migration.md` | Per-fixture inventory: what each fixture pins, KEEP vs REWRITE |
-| `docs/adr/` | The decisions that fought back: the run record, the prefetch advisory |
-| `AGENTS.md` | This repository's memory: rules, pitfalls, queue, shell-boundary hazards |
+| `AGENTS.md` | The agent-facing README: mental model, how to work here, the rule and pitfall index, where memory lives |
 | `CONTRIBUTING.md` | Change hygiene, the validation standard, the commit policy |
 | `SECURITY.md` | Trust model and safe-operation rules |
 

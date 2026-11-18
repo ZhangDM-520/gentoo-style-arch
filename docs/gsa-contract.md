@@ -30,6 +30,16 @@ scheduler invariants); `CONTEXT.md` (vocabulary and terms to avoid);
 authoritative current flag inventory `gsa --help` (amended 2026-11-09: the
 fish entry point it once named is deleted).
 
+*Amendment (2026-11-18, the agent-era doc retirement).* The design records,
+ADRs and fixture inventory this document cites — `docs/plans/*`, `docs/adr/*`,
+`docs/gsa-fixture-migration.md` — were retired with the rest of that class, and
+git history is their archive. Read any `docs/plans/…`, `docs/adr/…` or
+`docs/gsa-fixture-migration.md` citation here and in `crates/` and `tests/` as
+a reference to the archive copy at that path (`git show <commit>:<path>`); the
+headings, section numbers and anchors are unchanged there, so the reference
+resolves. Nothing normative moved: where a record was binding, its rule is
+restated here or encoded in `AGENTS.md` or a fixture.
+
 ---
 
 ## A. Purpose, scope, non-goals
@@ -2089,10 +2099,10 @@ dispatch; a failure parks a cone (§I).
 6. **Behavioural changes to scheduling, install, state, or signals require a
    fixture in the same change** — there is no CI and no compiled test surface
    beyond fixtures and `makepkg`; a real rebuild is never a syntax check.
-7. **`AGENTS.md` and `docs/adr/` move with the contract**: an operational
-   contract change updates the matching AGENTS.md rule; this document's amendment
-   to ADR 0003 (run-record persistence, §H.1) must be recorded in that ADR
-   when the side-car run history lands.
+7. **`AGENTS.md` moves with the contract**: an operational contract change
+   updates the matching AGENTS.md rule. This document's amendment to ADR 0003
+   (run-record persistence, §H.1) is recorded here and in the maintainer's
+   private warehouse, where the ADRs now live (2026-11-18 amendment).
 8. **Verification is never weakened to get green** (`AGENTS.md` rule 15;
    §A.3.4): no `--skipchecksums`, no `--skippgpcheck`, no dropped `#signed`, in
    any code path including hidden seams and future phases.
@@ -2221,6 +2231,6 @@ rationale each.
 | G10 `--lane-job` flags grammar | **closed by documentation**: `check_flag_payload` grammar + the three forbidden verification-bypass tokens | §D.1 amendment |
 | G11 workspace discovery | **closed by documentation**: `config/topology.conf` found from the cwd upward; the frozen fish oracle is the one self-located exception | §B.8 amendment |
 | G12 parser strictness | **closed by documentation**: the strict `format: 2` rules (no blank lines/control characters, no duplicate scalars/rows/continuation keys, plan/outcome rows agree with `order`, `rc` is the status's lane code or `-`, all four sections required, unknown continuation keys rejected, extension scalars accepted) are the normative reading, implemented by `tests/lib/rr-v2.bash rr2_body` | §H.2 amendment |
-| G7 phase mapping | **no action needed**: the phases were the migration plan's, not the contract's; the inventory assigned them and all five have landed | `docs/gsa-fixture-migration.md` |
+| G7 phase mapping | **no action needed**: the phases were the migration plan's, not the contract's; the inventory assigned them and all five have landed | the fixture inventory, now archived in git history |
 | G9 v2 prose spec | **deferred**: prose wording is pinned in exactly one rendering test only (§L.5); a normative prose spec is a design task, not a cutover fix | §L.5 |
 | selection-source grammar (G2 half) | **fixed by documentation**: `sets=<…> leaf=<yes\|no> range=<…>` | §H.2 amendment |
