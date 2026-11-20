@@ -341,7 +341,7 @@ compgen -G "$tmp/factcache/*.facts" >/dev/null || fail "fact cache not written"
 sha=$(sha256sum "$tmp/cache/pkg-clean-1.0.0-1-any.pkg.tar.zst")
 sha=${sha%% *}
 {
-    printf '# gsa-abi-need-check facts v2 %s\n' "$sha"
+    printf '# gsa-abi-need-check facts v3 %s\n' "$sha"
     printf 'pkg\x1fpkg-clean\n'
     printf 'file\x1fusr/bin/consumer\x1fELF64\x1f\x1f\x1flibmissing-fixture.so.42\n'
 } >"$tmp/factcache/$sha.facts"
@@ -896,4 +896,297 @@ run out err -- --quiet "$tmp/txo" || status=$?
 [[ $status == 1 ]] || fail "an unshipped path-style name resolved (want 1), got $status: $out"
 [[ $out == *"needs '/usr/lib/libinpay-fixture.so'"* ]] || fail "unshipped path-style finding lost: $out"
 
-printf 'abi-need-check fixture: ok\n'
+# ── 21. issue #7: a transaction that DROPS a soname strands its consumers ─
+# Phase 2 resolves the incoming packages' DT_NEEDED only, so a provider
+# moving `libsndio.so.7 -> .so.9` passed while every installed consumer of
+# the OLD soname lost its file at the same instant (measured 2026-11-20:
+# mpv, celluloid and kodi.bin died on a stock `pacman -Syu`). The hook now
+# diffs the incoming sonames against the INSTALLED package's shipped set
+# (the pacman local DB), resolves installed consumers of what it takes
+# away, and refuses with `need-rebuild` rows.
+#
+# The synthetic world is a root prefix plus a three-entry local DB: the
+# installed `sndio 1.11.0-1` owns one DSO, three consumers link it, and the
+# incoming `sndio 1.11.0-2` ships only `.so.9`.
+drop_root="$tmp/drop-root"
+drop_db="$tmp/drop-db"
+drop_cache="$tmp/drop-cache"
+drop_bin="$tmp/drop-bin"
+mkdir -p "$drop_root/usr/lib" "$drop_root/usr/bin" "$drop_cache" \
+    "$drop_db/local/sndio-1.11.0-1" "$drop_bin"
+make_lib "$drop_root/usr/lib" libsndio.so.7 libsndio.so.7
+make_bin "$drop_root/usr/bin" mpv libsndio.so.7
+make_bin "$drop_root/usr/bin" celluloid libsndio.so.7
+# Not a `*.so*` name and nested one level down — the kodi.bin shape: the
+# executable bit is what makes it a candidate, not its name.
+make_bin "$drop_root/usr/lib/kodi" kodi.bin libsndio.so.7
+mkdir -p "$drop_root/opt/stockapp/bin"
+make_bin "$drop_root/opt/stockapp/bin" stockapp libsndio.so.7
+chmod +x "$drop_root/usr/bin/mpv" "$drop_root/usr/bin/celluloid" \
+    "$drop_root/usr/lib/kodi/kodi.bin" "$drop_root/opt/stockapp/bin/stockapp"
+cat >"$drop_db/local/sndio-1.11.0-1/desc" <<'EOF'
+%NAME%
+sndio
+
+%VERSION%
+1.11.0-1
+EOF
+cat >"$drop_db/local/sndio-1.11.0-1/files" <<'EOF'
+%FILES%
+usr/
+usr/lib/
+usr/lib/libsndio.so.7
+EOF
+cat >"$drop_bin/pacman" <<EOF
+#!/usr/bin/env bash
+case \${1:-} in
+-Qoq)
+    case \${2:-} in
+    "$drop_root"/usr/bin/mpv) echo mpv ;;
+    "$drop_root"/usr/bin/celluloid) echo celluloid ;;
+    "$drop_root"/usr/lib/kodi/kodi.bin) echo kodi ;;
+    "$drop_root"/opt/stockapp/bin/stockapp) echo stockapp ;;
+    *) exit 1 ;;
+    esac
+    ;;
+*) exit 0 ;;
+esac
+EOF
+chmod +x "$drop_bin/pacman"
+# The incoming archive: same pkgname, one new generation of the soname.
+make_lib "$tmp/drop-new/usr/lib" libsndio.so.9 libsndio.so.9
+printf 'pkgname = sndio\npkgver = 1.11.0-2\narch = any\n' >"$tmp/drop-new/.PKGINFO"
+tar --zstd -cf "$drop_cache/sndio-1.11.0-2-any.pkg.tar.zst" -C "$tmp/drop-new" .
+# A second transaction member that still ships the old generation: the drop
+# is not a drop when another member carries it.
+make_lib "$tmp/drop-compat/usr/lib" libsndio.so.7 libsndio.so.7
+printf 'pkgname = libsndio-compat\npkgver = 1.11.0-2\narch = any\n' >"$tmp/drop-compat/.PKGINFO"
+tar --zstd -cf "$drop_cache/libsndio-compat-1.11.0-2-any.pkg.tar.zst" -C "$tmp/drop-compat" .
+# The consumer that IS a transaction member (its own upgrade clears it).
+mkdir -p "$tmp/drop-mpv/usr/bin"
+# A non-ELF payload is enough: this member exists to be IN the transaction,
+# and phase 2 finds nothing to resolve inside it.
+: >"$tmp/drop-mpv/usr/bin/mpv"
+printf 'pkgname = mpv\npkgver = 0.42.0-3\narch = any\n' >"$tmp/drop-mpv/.PKGINFO"
+tar --zstd -cf "$drop_cache/mpv-0.42.0-3-any.pkg.tar.zst" -C "$tmp/drop-mpv" .
+
+drop_env=(PATH="$drop_bin:$PATH" GSA_ABI_NEED_CHECK_ROOT="$drop_root"
+    GSA_ABI_NEED_CHECK_LOCALDB="$drop_db" GSA_ABI_NEED_CHECK_CACHE="$drop_cache"
+    GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/drop-facts")
+
+# The exact row set the issue's acceptance pins.
+status=0
+out=$(printf 'sndio\n' | env "${drop_env[@]}" "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] || fail "a dropped soname did not refuse (want 1), got $status: $out"
+[[ $out == *'sndio: drops libsndio.so.7 (installed consumers: celluloid, kodi, mpv, stockapp)'* ]] ||
+    fail "drop row lost or unordered: $out"
+for consumer in mpv celluloid kodi stockapp; do
+    [[ $out == *"need-rebuild $consumer libsndio.so.7"* ]] ||
+        fail "missing need-rebuild row for $consumer: $out"
+done
+[[ $out != *': clean ('* ]] || fail "a clean line rode a finding: $out"
+
+# The provider's own `provides = libsndio.so=9-64` parses to the bare stem
+# `libsndio.so`, and a stem match would class `.so.7` as covered — the exact
+# false negative this phase exists to stop (blind review 2026-11-20).
+make_lib "$tmp/drop-prov/usr/lib" libsndio.so.9 libsndio.so.9
+{
+    printf 'pkgname = sndio\n'
+    printf 'pkgver = 1.11.0-3\n'
+    printf 'arch = any\n'
+    printf 'provides = libsndio.so=9-64\n'
+} >"$tmp/drop-prov/.PKGINFO"
+# Its own cache: newest-wins would otherwise hand the other cases this
+# archive, and each case must pin ONE input.
+mkdir -p "$tmp/drop-cache-prov"
+tar --zstd -cf "$tmp/drop-cache-prov/sndio-1.11.0-3-any.pkg.tar.zst" -C "$tmp/drop-prov" .
+status=0
+# `env` applies assignments left to right, so the per-case override comes
+# AFTER the shared set — the other order silently ran the wrong cache.
+out=$(printf 'sndio\n' |
+    env "${drop_env[@]}" GSA_ABI_NEED_CHECK_CACHE="$tmp/drop-cache-prov" \
+    "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] ||
+    fail "a versioned provide swallowed the dropped generation (want 1), got $status: $out"
+[[ $out == *'need-rebuild mpv libsndio.so.7'* ]] ||
+    fail "the dropped generation was not reported beside the provide: $out"
+
+# A consumer carried by the transaction is covered — exactly the engine's
+# `in_tx`, and its own upgrade is what clears it.
+status=0
+out=$(printf 'sndio\nmpv\n' | env "${drop_env[@]}" "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] || fail "uncovered consumers must still refuse (want 1), got $status: $out"
+[[ $out != *'need-rebuild mpv '* ]] || fail "a transaction member was named for rebuild: $out"
+[[ $out == *'need-rebuild celluloid libsndio.so.7'* ]] ||
+    fail "covered member swallowed the other consumers: $out"
+
+# Another member shipping the old generation is coverage too.
+status=0
+out=$(printf 'sndio\nlibsndio-compat\n' | env "${drop_env[@]}" "$tool" --from-names 2>&1) || status=$?
+[[ $status == 0 ]] || fail "a co-shipped soname still refused (want 0), got $status: $out"
+[[ $out != *'need-rebuild'* ]] || fail "co-shipped soname produced rebuild rows: $out"
+
+# The reviewed exclusion registry still wins.
+printf 'libsndio.so.7|documented gap|2027-04-01\n' >"$tmp/drop-exclusions.conf"
+status=0
+out=$(printf 'sndio\n' |
+    GSA_ABI_NEED_CHECK_EXCLUSIONS="$tmp/drop-exclusions.conf" \
+    env "${drop_env[@]}" "$tool" --from-names 2>&1) || status=$?
+[[ $status == 0 ]] || fail "an excluded soname still refused (want 0), got $status: $out"
+
+# A fresh install (no installed entry) can only ADD sonames. The archive
+# must really exist, or the hook exits before phase 3 and the case proves
+# nothing (round-3 review 2026-11-20).
+mkdir -p "$tmp/drop-brand/usr/lib" "$tmp/drop-cache-brand"
+make_lib "$tmp/drop-brand/usr/lib" libbrand.so.1 libbrand.so.1
+printf 'pkgname = brand-new\npkgver = 1.0-1\narch = any\n' >"$tmp/drop-brand/.PKGINFO"
+tar --zstd -cf "$tmp/drop-cache-brand/brand-new-1.0-1-any.pkg.tar.zst" -C "$tmp/drop-brand" .
+status=0
+out=$(printf 'brand-new\n' |
+    env "${drop_env[@]}" GSA_ABI_NEED_CHECK_CACHE="$tmp/drop-cache-brand" \
+    "$tool" --from-names 2>&1) || status=$?
+[[ $status == 0 ]] || fail "a fresh install refused (want 0), got $status: $out"
+[[ $out == *'brand-new: clean ('* ]] ||
+    fail "the fresh-install archive was never scanned: $out"
+[[ $out != *'drops ' && $out != *'unreadable'* ]] ||
+    fail "a package with no installed entry reported a drop: $out"
+
+# An unreadable installed entry is NOT "drops nothing" (rule 71).
+ln -sfn "$tmp/does-not-exist-files" "$drop_db/local/sndio-1.11.0-1/files"
+status=0
+out=$(printf 'sndio\n' | env "${drop_env[@]}" "$tool" --from-names 2>&1) || status=$?
+rm -f "$drop_db/local/sndio-1.11.0-1/files"
+cat >"$drop_db/local/sndio-1.11.0-1/files" <<'EOF'
+%FILES%
+usr/
+usr/lib/
+usr/lib/libsndio.so.7
+EOF
+[[ $status == 1 ]] || fail "an unreadable installed entry passed (want 1), got $status: $out"
+[[ $out == *'sndio: installed file list is unreadable'* ]] ||
+    fail "unreadable entry finding lost: $out"
+
+# Coverage is CLASS-SCOPED: upgrading `sndio` beside `lib32-sndio` ships the
+# same soname for the 32-bit class only, and the 64-bit consumers are exactly
+# who die (round-2 spec review 2026-11-20).
+mkdir -p "$tmp/drop-cache-class"
+cp "$drop_cache/sndio-1.11.0-2-any.pkg.tar.zst" "$tmp/drop-cache-class/"
+mkdir -p "$tmp/drop-new32/usr/lib32"
+printf 'int gsa_fixture_anchor32;\n' |
+    cc -m32 -shared -x c - -Wl,-soname,libsndio.so.7 \
+        -o "$tmp/drop-new32/usr/lib32/libsndio.so.7" ||
+    fail "cannot synthesise a 32-bit payload (multilib toolchain missing)"
+printf 'pkgname = lib32-sndio\npkgver = 1.11.0-2\narch = any\n' >"$tmp/drop-new32/.PKGINFO"
+tar --zstd -cf "$tmp/drop-cache-class/lib32-sndio-1.11.0-2-any.pkg.tar.zst" \
+    -C "$tmp/drop-new32" .
+status=0
+out=$(printf 'sndio\nlib32-sndio\n' |
+    env "${drop_env[@]}" GSA_ABI_NEED_CHECK_CACHE="$tmp/drop-cache-class" \
+    "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] ||
+    fail "a 32-bit co-ship covered the 64-bit drop (want 1), got $status: $out"
+[[ $out == *'need-rebuild mpv libsndio.so.7'* ]] ||
+    fail "the 64-bit consumers were covered by a 32-bit ship: $out"
+
+# A consumer carrying its OWN copy along RUNPATH is not a consumer of what
+# disappears: the loader never leaves the bundle (round-2 spec review
+# 2026-11-20). The provider's file is still dropped for everyone else.
+make_lib "$drop_root/opt/bundle/lib" libsndio.so.7 libsndio.so.7
+mkdir -p "$drop_root/opt/bundle/bin"
+make_bin "$drop_root/opt/bundle/bin" bundled libsndio.so.7 '$ORIGIN/../lib'
+chmod +x "$drop_root/opt/bundle/bin/bundled"
+drop_bin2="$tmp/drop-bin2"
+mkdir -p "$drop_bin2"
+cp "$drop_bin/pacman" "$drop_bin2/pacman"
+cat >"$drop_bin2/pacman" <<EOF
+#!/usr/bin/env bash
+case \${1:-} in
+-Qoq)
+    case \${2:-} in
+    "$drop_root"/usr/bin/mpv) echo mpv ;;
+    "$drop_root"/usr/bin/celluloid) echo celluloid ;;
+    "$drop_root"/usr/lib/kodi/kodi.bin) echo kodi ;;
+    "$drop_root"/opt/stockapp/bin/stockapp) echo stockapp ;;
+    "$drop_root"/opt/bundle/bin/bundled) echo bundled ;;
+    *) exit 1 ;;
+    esac
+    ;;
+*) exit 0 ;;
+esac
+EOF
+chmod +x "$drop_bin2/pacman"
+status=0
+out=$(printf 'sndio\n' |
+    env "${drop_env[@]}" PATH="$drop_bin2:$PATH" "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] || fail "a bundled private copy still refused (want 1), got $status: $out"
+[[ $out == *'need-rebuild mpv libsndio.so.7'* ]] ||
+    fail "the bundled app swallowed the real consumers: $out"
+[[ $out != *'need-rebuild bundled'* && $out != *'need-rebuild /'"$drop_root"'/opt/bundle/bin/bundled'* ]] ||
+    fail "a consumer with its own RUNPATH copy was reported: $out"
+rm -rf "$drop_root/opt/bundle" "$drop_bin2"
+
+# A scan whose candidate set is exactly ONE file still resolves it: readelf
+# prints no `File:` marker for a single input, so the chunker writes one
+# (round-3 review 2026-11-20). The provider's own DSO lives outside the
+# scanned roots here, which leaves the consumer as the only candidate.
+single_root="$tmp/single-root"
+single_db="$tmp/single-db"
+mkdir -p "$single_root/var/lib/sndio" "$single_root/usr/bin" "$single_db/local/sndio-1.11.0-1"
+make_lib "$single_root/var/lib/sndio" libsndio.so.7 libsndio.so.7
+make_bin "$single_root/usr/bin" only-consumer libsndio.so.7
+chmod +x "$single_root/usr/bin/only-consumer"
+cat >"$single_db/local/sndio-1.11.0-1/desc" <<'EOF'
+%NAME%
+sndio
+
+%VERSION%
+1.11.0-1
+EOF
+cat >"$single_db/local/sndio-1.11.0-1/files" <<'EOF'
+%FILES%
+var/
+var/lib/
+var/lib/sndio/
+var/lib/sndio/libsndio.so.7
+usr/
+usr/bin/
+usr/bin/only-consumer
+EOF
+mkdir -p "$tmp/single-new/usr/lib" "$tmp/single-cache" "$tmp/single-bin"
+make_lib "$tmp/single-new/usr/lib" libsndio.so.9 libsndio.so.9
+printf 'pkgname = sndio\npkgver = 1.11.0-4\narch = any\n' >"$tmp/single-new/.PKGINFO"
+tar --zstd -cf "$tmp/single-cache/sndio-1.11.0-4-any.pkg.tar.zst" -C "$tmp/single-new" .
+cat >"$tmp/single-bin/pacman" <<EOF
+#!/usr/bin/env bash
+case \${1:-} in
+-Qoq)
+    case \${2:-} in
+    "$single_root"/usr/bin/only-consumer) echo only-consumer ;;
+    *) exit 1 ;;
+    esac
+    ;;
+*) exit 0 ;;
+esac
+EOF
+chmod +x "$tmp/single-bin/pacman"
+status=0
+out=$(printf 'sndio\n' |
+    PATH="$tmp/single-bin:$PATH" GSA_ABI_NEED_CHECK_ROOT="$single_root" \
+    GSA_ABI_NEED_CHECK_LOCALDB="$single_db" \
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/single-cache" \
+    GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/single-facts" \
+    "$tool" --from-names 2>&1) || status=$?
+[[ $status == 1 ]] || fail "a one-candidate scan resolved nothing (want 1), got $status: $out"
+[[ $out == *'need-rebuild only-consumer libsndio.so.7'* ]] ||
+    fail "the single-file chunk lost its consumer: $out"
+
+# The `-U` stand-down covers phase 3 as well: the engine gates its own
+# installs, and a local file install is not a sync transaction.
+status=0
+out=$(printf 'sndio\n' | env "${drop_env[@]}" "$tmp/pacman" -U \
+    "$drop_cache/sndio-1.11.0-2-any.pkg.tar.zst" 2>&1) || status=$?
+[[ $status == 0 ]] || fail "phase 3 ran under a -U install (want 0), got $status: $out"
+[[ $out == *'sndio: skipped (local file install'* ]] || fail "missing -U stand-down note: $out"
+[[ $out != *'need-rebuild'* ]] || fail "a -U install produced rebuild rows: $out"
+
+printf 'abi-need-check fixture: ok\n' 

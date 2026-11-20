@@ -26,6 +26,13 @@ unfamiliar — even metadata discovery can evaluate top-level recipe code.
   `gsa -Sl …`) and keep the system package database backed up. The engine
   serializes its own transactions but never deletes `/var/lib/pacman/db.lck`;
   investigate the owning process or a stale lock manually.
+- The pre-transaction hook (`tools/abi-need-check.sh`, installed by `gsa-pm`)
+  fails closed in both directions: an incoming `DT_NEEDED` with no file behind
+  it, and a transaction that would leave an installed consumer on a soname it
+  removes (`need-rebuild <package> <soname>`). A reviewed
+  `config/abi-exclusions.conf` entry is the only exception, and the
+  local-file-install (`-U`) stand-down stays because the engine gates its own
+  installs.
 
 ## Never commit
 

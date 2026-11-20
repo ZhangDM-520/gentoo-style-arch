@@ -309,6 +309,12 @@ declare -a pkgnames=()
 declare -a factblobs=()
 tx_sonames=()
 tx_provides=()
+# The same shipped names WITH their ELF class: the drop test is class-scoped
+# (a 64-bit consumer is never covered by a 32-bit ship of the same soname).
+declare -A tx_shipped_class=()
+# Shipped names whose class could not be resolved (a link whose target is not
+# in the same payload): coverage is class-blind for those, as before.
+declare -A tx_ships_any=()
 
 for target in "${targets[@]}"; do
     root=''
@@ -335,7 +341,7 @@ for target in "${targets[@]}"; do
             continue
         fi
         if ((factcache_ok)) && [[ -s $factcache_dir/$sha.facts ]] &&
-            [[ $(head -1 "$factcache_dir/$sha.facts") == "# gsa-abi-need-check facts v2 $sha" ]]; then
+            [[ $(head -1 "$factcache_dir/$sha.facts") == "# gsa-abi-need-check facts v3 $sha" ]]; then
             blob=$(sed '1d' "$factcache_dir/$sha.facts")
         fi
     else
@@ -373,23 +379,29 @@ for target in "${targets[@]}"; do
         # resolved target IS one — a link out of the tree, a dangling link
         # (never resolution: the tk `libtk.so` lesson) and a link to a data
         # file all stay out of the cover set.
-        declare -A elf_rel=()
+        declare -A elf_rel=() elf_cls=()
         link=''
         while IFS= read -r line; do
             [[ $line == "file"$US* ]] || continue
             rest=${line#*"$US"}
-            elf_rel[${rest%%"$US"*}]=1
+            rel=${rest%%"$US"*}
+            rest=${rest#*"$US"}
+            elf_rel[$rel]=1
+            elf_cls[$rel]=${rest%%"$US"*}
         done <<<"$blob"
         while IFS= read -r -d '' link; do
             target=$(readlink -f -- "$link" 2>/dev/null) || continue
             [[ -n $target && $target == "$root"/* ]] || continue
             [[ -n ${elf_rel[${target#"$root"/}]:-} ]] || continue
-            blob+="link${US}${link#"$root"/}"$'\n'
+            # The LINK's class is its target's: a symlink is not an ELF, but
+            # the loader name it carries resolves to one, and coverage is
+            # class-scoped (a 64-bit need is never covered by a 32-bit ship).
+            blob+="link${US}${link#"$root"/}${US}${elf_cls[${target#"$root"/}]:-}"$'\n'
         done < <(find "$root" -type l \
             ! -name '.PKGINFO' ! -name '.BUILDINFO' ! -name '.MTREE' ! -name '.CHANGELOG' -print0)
 
         if [[ -n $sha ]] && ((factcache_ok)); then
-            { printf '# gsa-abi-need-check facts v2 %s\n' "$sha"; printf '%s' "$blob"; } \
+            { printf '# gsa-abi-need-check facts v3 %s\n' "$sha"; printf '%s' "$blob"; } \
                 >"$factcache_dir/$sha.facts.tmp" 2>/dev/null &&
                 mv "$factcache_dir/$sha.facts.tmp" "$factcache_dir/$sha.facts" 2>/dev/null
         fi
@@ -434,7 +446,12 @@ for target in "${targets[@]}"; do
                 # ships the provider covers its own consumer before the
                 # files land.
                 case $class in
-                    ELF64 | ELF32) tx_sonames+=("${relpath##*/}" "/$relpath") ;;
+                    ELF64 | ELF32)
+                        tx_sonames+=("${relpath##*/}" "/$relpath")
+                        tx_shipped_class["${relpath##*/}|$class"]=1
+                        tx_shipped_class["/$relpath|$class"]=1
+                        [[ -n $son ]] && tx_shipped_class["$son|$class"]=1
+                        ;;
                 esac
                 ;;
             "link"$'\x1f'*)
@@ -442,7 +459,17 @@ for target in "${targets[@]}"; do
                 # the file it resolves to keeps its regular-file name above.
                 # Its install path covers a path-style NEEDED the same way.
                 relpath=${line#*"$US"}
+                rest=${relpath#*"$US"}
+                relpath=${relpath%%"$US"*}
+                link_class=$rest
                 tx_sonames+=("${relpath##*/}" "/$relpath")
+                if [[ -n $link_class ]]; then
+                    tx_shipped_class["${relpath##*/}|$link_class"]=1
+                    tx_shipped_class["/$relpath|$link_class"]=1
+                else
+                    tx_ships_any["${relpath##*/}"]=1
+                    tx_ships_any["/$relpath"]=1
+                fi
                 ;;
         esac
     done <<<"$blob"
@@ -712,6 +739,7 @@ report_owned_providers() {
 findings=0
 idx=0
 declare -A missing_stems=()
+declare -a clean_lines=()
 load_abi_exclusions
 
 for root in "${roots[@]}"; do
@@ -816,12 +844,334 @@ for root in "${roots[@]}"; do
     done <<<"$blob"
 
     findings=$((findings + pkg_findings))
-    ((quiet)) || [[ $pkg_findings -gt 0 ]] ||
-        printf 'abi-need-check: %s: clean (%d runtime link(s))\n' "$pkg" "$pkg_needed"
+    # Deferred: phase 3 may still find that this transaction strands an
+    # installed consumer, and a "clean" line above that verdict reads as a
+    # contradiction. A run with any finding prints findings only.
+    ((quiet)) || [[ $pkg_findings -gt 0 ]] || clean_lines+=("$pkg|$pkg_needed")
 done
+
+# ── Phase 3: the sonames this transaction TAKES AWAY (issue #7) ──────────
+# Phase 2 resolves the INCOMING packages' DT_NEEDED. It is blind to the
+# other direction: a provider moving `libsndio.so.7 -> .so.9` is
+# transaction-internal consistent while every installed consumer of the OLD
+# soname loses its file at the same instant. Measured 2026-11-20: a stock
+# `pacman -Syu` passed this hook and left `mpv`, `celluloid` and
+# `kodi.bin` dead on `libsndio.so.7`.
+#
+# So: diff each incoming package's shipped sonames against the sonames the
+# INSTALLED package ships (the pacman local DB's `files` list is the
+# package's file truth), keep the ones the transaction neither ships nor
+# leaves a non-transaction file behind for, then resolve installed
+# consumers of those names and refuse with `need-rebuild` rows. Coverage is
+# transaction membership — a consumer whose own package is in `pkgnames` is
+# satisfied, exactly the engine's `in_tx`.
+#
+# Two narrowings keep the rows honest, both class- and path-aware:
+# a ship covering a drop must carry the SAME ELF class (upgrading `sndio`
+# beside `lib32-sndio` still strands every 64-bit consumer), and a consumer
+# that resolves the name through its own RUNPATH (a bundled `$ORIGIN/../lib`
+# copy under /opt) is not a consumer of what disappears — the loader never
+# consults the provider's directory for it.
+#
+# Cost (measured 2026-11-20, 24-core host): 22.8k candidates in 3.5 s of
+# `find` plus ~1 s of parallel batched readelf, and the scan runs only when
+# a soname is actually dropped. There is deliberately NO index: the
+# engine's exhaustive `-Qr` report over every installed file takes 85 s,
+# while this narrowed scan is cheaper than a cache would be to maintain —
+# and a cache cannot go stale. Two narrowings, both stated rather than
+# hidden: the loader's mapped SHAPES (executables by mode, shared objects by
+# name), and the ELF ROOTS the loader maps them from — `usr/{bin,sbin,lib*,
+# libexec}` plus `/opt` and `/usr/local` (an out-of-tree stock app such as
+# Chrome or Spotify installs under `/opt` and links exactly like a packaged
+# one).
+abi_localdb=${GSA_ABI_NEED_CHECK_LOCALDB:-/var/lib/pacman}
+# A fixture (or a `--sysroot`-shaped check) points this at a synthetic tree:
+# every installed path the phase reads is prefixed with it.
+abi_root=${GSA_ABI_NEED_CHECK_ROOT:-}
+
+# post_resolves NAME CLASS — does a file still resolve NAME after this
+# transaction? The installed DB answers for the very file the transaction
+# replaces, so paths this transaction owns never count (that is the whole
+# bug: `libsndio.so.7` resolves today and vanishes with the upgrade).
+post_resolves() {
+    local soname=$1 class=${2:-ELF64} dir path entries entry tag
+    local -a dirs
+    case $class in
+        ELF32) dirs=("$abi_root"/usr/lib32 "$abi_root"/lib32) ;;
+        *) dirs=("$abi_root"/usr/lib "$abi_root"/usr/lib64 "$abi_root"/lib "$abi_root"/lib64) ;;
+    esac
+    for dir in "${dirs[@]}"; do
+        path=${dir%/}/$soname
+        if [[ -e $path && -z ${owned_abs[$path]:-} ]]; then
+            return 0
+        fi
+    done
+    load_ld_cache
+    entries=${ld_cache_by_name[$soname]:-}
+    while [[ -n $entries ]]; do
+        if [[ $entries == *';'* ]]; then
+            entry=${entries%%;*}
+            entries=${entries#*;}
+        else
+            entry=$entries
+            entries=''
+        fi
+        tag=${entry%%|*}
+        path=${abi_root}${entry#*|}
+        case $class in
+            ELF64) [[ $tag == *x86-64* ]] || continue ;;
+            ELF32) [[ $tag != *x86-64* ]] || continue ;;
+        esac
+        if [[ -e $path && -z ${owned_abs[$path]:-} ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# consumer_resolves FILE RUNPATH SONAME — does the CONSUMER itself still find
+# SONAME after this transaction? A bundled private copy (`$ORIGIN/../lib/…`
+# under /opt, the browser shape) is resolution the loader performs for that
+# consumer alone: the provider's directory was never consulted, so dropping
+# the provider's file strands nothing. Only RUNPATH-derived directories are
+# asked — the default paths were already answered by `post_resolves` when the
+# drop was recorded, and a relative entry is CWD-relative at run time (the
+# hook cannot see the CWD, and claiming coverage it cannot see is the failure
+# this gate exists to prevent).
+consumer_resolves() {
+    local file=$1 runpath=${2:-} soname=$3
+    local origin=${file%/*} dir path
+    [[ -n $runpath ]] || return 1
+    local -a dirs=()
+    local IFS=:
+    for dir in $runpath; do
+        case $dir in
+            '$ORIGIN' | '${ORIGIN}') dirs+=("$origin") ;;
+            '$ORIGIN/'*) dirs+=("$origin/${dir#'$ORIGIN/'}") ;;
+            '${ORIGIN}/'*) dirs+=("$origin/${dir#'${ORIGIN}/'}") ;;
+            /*) dirs+=("$dir") ;;
+        esac
+    done
+    for dir in "${dirs[@]}"; do
+        path=${dir%/}/$soname
+        if [[ -e $path && -z ${owned_abs[$path]:-} ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# db_pkg_dir NAME — the local-DB entry directory of the installed NAME. The
+# glob also matches `foo-bar-1.0-1` for `foo`, so `%NAME%` is the authority.
+db_pkg_dir() {
+    local name=$1 dir found=''
+    for dir in "$abi_localdb/local/$name"-*/; do
+        [[ -d $dir ]] || continue
+        if [[ $(sed -n '/^%NAME%$/{n;p;q;}' "$dir/desc" 2>/dev/null) == "$name" ]]; then
+            found=$dir
+        fi
+    done
+    [[ -n $found ]] && printf '%s' "$found"
+}
+
+# installed_sonames DIR — one `class<US>soname` row per DSO the INSTALLED
+# package ships (its own `files` list, restricted to the ELF homes the
+# engine probes: `elf_home` in gsa-abi's rows).
+installed_sonames() {
+    local dir=$1 rel path
+    local -a batch=()
+    while IFS= read -r rel; do
+        [[ -n $rel && $rel != */ ]] || continue
+        case $rel in
+            usr/lib* | usr/libexec* | usr/bin* | usr/sbin* | *.so*) ;;
+            *) continue ;;
+        esac
+        path=$abi_root/$rel
+        [[ -f $path ]] && batch+=("$path")
+    done < <(sed '1{/^%FILES%$/d;}' "$dir/files" 2>/dev/null)
+    ((${#batch[@]})) || return 0
+    readelf -hW -dW "${batch[@]}" 2>/dev/null | awk -v sUS="$US" '
+        function emit() {
+            if (son != "" && cls != "") printf "file%s%s%s%s\n", sUS, cls, sUS, son
+            son = ""; cls = ""
+        }
+        /^File: / { emit(); next }
+        /Class: *ELF64/ { cls = "ELF64"; next }
+        /Class: *ELF32/ { cls = "ELF32"; next }
+        /\(SONAME\)/ {
+            if (match($0, /\[[^]]*\]/)) son = substr($0, RSTART + 1, RLENGTH - 2)
+            next
+        }
+        END { emit() }
+    '
+}
+
+if ((from_names && !file_install)) && ((${#pkgnames[@]})); then
+    declare -A dropped_class=()   # "soname|class" -> the dropping package
+    declare -A owned_abs=()       # absolute installed paths this transaction replaces
+    declare -a drop_errors=()
+
+    for pkg in "${pkgnames[@]}"; do
+        entry=$(db_pkg_dir "$pkg")
+        # Nothing installed: a fresh install can only ADD sonames.
+        [[ -n $entry ]] || continue
+        if [[ ! -r $entry/files ]]; then
+            # Rule 71 at transaction time: a package whose installed file
+            # truth cannot be read is not a package that drops nothing.
+            drop_errors+=("$pkg")
+            continue
+        fi
+        while IFS= read -r rel; do
+            [[ -n $rel ]] && owned_abs["$abi_root/$rel"]=1
+        done < <(sed '1{/^%FILES%$/d;}' "$entry/files" 2>/dev/null)
+        while IFS=$'\x1f' read -r tag class son; do
+            [[ $tag == file && -n $class && -n $son ]] || continue
+            key="$son|$class"
+            [[ -n ${dropped_class[$key]:-} ]] && continue
+            # SHIPPED sonames only. A declared provide has its version
+            # stripped at parse time (`libsndio.so=9-64` -> `libsndio.so`), and
+            # a stem match against it would class the OLD generation as
+            # covered — the exact false negative this phase exists to stop
+            # (blind review 2026-11-20). A provide with no file behind it is
+            # not coverage anywhere else in this gate either.
+            # Class-scoped: a 64-bit drop is covered only by a 64-bit ship of
+            # the same name. A transaction that upgrades `sndio` and
+            # `lib32-sndio` together ships `libsndio.so.7` for the 32-bit
+            # class only, and the 64-bit consumers are exactly who die.
+            covered=0
+            if [[ -n ${tx_shipped_class["$son|$class"]:-} || -n ${tx_ships_any[$son]:-} ]]; then
+                covered=1
+            fi
+            ((covered)) && continue
+            post_resolves "$son" "$class" && continue
+            dropped_class[$key]=$pkg
+        done < <(installed_sonames "$entry")
+    done
+
+    for pkg in ${drop_errors[@]+"${drop_errors[@]}"}; do
+        printf 'abi-need-check: %s: installed file list is unreadable (%s/local/%s-*/files)\n' \
+            "$pkg" "$abi_localdb" "$pkg"
+        findings=$((findings + 1))
+    done
+
+    if ((${#dropped_class[@]})); then
+        declare -a cand=()
+        while IFS= read -r -d '' path; do
+            cand+=("$path")
+        done < <(find "$abi_root"/usr/bin "$abi_root"/usr/sbin "$abi_root"/usr/lib \
+            "$abi_root"/usr/lib32 "$abi_root"/usr/lib64 "$abi_root"/usr/libexec \
+            "$abi_root"/opt "$abi_root"/usr/local \
+            -type f \( -perm -u+x -o -name '*.so*' \) -print0 2>/dev/null)
+
+        # Per-chunk output files, then one read: parallel readelf writes
+        # interleave, and a records stream cannot afford that.
+        declare -A needing=()   # "soname|class" -> consumer names
+        declare -A seen=()      # "soname|class|consumer" dedupe
+        if ((${#cand[@]})); then
+            chunk_dir="$scratch/installed-chunks.$$"
+            mkdir -p "$chunk_dir"
+            # readelf prints NO `File:` marker for a single input file, so a
+            # chunk that happens to carry exactly one candidate would emit an
+            # un-parseable record and lose its consumer (a silent false
+            # negative in a fail-closed gate). The chunker knows the count, so
+            # it writes the marker the multi-file form would have written.
+            printf '%s\0' "${cand[@]}" |
+                CHUNK_DIR=$chunk_dir xargs -0 -n 400 \
+                    -P "$(nproc 2>/dev/null || echo 4)" \
+                    sh -c 'f=$(mktemp "$CHUNK_DIR/chunk.XXXXXX") || exit 0
+                           if [ "$#" -eq 1 ]; then printf "File: %s\n" "$1" >"$f"; fi
+                           readelf -hW -dW "$@" >>"$f" 2>/dev/null' _
+            for chunk in "$chunk_dir"/chunk.*; do
+                [[ -f $chunk ]] || continue
+                cat "$chunk"
+            done | awk -v sUS="$US" -v sRS="$RS" '
+                function emit() {
+                    if (nd != "" && cls != "" && cur != "")
+                        printf "file%s%s%s%s%s%s%s%s\n", sUS, cls, sUS, cur, sUS, rp, sUS, nd
+                    nd = ""; cls = ""; cur = ""; rp = ""
+                }
+                /^File: / { emit(); cur = substr($0, 7); next }
+                /Class: *ELF64/ { cls = "ELF64"; next }
+                /Class: *ELF32/ { cls = "ELF32"; next }
+                /\((RUNPATH|RPATH)\)/ {
+                    if (match($0, /\[[^]]*\]/)) rp = substr($0, RSTART + 1, RLENGTH - 2)
+                    next
+                }
+                /\(NEEDED\)/ {
+                    if (match($0, /\[[^]]*\]/)) {
+                        v = substr($0, RSTART + 1, RLENGTH - 2)
+                        nd = (nd == "" ? v : nd sRS v)
+                    }
+                }
+                END { emit() }
+            ' >"$scratch/installed-needed.$$"
+            rm -rf -- "$chunk_dir"
+
+            while IFS=$'\x1f' read -r tag class path runpath needed_blob; do
+                [[ $tag == file ]] || continue
+                nb=$needed_blob
+                while [[ -n $nb ]]; do
+                    if [[ $nb == *"$RS"* ]]; then
+                        needed=${nb%%"$RS"*}
+                        nb=${nb#*"$RS"}
+                    else
+                        needed=$nb
+                        nb=''
+                    fi
+                    key="$needed|$class"
+                    [[ -n ${dropped_class[$key]:-} ]] || continue
+                    # A consumer that carries its own copy along a RUNPATH is
+                    # not a consumer of what disappears.
+                    consumer_resolves "$path" "$runpath" "$needed" && continue
+                    # The consumer's own package is the local DB's answer;
+                    # a file no package owns is named by its path, because
+                    # it has no transaction cover either.
+                    owner=$(pacman -Qoq "$path" 2>/dev/null) || owner=''
+                    if [[ -z $owner ]]; then
+                        owner=$path
+                    else
+                        covered=0
+                        for name in "${pkgnames[@]}"; do
+                            [[ $owner == "$name" ]] && { covered=1; break; }
+                        done
+                        ((covered)) && continue
+                        abi_excluded "$owner" && continue
+                    fi
+                    abi_excluded "$needed" && continue
+                    pair="$key|$owner"
+                    [[ -n ${seen[$pair]:-} ]] && continue
+                    seen[$pair]=1
+                    needing[$key]+="${needing[$key]:+ }$owner"
+                done
+            done <"$scratch/installed-needed.$$"
+            rm -f -- "$scratch/installed-needed.$$"
+        fi
+
+        for key in "${!dropped_class[@]}"; do
+            soname=${key%%|*}
+            src=${dropped_class[$key]}
+            consumers=${needing[$key]:-}
+            [[ -n $consumers ]] || continue
+            # Deterministic rows: the scan is parallel, so its order is not.
+            consumers=$(printf '%s\n' $consumers | LC_ALL=C sort | paste -sd' ' -)
+            printf 'abi-need-check: %s: drops %s (installed consumers: %s)\n' \
+                "$src" "$soname" "${consumers// /, }"
+            for owner in $consumers; do
+                printf 'abi-need-check: need-rebuild %s %s\n' "$owner" "$soname"
+                findings=$((findings + 1))
+                stem=${soname##*/}
+                while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
+                missing_stems[$stem]=1
+            done
+        done
+    fi
+fi
 
 if ((findings)); then
     report_owned_providers
     exit 1
 fi
+for line in ${clean_lines[@]+"${clean_lines[@]}"}; do
+    printf 'abi-need-check: %s: clean (%d runtime link(s))\n' "${line%%|*}" "${line#*|}"
+done
 exit 0

@@ -119,6 +119,13 @@ has no other coverage class, because only its own upgrade clears it
 (contract §E.3 amendment 2026-11-20).
 _Avoid_: extra packages, add-on installs (it is the same transaction)
 
+**Rebuild set**:
+The installed consumers a transaction strands by removing a soname they link
+— reported by the pre-transaction hook as `need-rebuild <package> <soname>`
+and by the engine's ABI gate as `abi-consumer` rows. Coverage is transaction
+membership: a consumer whose own package rides the transaction is not in it.
+_Avoid_: broken packages, revdeps
+
 **Pruning strengths**:
 The three maintain wipes, weakest first: `-Mc` (the selection's build trees
 and archives), `-Mcc` (every built archive in the workspace plus its
