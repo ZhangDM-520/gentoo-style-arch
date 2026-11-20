@@ -476,10 +476,20 @@ if [[ -n $root ]]; then
         for (i = 1; i <= n; i++) if (e[i] != "") print $1, e[i]
     }' "$fixture/exp-topo.out" >"$exp_edges"
 
+    # §C.3 amendment 2026-11-20: the expansion is intersected with the
+    # installed world. Fabricate a DB holding exactly the derived closure, so
+    # this fixture pins the RULE and never this host's install state.
+    fixture_installed "$fixture/exp-db"
+    export PATH="$fixture/exp-db/bin:$PATH"
+
     for target in glib2-git niri-spicy-git; do
         # X plus its transitive consumers, derived as a reverse-edge closure
         # over the channel rows; the expected SET is what the graph says
         expected=$( { printf '%s\n' "$target"; consumers_closure "$exp_edges" "$target"; } | sort)
+        rm -rf "$fixture/exp-db/db/local"
+        mkdir -p "$fixture/exp-db/db/local"
+        # shellcheck disable=SC2086 # ids are whitespace-free by construction
+        fixture_installed "$fixture/exp-db" $expected
 
         run_engine "$root" -Sl "$target"
         [ "$FIXTURE_RC" = 0 ] || fail "the listing of $target failed: $FIXTURE_OUTPUT"
@@ -488,6 +498,34 @@ if [[ -n $root ]]; then
             fail "a bare $target selected [$(printf '%s' "$got" | tr '\n' ' ')], expected [$(printf '%s' "$expected" | tr '\n' ' ')] ($target + its transitive consumers over the topology edges): $(comm -3 <(printf '%s\n' "$got") <(printf '%s\n' "$expected") | head -5 | tr '\n' ' ')"
         [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | sed -n 1p)" = "$target" ] ||
             fail "a bare $target does not list $target first: [$(listing_rows <<<"$FIXTURE_OUTPUT" | head -3 | tr '\n' ' ')]"
+
+        # One member NOT installed: it is skipped, and the listing — the only
+        # surface that names skips — says so. Naming it puts it back in scope
+        # (an explicit seed is authoritative).
+        #
+        # A target whose closure is itself (a leaf nothing consumes) has no
+        # member to skip: the rule is inapplicable, not violated, and the
+        # sub-case is skipped BY NAME rather than silently (`grep -vx` exits
+        # 1 on an all-filtered set, which `set -e`/pipefail would turn into
+        # a mute abort).
+        skipped=$(printf '%s\n' "$expected" | grep -vx -- "$target" | tail -n 1 || true)
+        if [ -z "$skipped" ]; then
+            printf '  note: %s has no consumer in this topology — skip case not applicable\n' "$target" >&2
+        else
+        rm -rf "$fixture/exp-db/db/local/$skipped-1-1"
+        run_engine "$root" -Sl "$target"
+        [ "$FIXTURE_RC" = 0 ] || fail "the listing of $target failed after uninstalling $skipped: $FIXTURE_OUTPUT"
+        got=$(listing_rows <<<"$FIXTURE_OUTPUT" | sort)
+        want=$(printf '%s\n' "$expected" | grep -vx -- "$skipped" | sort)
+        [ "$got" = "$want" ] ||
+            fail "a bare $target expanded to an uninstalled consumer [$skipped] (issue #5)"
+        [[ $FIXTURE_OUTPUT == *"Not expanded on a run (1 consumer(s) not installed): $skipped"* ]] ||
+            fail "the listing does not name the skipped consumer $skipped: $FIXTURE_OUTPUT"
+        run_engine "$root" -Sl "$target" "$skipped"
+        [ "$FIXTURE_RC" = 0 ] || fail "naming $skipped failed: $FIXTURE_OUTPUT"
+        [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | sort)" = "$expected" ] ||
+            fail "naming the uninstalled consumer $skipped did not put it in scope: $FIXTURE_OUTPUT"
+        fi
 
         # --leaf suppresses the expansion: exactly the named recipe (§C.3)
         run_engine "$root" -Sl --leaf "$target"
@@ -684,6 +722,11 @@ fi
     add_package "$ws" lone "$gsa_meta_any" git
     set_topology_record "$ws" c1 misc 'x'
     set_topology_record "$ws" c2 core 'c1'
+    # The expected consumers are INSTALLED in a fabricated DB (§C.3
+    # amendment 2026-11-20: the expansion is intersected with the installed
+    # world). The skip half below uninstalls one on purpose.
+    fixture_installed "$fixture/expansion" x c1 c2
+    export PATH="$fixture/expansion/bin:$ws/bin:$PATH"
     # the fixture's build-order edges (consumer prereq) — the derivation
     # source for every expected set below
     edges="$fixture/expansion/edges"
@@ -700,6 +743,25 @@ fi
         fail "a: bare x does not list x first: [$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')]"
     [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')" = 'x c1 c2 ' ] ||
         fail "a: the chain is not in build order: [$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')]"
+
+    # a2. a consumer installed NOWHERE is not expanded, and the LISTING names
+    # it (runs stay silent — owner decision); naming it puts it back in scope.
+    mv "$fixture/expansion/db/local/c2-1-1" "$fixture/expansion/c2-uninstalled"
+    run_engine "$ws" -Sl x
+    [ "$FIXTURE_RC" = 0 ] || fail "a2: listing of x failed: $FIXTURE_OUTPUT"
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')" = 'x c1 ' ] ||
+        fail "a2: x selected [$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')], want [x c1] — c2 is installed nowhere"
+    [[ $FIXTURE_OUTPUT == *'Not expanded on a run (1 consumer(s) not installed): c2'* ]] ||
+        fail "a2: the listing does not name the skipped consumer c2: $FIXTURE_OUTPUT"
+    run_engine "$ws" -B --dry-run x
+    [ "$FIXTURE_RC" = 0 ] || fail "a2: dry run of x failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = 'x c1' ] ||
+        fail "a2: the plan of x carries an uninstalled consumer: $(rr2_scalar order <<<"$FIXTURE_OUTPUT")"
+    run_engine "$ws" -Sl x c2
+    [ "$FIXTURE_RC" = 0 ] || fail "a2: listing of x c2 failed: $FIXTURE_OUTPUT"
+    [ "$(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')" = 'x c1 c2 ' ] ||
+        fail "a2: naming c2 did not put it in scope: $(listing_rows <<<"$FIXTURE_OUTPUT" | tr '\n' ' ')"
+    mv "$fixture/expansion/c2-uninstalled" "$fixture/expansion/db/local/c2-1-1"
 
     # b. --leaf is leaf-only: exactly the named package (§C.3)
     run_engine "$ws" -Sl --leaf x
@@ -788,26 +850,9 @@ fi
     # a build-only run never installs, so without this the replay would
     # legitimately re-add x. This scenario is about consumer expansion, and
     # that rule has its own section.
-    mkdir -p "$fixture/expansion/bin" "$fixture/expansion/db/local/x-1-1"
-    cat >"$fixture/expansion/bin/pacman-conf" <<'EOF'
-#!/usr/bin/env bash
-set -u
-if [ "${1:-}" = DBPath ]; then
-    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
-    exit 0
-fi
-exit 1
-EOF
-    chmod +x "$fixture/expansion/bin/pacman-conf"
-    {
-        printf '%%NAME%%\nx\n\n'
-        printf '%%VERSION%%\n1-1\n\n'
-        printf '%%BASE%%\nx\n'
-    } >"$fixture/expansion/db/local/x-1-1/desc"
-    printf '%%FILES%%\n' >"$fixture/expansion/db/local/x-1-1/files"
-    export GSA_FAKE_DB_PATH="$fixture/expansion/db"
+    # x, c1 and c2 are already installed in the section's fabricated DB
+    # (fixture_installed at the top), and the stub is already on PATH.
     stub_makepkg "$ws"
-    export PATH="$fixture/expansion/bin:$ws/bin:$PATH"
     export GSA_STATE_DIR="$fixture/expansion/state"
     export GSA_FAKE_FAIL_PACKAGE=c1
     run_engine "$ws" -B --intensity low x
@@ -897,6 +942,10 @@ EOF
     set_topology_record "$ws" m1 misc 'd'
     set_topology_record "$ws" m2 misc 'd'
     set_topology_record "$ws" top misc 'm1,m2'
+    # The diamond is INSTALLED (§C.3 amendment 2026-11-20): expansion is
+    # intersected with the installed world.
+    fixture_installed "$fixture/expansion-order" d m1 m2 top
+    export PATH="$fixture/expansion-order/bin:$ws/bin:$PATH"
     edges="$fixture/expansion-order/edges"
     printf 'm1 d\nm2 d\ntop m1\ntop m2\n' >"$edges"
 

@@ -1023,6 +1023,7 @@ mod tests {
             notes: Vec::new(),
             leaf: false,
             prerequisites_added: Vec::new(),
+            expansion_skipped: Vec::new(),
         }
     }
 

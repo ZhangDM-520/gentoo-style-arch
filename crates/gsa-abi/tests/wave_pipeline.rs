@@ -62,6 +62,7 @@ fn records_to_plan_to_swap_stages_one_transaction_per_wave() {
         subs: &subs,
         moves: &moves,
         installed: None,
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -125,6 +126,7 @@ fn a_member_without_an_archive_refuses_and_holds_its_wave() {
         subs: &subs,
         moves: &moves,
         installed: None,
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -166,6 +168,7 @@ fn no_mismatch_no_wave_stages_the_leftover_transaction() {
         subs: &subs,
         moves: &moves,
         installed: None,
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -224,6 +227,7 @@ fn a_dead_record_from_an_uninstalled_ghost_never_refuses_the_run() {
         subs: &subs,
         moves: &moves,
         installed: Some(&view),
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -265,6 +269,7 @@ fn an_installed_external_consumer_still_surfaces_uncovered() {
         subs: &subs,
         moves: &moves,
         installed: Some(&view),
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -275,6 +280,26 @@ fn an_installed_external_consumer_still_surfaces_uncovered() {
         "an installed out-of-tree consumer is a real gap — never under-expand"
     );
     assert!(plan.stale_records.is_empty());
+
+    // The same answer with a KNOWN world: `ext` is no topology recipe, so
+    // rule 76's recipe filter cannot speak for it — an installed consumer is
+    // the evidence, and dropping it here silenced the under-coverage refusal
+    // (round-3 review 2026-11-20).
+    let world: BTreeSet<String> = ["c1".to_string()].into_iter().collect();
+    let plan = plan_waves(&WaveInputs {
+        graph: &graph,
+        subs: &subs,
+        moves: &moves,
+        installed: Some(&view),
+        installed_recipes: Some(&world),
+        planned: &planned,
+        recipe_of_name: &Default::default(),
+    });
+    assert_eq!(
+        plan.uncovered,
+        vec![("p".to_string(), vec!["ext".to_string()])],
+        "a known world must not swallow an installed out-of-tree consumer"
+    );
 }
 
 #[test]
@@ -295,6 +320,7 @@ fn an_unknown_installed_world_fails_closed_on_stale_records() {
         subs: &subs,
         moves: &moves,
         installed: None,
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &Default::default(),
     });
@@ -332,6 +358,7 @@ fn a_split_output_record_naming_an_installed_output_is_a_real_gap() {
         subs: &subs,
         moves: &moves,
         installed: Some(&view),
+        installed_recipes: None,
         planned: &planned,
         recipe_of_name: &recipe_of_name,
     });
@@ -342,4 +369,153 @@ fn a_split_output_record_naming_an_installed_output_is_a_real_gap() {
         "the failure names the canonical id (§E.3) and still refuses"
     );
     assert!(plan.stale_records.is_empty());
+}
+
+/// `p` ─▶ `c1` ─▶ `c2`, plus `d1` ─▶ `p` — the uninstalled direct consumer
+/// these cases need (`c2` may also be absent from the world).
+fn installed_world_records() -> Vec<TopologyRecord> {
+    vec![
+        record("p", &[], &[]),
+        record("c1", &["p"], &[]),
+        record("c2", &["c1"], &[]),
+        record("d1", &["p"], &[]),
+    ]
+}
+
+fn a_move() -> Vec<TokenMove> {
+    vec![TokenMove {
+        provider: "p".to_string(),
+        old: Some("old-token".to_string()),
+        current: ["new-token".to_string()].into_iter().collect(),
+        changed_provides: Vec::new(),
+    }]
+}
+
+#[test]
+fn an_uninstalled_direct_consumer_neither_seeds_nor_triggers_the_fallback() {
+    let records = installed_world_records();
+    let graph = Graph::build(&records).unwrap();
+    // `d1` has NO record: under an unknown world it would read as an
+    // unrecorded live consumer and drag the whole closure in (rule 25(c)).
+    let mut subs = Subscriptions::empty();
+    subs.upsert(sub("c1", "p", "old-token"));
+    let planned: BTreeSet<String> = ["p".to_string()].into_iter().collect();
+    let world: BTreeSet<String> = ["p", "c1", "c2"].iter().map(|s| s.to_string()).collect();
+    let view = installed(&["c1"]);
+    let plan = plan_waves(&WaveInputs {
+        graph: &graph,
+        subs: &subs,
+        moves: &a_move(),
+        installed: Some(&view),
+        installed_recipes: Some(&world),
+        planned: &planned,
+        recipe_of_name: &Default::default(),
+    });
+
+    assert!(
+        !plan.waves[0].fallback,
+        "a consumer installed nowhere is not unrecorded-live"
+    );
+    let ids: Vec<&str> = plan.waves[0]
+        .members
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["c1", "c2"],
+        "c1's mismatch plus its installed consumer"
+    );
+    assert!(plan.uncovered.is_empty());
+    assert!(
+        plan.stale_records.is_empty(),
+        "a topology consumer is not a record"
+    );
+}
+
+#[test]
+fn an_uninstalled_transitive_consumer_is_dropped_from_the_closure() {
+    let records = installed_world_records();
+    let graph = Graph::build(&records).unwrap();
+    let mut subs = Subscriptions::empty();
+    subs.upsert(sub("c1", "p", "old-token"));
+    let planned: BTreeSet<String> = ["p".to_string()].into_iter().collect();
+    // c2 is reachable through c1 but was never built here.
+    let world: BTreeSet<String> = ["p", "c1"].iter().map(|s| s.to_string()).collect();
+    let view = installed(&["c1"]);
+    let plan = plan_waves(&WaveInputs {
+        graph: &graph,
+        subs: &subs,
+        moves: &a_move(),
+        installed: Some(&view),
+        installed_recipes: Some(&world),
+        planned: &planned,
+        recipe_of_name: &Default::default(),
+    });
+
+    let ids: Vec<&str> = plan.waves[0]
+        .members
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["c1"],
+        "an uninstalled consumer cannot link, so it cannot break"
+    );
+}
+
+#[test]
+fn a_named_uninstalled_consumer_stays_in_scope() {
+    let records = installed_world_records();
+    let graph = Graph::build(&records).unwrap();
+    let subs = Subscriptions::empty();
+    let planned: BTreeSet<String> = ["p", "d1"].iter().map(|s| s.to_string()).collect();
+    let world: BTreeSet<String> = ["p", "c1"].iter().map(|s| s.to_string()).collect();
+    let view = installed(&["c1"]);
+    let plan = plan_waves(&WaveInputs {
+        graph: &graph,
+        subs: &subs,
+        moves: &a_move(),
+        installed: Some(&view),
+        installed_recipes: Some(&world),
+        planned: &planned,
+        recipe_of_name: &Default::default(),
+    });
+
+    let ids: Vec<&str> = plan.waves[0]
+        .members
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    // `c1` is a live direct consumer with no record, so the fallback owns
+    // it; the point here is that the NAMED `d1` is not filtered out.
+    assert_eq!(
+        ids,
+        vec!["c1", "d1"],
+        "what the operator named is authoritative"
+    );
+    assert!(plan.waves[0].fallback);
+}
+
+#[test]
+fn an_unknown_world_keeps_the_fail_toward_answer() {
+    let records = installed_world_records();
+    let graph = Graph::build(&records).unwrap();
+    let subs = Subscriptions::empty();
+    let planned: BTreeSet<String> = ["p".to_string()].into_iter().collect();
+    let plan = plan_waves(&WaveInputs {
+        graph: &graph,
+        subs: &subs,
+        moves: &a_move(),
+        installed: None,
+        installed_recipes: None,
+        planned: &planned,
+        recipe_of_name: &Default::default(),
+    });
+
+    assert!(
+        plan.waves[0].fallback,
+        "an unknown world never under-expands (rule 25(c))"
+    );
 }

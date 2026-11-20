@@ -295,6 +295,10 @@ if want a; then
         add_package "$ws" p1 "$gsa_meta_any"$'\nsource=(https://example.invalid/p1-1.0.0.tar.gz)'
         add_package "$ws" p2 "$gsa_meta_any"$'\nsource=(https://example.invalid/p2-1.0.0.tar.gz)'
         set_topology_record "$ws" p2 git p1
+        # The consumer is INSTALLED in a fabricated world (§C.3 amendment
+        # 2026-11-20: expansion is intersected with it).
+        fixture_installed "$fixture/a" p2
+        export PATH="$fixture/a/bin:$PATH"
         export GSA_FAKE_BUILD_SECONDS=2
 
         run_engine "$ws" -B --state-dir "$ws/state" p1
@@ -329,6 +333,8 @@ if want b; then
         add_package "$ws" p1 "$gsa_meta_any"$'\nsource=(https://example.invalid/p1-1.0.0.tar.gz)'
         add_package "$ws" p2 "$gsa_meta_any"$'\nsource=(https://example.invalid/p2-1.0.0.tar.gz)'
         set_topology_record "$ws" p2 git p1
+        fixture_installed "$fixture/b" p2
+        export PATH="$fixture/b/bin:$PATH"
         export GSA_FAKE_BUILD_SECONDS=2
         export GSA_FAKE_FETCH_FLAKY=p2
 
@@ -364,6 +370,8 @@ if want c; then
         for n in 2 3 4 5; do
             set_topology_record "$ws" "p$n" git "p$((n - 1))"
         done
+        fixture_installed "$fixture/c" p2 p3 p4 p5
+        export PATH="$fixture/c/bin:$PATH"
         export GSA_FAKE_BUILD_SECONDS=2
 
         # A dry run leaves everything remaining, so its continuation carries
@@ -403,6 +411,8 @@ if want d; then
         set_topology_record "$ws" p-plain git decoy
         set_topology_record "$ws" p-vcs git decoy
         set_topology_record "$ws" p-local git decoy
+        fixture_installed "$fixture/d" p-plain p-vcs p-local
+        export PATH="$fixture/d/bin:$PATH"
         export GSA_FAKE_BUILD_SECONDS=1
 
         run_engine "$ws" -B --state-dir "$ws/state" decoy
@@ -507,6 +517,8 @@ if want g; then
         add_package "$ws" p1 "$gsa_meta_any"$'\nsource=(https://example.invalid/p1-1.0.0.tar.gz)'
         add_package "$ws" p2 "$gsa_meta_any"$'\nsource=(https://example.invalid/p2-1.0.0.tar.gz)'
         set_topology_record "$ws" p2 git p1
+        fixture_installed "$fixture/g" p2
+        export PATH="$fixture/g/bin:$PATH"
         export GSA_FAKE_BUILD_SECONDS=1
 
         run_engine "$ws" --help

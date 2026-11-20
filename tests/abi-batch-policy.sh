@@ -483,6 +483,11 @@ $out_a2"
     set_topology_record "$dir" rust-git git 'llvm-git' 'abi=must'
     set_topology_record "$dir" q1 git 'llvm-git'
     engine_ws "$dir" "$dir/db"
+    # rust-git and q1 are LIVE consumers: expansion is intersected with the
+    # installed world (§C.3 amendment 2026-11-20), and the non-leaf controls
+    # below expect them to ride llvm-git's plan.
+    db_entry "$dir/db" rust-git 1-1
+    db_entry "$dir/db" q1 1-1
 
     # One stub build pass registers every token in the binpkg index (the
     # engine's own state; GSA_STATE_DIR, never the host's).
@@ -700,6 +705,12 @@ $FIXTURE_OUTPUT"
     set_topology_record "$dir" qt5-b git 'qt5-base-git' 'abi=must'
     set_topology_record "$dir" q5 git 'qt5-base-git'
     engine_ws "$dir" "$dir/db"
+    # The batch members and q5 are LIVE consumers (§C.3 amendment
+    # 2026-11-20): B5b's non-leaf control expects the whole batch to build.
+    db_entry "$dir/db" rust-git 1-1
+    db_entry "$dir/db" qt5-a 1-1
+    db_entry "$dir/db" qt5-b 1-1
+    db_entry "$dir/db" q5 1-1
 
     # One stub build pass registers every token in the binpkg index (B's
     # precedent).
@@ -963,6 +974,9 @@ EOF
     add_meta_package "$dir_d" rust-git ''
     set_topology_record "$dir_d" rust-git git 'llvm-git'
     engine_ws "$dir_d" "$dir_d/db"
+    # rust-git is installed, so the consumer expansion (and the wave) can
+    # carry it (§C.3 amendment 2026-11-20).
+    db_entry "$dir_d/db" rust-git 1-1
     run_engine "$dir_d" -B --dry-run llvm-git
     [ "$FIXTURE_RC" -eq 0 ] ||
         fail "D: dry run of bare llvm-git failed:

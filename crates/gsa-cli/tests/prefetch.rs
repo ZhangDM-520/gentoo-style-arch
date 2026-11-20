@@ -82,6 +82,27 @@ exit 0
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // `p1` expands to its consumer `p2`, and the expansion is intersected
+    // with the installed world (§C.3 amendment 2026-11-20): `p2` is INSTALLED
+    // in a fabricated DB (never the host's), or it would be skipped and the
+    // prefetch child this fixture is about would never start.
+    std::fs::create_dir_all(ws.join("db/local/p2-1.0.0-1")).unwrap();
+    std::fs::write(
+        ws.join("db/local/p2-1.0.0-1/desc"),
+        "%NAME%\np2\n\n%VERSION%\n1.0.0-1\n\n%BASE%\np2\n",
+    )
+    .unwrap();
+    std::fs::write(ws.join("db/local/p2-1.0.0-1/files"), "%FILES%\n").unwrap();
+    let pacman_conf = ws.join("bin/pacman-conf");
+    std::fs::write(
+        &pacman_conf,
+        format!(
+            "#!/usr/bin/env bash\nset -u\nif [ \"${{1:-}}\" = DBPath ]; then\n    printf '%s\\n' '{}'\n    exit 0\nfi\nexit 1\n",
+            ws.join("db").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&pacman_conf, std::fs::Permissions::from_mode(0o755)).unwrap();
     ws
 }
 

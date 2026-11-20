@@ -263,6 +263,41 @@ EOF
     chmod +x "$1/bin/makepkg"
 }
 
+# fixture_installed DIR ID… — fabricate a pacman local DB holding ID… and
+# point the engine's installed-world read at it: a `pacman-conf` DBPath stub
+# under DIR/bin (the caller puts DIR/bin on PATH), one
+# `db/local/<id>-1-1/{desc,files}` entry per id, and `GSA_FAKE_DB_PATH`
+# exported so a fixture can re-point the stub. §C.3's consumer expansion is
+# intersected with this world (contract amendment 2026-11-20), so a fixture
+# that pins expansion must install the members it expects.
+fixture_installed() {
+    local dir=$1
+    shift
+    mkdir -p "$dir/bin" "$dir/db/local"
+    cat >"$dir/bin/pacman-conf" <<'EOF'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = DBPath ]; then
+    printf '%s\n' "${GSA_FAKE_DB_PATH:?}"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$dir/bin/pacman-conf"
+    export GSA_FAKE_DB_PATH="$dir/db"
+    local id entry
+    for id in "$@"; do
+        entry="$dir/db/local/$id-1-1"
+        mkdir -p "$entry"
+        {
+            printf '%%NAME%%\n%s\n\n' "$id"
+            printf '%%VERSION%%\n1-1\n\n'
+            printf '%%BASE%%\n%s\n' "$id"
+        } >"$entry/desc"
+        printf '%%FILES%%\n' >"$entry/files"
+    done
+}
+
 # stub_sleep DIR — the capped-sleep stub. The builder's own long waits are
 # pure latency no fixture asserts on — the VCS transport-retry backoffs in
 # lib/sources.fish (2 s/5 s/10 s), the dispatcher's 0.5 s poll cycle, the

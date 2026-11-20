@@ -604,7 +604,7 @@ fi
 exit 1
 EOF
     chmod +x "$ws/bin/pacman-conf"
-    for id in failp deferp; do
+    for id in failp deferp parkB; do
         mkdir -p "$fixture/prose-db/local/$id-1-1"
         {
             printf '%%NAME%%\n%s\n\n' "$id"

@@ -29,6 +29,7 @@ mod render;
 mod select;
 mod standalone;
 mod style;
+mod world;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -753,35 +754,90 @@ fn execute(
             // fetched thirty-four is the plan/run disagreement R2-juno-5
             // reports: the footer NAMES what a run would add. The same seam
             // answers, so the listing cannot drift from the run.
-            let (listed, whole_set, added) = if inv.targets.is_empty() && inv.ranges.is_empty() {
-                (select::whole_set_listing(&ctx), true, Vec::new())
+            let (listed, whole_set, added, skipped) = if inv.targets.is_empty()
+                && inv.ranges.is_empty()
+            {
+                (
+                    select::whole_set_listing(&ctx),
+                    true,
+                    Vec::new(),
+                    Vec::new(),
+                )
             } else {
-                let selection = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-                    .map_err(|e| cmd_error(e.to_string()))?;
-                write_notes(err, &selection.notes);
-                // An unreadable installed DB cannot answer "what is missing":
-                // the listing then says nothing about additions and names the
-                // refusal a run would make (rule 71 — an unreadable file is
-                // never read as an absent one, and never guessed past).
-                let added = match prepare::missing_prerequisite_ids(&selection, &graph, &db, inv) {
-                    Ok(ids) => ids
-                        .iter()
-                        .filter_map(|id| RecipeId::new(id.as_str()).ok())
-                        .collect(),
-                    Err(message) => {
-                        let _ = writeln!(
-                            err,
-                            "gsa: {message} — a run of this selection refuses; the listing shows it as given"
-                        );
-                        Vec::new()
+                // The listing is the one surface that NAMES what a run
+                // would skip: the expansion is intersected with the
+                // installed world (§C.3 amendment 2026-11-20), and a
+                // consumer installed nowhere is reported here rather than
+                // silently dropped. An unreadable DB cannot answer: the
+                // listing shows the selection as given and names the
+                // refusal a run would make (rule 71).
+                let mut world_error: Option<String> = None;
+                let (world, installed) = if inv.leaf {
+                    (None, gsa_install::LocalDb::default())
+                } else {
+                    match crate::world::load_local(inv) {
+                        Ok(local) => match crate::world::completeness_error(&local) {
+                            Some(message) => {
+                                world_error = Some(message);
+                                (None, local)
+                            }
+                            None => (
+                                Some(crate::world::InstalledWorld::from_db(&graph, &db, &local)),
+                                local,
+                            ),
+                        },
+                        Err(message) => {
+                            world_error = Some(message);
+                            (None, gsa_install::LocalDb::default())
+                        }
                     }
                 };
-                (selection.listed, false, added)
+                let selection = select::build_selection(
+                    &ctx,
+                    &inv.targets,
+                    &inv.ranges,
+                    inv.leaf,
+                    world.as_ref(),
+                )
+                .map_err(|e| cmd_error(e.to_string()))?;
+                write_notes(err, &selection.notes);
+                // An unreadable installed DB cannot answer "what is
+                // missing": the listing then says nothing about additions
+                // and names the refusal a run would make (rule 71 — an
+                // unreadable file is never read as an absent one, and
+                // never guessed past).
+                let added = match &world_error {
+                    Some(message) => {
+                        let _ = writeln!(
+                                err,
+                                "gsa: {message} — a run of this selection refuses; the listing shows it as given"
+                            );
+                        Vec::new()
+                    }
+                    None => {
+                        match prepare::missing_prerequisite_ids(
+                            &selection, &graph, &db, inv, &installed,
+                        ) {
+                            Ok(ids) => ids
+                                .iter()
+                                .filter_map(|id| RecipeId::new(id.as_str()).ok())
+                                .collect(),
+                            Err(message) => {
+                                let _ = writeln!(
+                                        err,
+                                        "gsa: {message} — a run of this selection refuses; the listing shows it as given"
+                                    );
+                                Vec::new()
+                            }
+                        }
+                    }
+                };
+                (selection.listed, false, added, selection.expansion_skipped)
             };
             let _ = write!(
                 out,
                 "{}",
-                render::render_listing_with(&ctx, &listed, whole_set, &added)
+                render::render_listing_with(&ctx, &listed, whole_set, &added, &skipped)
             );
         }
         Command::QueryGroups => {

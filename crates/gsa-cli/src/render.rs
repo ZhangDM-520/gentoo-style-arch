@@ -232,6 +232,7 @@ pub fn render_listing_with(
     listed: &[(usize, RecipeId)],
     whole_set: bool,
     added: &[RecipeId],
+    skipped: &[RecipeId],
 ) -> String {
     let mut out = String::new();
     if whole_set {
@@ -271,6 +272,18 @@ pub fn render_listing_with(
             out.push_str(&format!(
                 "Also fetches/builds on a run ({} missing build-order prerequisite(s)): {}\n",
                 added.len(),
+                names.join(" ")
+            ));
+        }
+        // §C.3 amendment 2026-11-20: a consumer the installed world does not
+        // contain is not expanded. The listing is the only surface that says
+        // so — a run stays silent, and an operator who wants one builds it by
+        // naming it.
+        if !skipped.is_empty() {
+            let names: Vec<&str> = skipped.iter().map(|id| id.as_str()).collect();
+            out.push_str(&format!(
+                "Not expanded on a run ({} consumer(s) not installed): {}\n",
+                skipped.len(),
                 names.join(" ")
             ));
         }

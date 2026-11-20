@@ -514,10 +514,11 @@ pub fn apply_missing_prerequisites(
     selection: &mut Selection,
     graph: &Graph<'_>,
     db: &RecipeDb,
+    installed: &gsa_install::LocalDb,
     inv: &Invocation,
     err: &mut dyn Write,
 ) -> Result<(), String> {
-    let additions = missing_prerequisite_ids(selection, graph, db, inv)?;
+    let additions = missing_prerequisite_ids(selection, graph, db, inv, installed)?;
     for id in &additions {
         let _ = writeln!(
             err,
@@ -539,15 +540,13 @@ pub fn missing_prerequisite_ids(
     graph: &Graph<'_>,
     db: &RecipeDb,
     inv: &Invocation,
+    installed: &gsa_install::LocalDb,
 ) -> Result<Vec<String>, String> {
     let candidates = prerequisite_candidates(graph, selection, inv.leaf);
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let conf = inv.config.as_deref().map(Path::new);
-    let db_root = gsa_install::localdb::pacman_db_root_for(conf)?;
-    let installed = gsa_install::LocalDb::load(&db_root)?;
-    Ok(missing_prerequisites(graph, &candidates, db, &installed))
+    Ok(missing_prerequisites(graph, &candidates, db, installed))
 }
 
 /// Merge prerequisite additions into the selection in BUILD ORDER: plan,
@@ -937,7 +936,11 @@ fn prepare_one(
 /// The selection a whole-set pass uses (`-Sy`/`-Su`, contract §B.4): the
 /// explicit targets/ranges when given, else every recipe in canonical build
 /// order.
-pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, String> {
+pub fn pass_selection(
+    ctx: &Ctx<'_>,
+    inv: &Invocation,
+    world: Option<&crate::world::InstalledWorld>,
+) -> Result<Selection, String> {
     if inv.targets.is_empty() && inv.ranges.is_empty() {
         let mut selection = Selection {
             listed: Vec::new(),
@@ -948,6 +951,7 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
             // this branch (it needs a non-empty selection, §B.8).
             leaf: false,
             prerequisites_added: Vec::new(),
+            expansion_skipped: Vec::new(),
         };
         for idx in ctx.graph.order() {
             selection.listed.push((
@@ -958,7 +962,8 @@ pub fn pass_selection(ctx: &Ctx<'_>, inv: &Invocation) -> Result<Selection, Stri
         selection.closure_size = selection.listed.len();
         Ok(selection)
     } else {
-        select::build_selection(ctx, &inv.targets, &inv.ranges, inv.leaf).map_err(|e| e.message)
+        select::build_selection(ctx, &inv.targets, &inv.ranges, inv.leaf, world)
+            .map_err(|e| e.message)
     }
 }
 
@@ -995,23 +1000,6 @@ pub fn prerequisite_candidates(graph: &Graph<'_>, selection: &Selection, leaf: b
     out
 }
 
-/// Every pacman name one recipe can be installed under: its id (`pkgbase`
-/// fallback), the committed `.SRCINFO` pkgbase, and its declared pkgnames.
-fn recipe_names(db: &RecipeDb, record: &gsa_model::TopologyRecord) -> Vec<String> {
-    let mut names = vec![record.id.as_str().to_string()];
-    if let Some(meta) = db.get(record.id.as_str()) {
-        if let Some(info) = &meta.srcinfo {
-            if let Some(base) = &info.pkgbase {
-                names.push(base.clone());
-            }
-        }
-        names.extend(meta.pkgnames());
-    }
-    names.sort();
-    names.dedup();
-    names
-}
-
 /// The prerequisite additions a run actually makes: a candidate is added
 /// only when the SYSTEM has NONE of its output names installed.
 ///
@@ -1028,7 +1016,7 @@ pub fn missing_prerequisites(
         .iter()
         .filter(|&&idx| {
             let record = graph.record(idx);
-            !recipe_names(db, record)
+            !crate::world::output_names(db, record)
                 .iter()
                 .any(|name| installed.get(name).is_some())
         })
@@ -1251,7 +1239,7 @@ fn sync_pass_selection(root: &Path, inv: &Invocation) -> Result<Selection, Exit>
         db: &db,
         user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
-    pass_selection(&ctx, inv).map_err(Exit::Usage)
+    pass_selection(&ctx, inv, None).map_err(Exit::Usage)
 }
 
 fn refresh_recipe_store(root: &Path, inv: &Invocation, err: &mut dyn Write) -> Result<bool, Exit> {

@@ -49,7 +49,7 @@ fn run_fetch_only_inner(
     // A host with no workspace yet preflights nothing, so the gate answers
     // rc 3 instead of an unprivileged state write (round-2 audit,
     // F-R2-C-01).
-    let mut preflight: Option<select::Selection> = None;
+    let mut draft: Option<select::SelectionDraft> = None;
     let probe = match &inv.standalone_root {
         Some(root) => Ok(root.clone()),
         None => crate::resolve_root(false, inv.state_dir.as_deref()),
@@ -67,10 +67,16 @@ fn run_fetch_only_inner(
                 db: &db,
                 user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
             };
-            let resolved = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-                .map_err(|error| error.into_exit())?;
-            crate::write_notes(err, &resolved.notes);
-            preflight = Some(resolved);
+            // Reference resolution only: the installed world is read after
+            // the gate, and the expansion is finished there (§C.3 amendment
+            // 2026-11-20).
+            // Notes are printed from the FINISHED selection below: a range
+            // clamp is an answer, and the pre-finish draft has not computed
+            // it yet (§C.3).
+            draft = Some(
+                select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+                    .map_err(|error| error.into_exit())?,
+            );
         }
         Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
         Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
@@ -98,24 +104,49 @@ fn run_fetch_only_inner(
         db: &db,
         user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
-    let mut selection = match preflight {
-        Some(selection) => selection,
-        None => {
-            let resolved = select::build_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
-                .map_err(|error| error.into_exit())?;
-            crate::write_notes(err, &resolved.notes);
-            resolved
+    // ── the installed world (§C.3 amendment 2026-11-20) ─────────────────
+    // The expansion is intersected with it; an unreadable DB is UNKNOWN
+    // world state (rule 71), and guessing would fetch a set the build will
+    // not reproduce. `--leaf` builds exactly what was named.
+    let (world, installed) = if inv.leaf {
+        (None, gsa_install::LocalDb::default())
+    } else {
+        match crate::world::InstalledWorld::load(inv, &graph, &db) {
+            Ok((world, local)) => (Some(world), local),
+            Err(message) => {
+                return Err(Exit::Refuse(Refusal::noted(
+                    RefusalClass::StartupRefused,
+                    vec![format!("gsa: {message}")],
+                )));
+            }
         }
     };
+    let mut selection = match draft {
+        Some(draft) => draft
+            .finish(&ctx, None, world.as_ref())
+            .map_err(|error| error.into_exit())?,
+        None => select::resolve_selection(&ctx, &inv.targets, &inv.ranges, inv.leaf)
+            .map_err(|error| error.into_exit())?
+            .finish(&ctx, None, world.as_ref())
+            .map_err(|error| error.into_exit())?,
+    };
+    // The selection actually fetched, never the pre-world draft: a clamp the
+    // world filter changed is the operator's answer about THIS set.
+    crate::write_notes(err, &selection.notes);
     // ── missing build-order prerequisites (contract §C.3) ────────────────
     // Fetch is the "before you disconnect" verb: a build run expands to the
     // prerequisites the system lacks and then needs THEIR sources, so fetching
     // only the named targets left the run to discover a missing source later
     // with no network (external review, 2026-11-12). The same seam decides and
     // the same note announces it; `--leaf` stays exact.
-    if let Err(message) =
-        crate::prepare::apply_missing_prerequisites(&mut selection, &graph, &db, inv, err)
-    {
+    if let Err(message) = crate::prepare::apply_missing_prerequisites(
+        &mut selection,
+        &graph,
+        &db,
+        &installed,
+        inv,
+        err,
+    ) {
         // An unreadable installed DB cannot answer "what is missing", and
         // guessing would fetch a set the build will not reproduce.
         return Err(Exit::Refuse(Refusal::noted(

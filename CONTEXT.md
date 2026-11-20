@@ -103,6 +103,14 @@ the named recipes — the ABI wave included: its `abi-wave` rows still render,
 its members join no plan and refuse nothing.
 _Avoid_: no-deps mode, dependency pruning ("dependency" is pacman's)
 
+**Consumer expansion**:
+A selection grows by its transitive build-order consumers (the reverse
+closure), intersected with the installed world: a recipe installed nowhere
+links through nothing, so it is neither broken by a change nor built for it
+(contract §C.3 amendment 2026-11-20). An explicitly named consumer is always
+in scope.
+_Avoid_: dependency closure, reverse-dependency sweep
+
 **Pruning strengths**:
 The three maintain wipes, weakest first: `-Mc` (the selection's build trees
 and archives), `-Mcc` (every built archive in the workspace plus its

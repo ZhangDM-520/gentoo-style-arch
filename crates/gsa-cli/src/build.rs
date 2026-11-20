@@ -192,6 +192,25 @@ fn run_build_with(
         }
     };
 
+    // ── the installed world (§C.3 amendment 2026-11-20) ─────────────────
+    // Consumer expansion is intersected with it, so the DB must be READABLE
+    // here: an unreadable one is UNKNOWN world state, never an absent one
+    // (rule 71), and the refusal is rendered below once the plan the record
+    // owes exists. `--leaf` builds exactly what was named, so it needs no
+    // world.
+    let mut world_error: Option<String> = None;
+    let (world, installed) = if inv.leaf {
+        (None, gsa_install::LocalDb::default())
+    } else {
+        match crate::world::InstalledWorld::load(inv, &graph, &db) {
+            Ok((world, local)) => (Some(world), local),
+            Err(message) => {
+                world_error = Some(message);
+                (None, gsa_install::LocalDb::default())
+            }
+        }
+    };
+
     // ── §C.4 prompt, AFTER the gate: an unprivileged run must refuse
     //    (rc 3) before any interactive input is rendered or consumed ──────
     let mut selection = draft
@@ -199,6 +218,7 @@ fn run_build_with(
             &ctx,
             err,
             crate::prompt::interactive(inv.machine_requested()),
+            world.as_ref(),
         )
         .map_err(|error| error.into_exit())?;
 
@@ -211,12 +231,25 @@ fn run_build_with(
     let state_dir =
         gsa_model::config::resolve_state_dir(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
 
+    if let Some(message) = world_error {
+        let _ = writeln!(err, "gsa: {message}");
+        return Err(refuse_startup(
+            inv,
+            &selection,
+            &state_dir,
+            out,
+            err,
+            RefusalClass::StartupRefused,
+            || resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b),
+        ));
+    }
+
     // ── missing build-order prerequisites (owner decision 2026-11-11) ────
     // `-S app` planned `ok` and then died in makepkg's "Missing dependencies"
     // for a prerequisite nobody selected. The prerequisites the SYSTEM lacks
     // now join the selection; an installed one is never added and never
     // rebuilt, and `--leaf` builds exactly what was named.
-    match prepare::apply_missing_prerequisites(&mut selection, &graph, &db, inv, err) {
+    match prepare::apply_missing_prerequisites(&mut selection, &graph, &db, &installed, inv, err) {
         Ok(()) => {}
         Err(message) => {
             // The additions decide what the run builds, so an unreadable
@@ -240,14 +273,19 @@ fn run_build_with(
     // row ≠ what its consumers recorded at install) drags its consumer
     // wave into the plan: wave members outside the selection are added,
     // and an uncovered member refuses the run (rc 3) before anything runs.
+    let recipe_of_name = crate::install::workspace_recipe_of_name(&db);
     let wave = match wave_check(
         out,
         err,
         &graph,
         &selection,
-        &state_dir,
-        inv.config.as_deref().map(std::path::Path::new),
-        &crate::install::workspace_recipe_of_name(&db),
+        &WaveGate {
+            state_dir: &state_dir,
+            conf: inv.config.as_deref().map(std::path::Path::new),
+            recipe_of_name: &recipe_of_name,
+            world: world.as_ref(),
+            installed: world.as_ref().map(|_| &installed),
+        },
     ) {
         Ok(wave) => wave,
         Err(WaveStateError(message)) => {
@@ -1054,6 +1092,22 @@ pub(crate) fn plan_only(
     // so its continuation restates the chosen root (§J.2/§H.2).
     let mut owned = inv.clone();
     let inv = &mut owned;
+    // The installed world (§C.3 amendment 2026-11-20): the expansion is
+    // intersected with it, and an unreadable DB is the run's refusal. The
+    // plan still renders (nothing mutates) with `rc` reporting the predicted
+    // class, exactly as the prerequisite seam's own unreadable case does.
+    let mut world_error: Option<String> = None;
+    let (world, installed) = if inv.leaf {
+        (None, gsa_install::LocalDb::default())
+    } else {
+        match crate::world::InstalledWorld::load(inv, ctx.graph, ctx.db) {
+            Ok((world, local)) => (Some(world), local),
+            Err(message) => {
+                world_error = Some(message);
+                (None, gsa_install::LocalDb::default())
+            }
+        }
+    };
     let mut selection = select::build_selection_for_build(
         ctx,
         &inv.targets,
@@ -1061,6 +1115,7 @@ pub(crate) fn plan_only(
         inv.leaf,
         err,
         crate::prompt::interactive(inv.machine_requested()),
+        world.as_ref(),
     )
     .map_err(|error| error.into_exit())?;
     crate::write_notes(err, &selection.notes);
@@ -1082,25 +1137,45 @@ pub(crate) fn plan_only(
     // unreadable installed DB is the run's refusal, so the plan reports that
     // predicted class rather than a false 0.
     let mut prereq_refused = false;
-    match prepare::apply_missing_prerequisites(&mut selection, ctx.graph, ctx.db, inv, err) {
-        Ok(()) => {}
-        Err(message) => {
+    match &world_error {
+        Some(message) => {
             let _ = writeln!(err, "gsa: {message}");
             prereq_refused = true;
+        }
+        None => {
+            match prepare::apply_missing_prerequisites(
+                &mut selection,
+                ctx.graph,
+                ctx.db,
+                &installed,
+                inv,
+                err,
+            ) {
+                Ok(()) => {}
+                Err(message) => {
+                    let _ = writeln!(err, "gsa: {message}");
+                    prereq_refused = true;
+                }
+            }
         }
     }
     // A dry run still plans: nothing mutates, so the plan is rendered, but an
     // unreadable wave input makes the real run refuse (rc 3), and the plan's
     // `rc` scalar reports that predicted class rather than a false 0.
     let mut wave_refused = false;
+    let recipe_of_name = crate::install::workspace_recipe_of_name(ctx.db);
     let wave = match wave_check(
         out,
         err,
         ctx.graph,
         &selection,
-        &state_dir,
-        inv.config.as_deref().map(std::path::Path::new),
-        &crate::install::workspace_recipe_of_name(ctx.db),
+        &WaveGate {
+            state_dir: &state_dir,
+            conf: inv.config.as_deref().map(std::path::Path::new),
+            recipe_of_name: &recipe_of_name,
+            world: world.as_ref(),
+            installed: world.as_ref().map(|_| &installed),
+        },
     ) {
         Ok(wave) => wave,
         Err(WaveStateError(message)) => {
@@ -1256,7 +1331,10 @@ fn run_update_inner(
     // `-Su --dry-run` must not clone the store or create the state root, and
     // a host with no workspace preflights nothing — the gate answers rc 3
     // (round-2 audit, F-R2-C-01).
-    let mut preflight: Option<select::Selection> = None;
+    // The preflight validates the argv, not the expansion: the installed
+    // world is read AFTER the gate (a §B.10 refusal must not depend on a DB
+    // read), and the selection is recomputed there with the filter. Its
+    // count is an upper bound, so the budget check stays conservative.
     let probe = match &inv.standalone_root {
         Some(root) => Ok(root.clone()),
         None => crate::resolve_root(false, inv.state_dir.as_deref()),
@@ -1275,10 +1353,12 @@ fn run_update_inner(
                 db: &db,
                 user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
             };
-            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
-            crate::write_notes(err, &selection.notes);
+            // The probe's selection is an UPPER BOUND for the budget; its
+            // notes belong to a set the world filter may still change, so
+            // only the post-gate selection prints (§C.3: a clamp is an
+            // answer about the set that runs).
+            let selection = prepare::pass_selection(&ctx, inv, None).map_err(Exit::Usage)?;
             let _ = resolve_budget(inv, &project, selection.listed.len()).map_err(Exit::Usage)?;
-            preflight = Some(selection);
         }
         Err(crate::RootFailure::Usage(message)) => return Err(Exit::Usage(message)),
         Err(crate::RootFailure::NotFound(_) | crate::RootFailure::NeedsRoot) => {}
@@ -1309,14 +1389,25 @@ fn run_update_inner(
         db: &db,
         user_sets: select::load_user_sets(inv).map_err(select::user_sets_exit)?,
     };
-    let selection = match preflight {
-        Some(selection) => selection,
-        None => {
-            let selection = prepare::pass_selection(&ctx, inv).map_err(Exit::Usage)?;
-            crate::write_notes(err, &selection.notes);
-            selection
+    // ── the installed world (§C.3 amendment 2026-11-20) ─────────────────
+    // Loaded once: the §B.4 stale set reads this same DB. An unreadable one
+    // is UNKNOWN world state (rule 71) and refuses before any `-Syu` rewrite.
+    let installed = load_installed_db_for_update(inv.config.as_deref().map(Path::new))?;
+    let world = if inv.leaf {
+        None
+    } else {
+        if let Some(message) = crate::world::completeness_error(&installed) {
+            return Err(Exit::Refuse(Refusal::noted(
+                RefusalClass::StartupRefused,
+                vec![format!("gsa: {message}")],
+            )));
         }
+        Some(crate::world::InstalledWorld::from_db(
+            &graph, &db, &installed,
+        ))
     };
+    let selection = prepare::pass_selection(&ctx, inv, world.as_ref()).map_err(Exit::Usage)?;
+    crate::write_notes(err, &selection.notes);
 
     let mut resolved_inv = inv.clone();
     if !resolved_inv.dry_run {
@@ -1350,7 +1441,6 @@ fn run_update_inner(
     // The installed record is the reference point whenever one exists: an
     // archive whose install was refused must stay stale, or the update
     // disappears from this verb for good.
-    let installed = load_installed_db_for_update(resolved_inv.config.as_deref().map(Path::new))?;
     let stale: Vec<RecipeId> = prepare::stale_set(&root, &graph, &db, &installed, &ids)
         .into_iter()
         .map(|row| row.id)
@@ -1779,15 +1869,32 @@ pub(crate) struct WaveStateError(pub String);
 /// plan and no `refuse abi-consumer-uncovered` row gates a package the
 /// operator did not name. `gsa_abi::WavePlan::exact` is the one decision
 /// (`--leaf` is exact selection, the wave included).
+/// The wave gate's non-graph inputs: the run's state root, the configuration
+/// its DB root resolves from, the output→recipe map, and the installed world
+/// (§C.3/§E.3 amendments 2026-11-20) — the recipe-id view and the parsed DB
+/// a caller already read for the selection filter.
+pub(crate) struct WaveGate<'a> {
+    pub state_dir: &'a std::path::Path,
+    pub conf: Option<&'a std::path::Path>,
+    pub recipe_of_name: &'a std::collections::BTreeMap<String, String>,
+    pub world: Option<&'a crate::world::InstalledWorld>,
+    pub installed: Option<&'a LocalDb>,
+}
+
 pub(crate) fn wave_check(
     out: &mut dyn Write,
     err: &mut dyn Write,
     graph: &Graph<'_>,
     selection: &Selection,
-    state_dir: &std::path::Path,
-    conf: Option<&std::path::Path>,
-    recipe_of_name: &std::collections::BTreeMap<String, String>,
+    gate: &WaveGate<'_>,
 ) -> Result<WaveCheck, WaveStateError> {
+    let WaveGate {
+        state_dir,
+        conf,
+        recipe_of_name,
+        world,
+        installed,
+    } = *gate;
     // A state root that does not exist is a clean checkout, not unreadable
     // state: nothing was ever recorded, so no OBSERVABLE token move exists
     // and there is nothing to read. A root that EXISTS but cannot be read is
@@ -1902,19 +2009,28 @@ pub(crate) fn wave_check(
     // transaction will write (`--config`'s DBPath), and a named
     // configuration whose root cannot be resolved is a refusal: it is a
     // different machine, not unreadable world state (security-auditor F4).
-    let db_root = pacman_db_root_for(conf)
-        .map_err(|message| WaveStateError(format!("ABI wave check refused: {message}")))?;
-    let (db, db_readable) = match LocalDb::load(&db_root) {
-        Ok(db) => (db, true),
-        Err(error) => {
-            let _ = writeln!(
-                err,
-                "gsa: note: ABI wave check: installed view unavailable ({error}) — content-truth term disabled"
-            );
-            (LocalDb::default(), false)
+    // A caller that already parsed the DB (every non-`--leaf` work verb,
+    // for the §C.3 expansion filter) hands it over: one parse per run.
+    let (loaded, db_readable) = match installed {
+        Some(_) => (None, true),
+        None => {
+            let db_root = pacman_db_root_for(conf)
+                .map_err(|message| WaveStateError(format!("ABI wave check refused: {message}")))?;
+            match LocalDb::load(&db_root) {
+                Ok(db) => (Some(db), true),
+                Err(error) => {
+                    let _ = writeln!(
+                        err,
+                        "gsa: note: ABI wave check: installed view unavailable ({error}) — content-truth term disabled"
+                    );
+                    (None, false)
+                }
+            }
         }
     };
-    let view = gsa_install::abi_view(&db);
+    let empty = LocalDb::default();
+    let db: &LocalDb = installed.or(loaded.as_ref()).unwrap_or(&empty);
+    let view = gsa_install::abi_view(db);
     for (movement, inputs) in moves.iter_mut().zip(drift_inputs) {
         for (pkgname, provides) in inputs {
             for drift in gsa_abi::provide_drift(&pkgname, &provides, &view) {
@@ -1935,6 +2051,7 @@ pub(crate) fn wave_check(
         subs: &subs,
         moves: &moves,
         installed: db_readable.then_some(&view),
+        installed_recipes: world.map(crate::world::InstalledWorld::recipe_ids),
         planned: &planned,
         recipe_of_name,
     });
@@ -2237,7 +2354,9 @@ fn emit_refusal_record(
 
 #[cfg(test)]
 mod tests {
-    use super::{after_sync_phase, build_order_ids, later_after, later_after_settled, wave_check};
+    use super::{
+        after_sync_phase, build_order_ids, later_after, later_after_settled, wave_check, WaveGate,
+    };
     use crate::args::{Family, Invocation};
     use crate::prepare;
     use crate::select::Selection;
@@ -2284,6 +2403,7 @@ mod tests {
             notes: Vec::new(),
             leaf: false,
             prerequisites_added: Vec::new(),
+            expansion_skipped: Vec::new(),
         }
     }
 
@@ -2451,9 +2571,13 @@ mod tests {
             &mut err,
             &graph,
             &selection,
-            &dir,
-            None,
-            &std::collections::BTreeMap::new(),
+            &WaveGate {
+                state_dir: &dir,
+                conf: None,
+                recipe_of_name: &std::collections::BTreeMap::new(),
+                world: None,
+                installed: None,
+            },
         );
         let error = match result {
             Ok(_) => panic!("unreadable state must refuse the wave gate, not skip it"),
@@ -2477,9 +2601,13 @@ mod tests {
             &mut err,
             &graph,
             &selection,
-            &absent,
-            None,
-            &std::collections::BTreeMap::new(),
+            &WaveGate {
+                state_dir: &absent,
+                conf: None,
+                recipe_of_name: &std::collections::BTreeMap::new(),
+                world: None,
+                installed: None,
+            },
         )
         .is_ok());
         let _ = std::fs::remove_dir_all(&dir);

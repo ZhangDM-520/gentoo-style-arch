@@ -168,6 +168,13 @@ pub struct WaveInputs<'a> {
     pub subs: &'a Subscriptions,
     pub moves: &'a [TokenMove],
     pub installed: Option<&'a InstalledView>,
+    /// The topology ids with at least one installed output (`gsa-cli`'s one
+    /// installed-world derivation). A seed or closure member absent from it
+    /// can neither link against the move nor break, so it joins nothing and
+    /// cannot engage the fallback; `planned` stays authoritative — the
+    /// operator named it. `None` is an unknown world and keeps the old
+    /// fail-toward-over-expansion answer (rule 25(c)).
+    pub installed_recipes: Option<&'a BTreeSet<String>>,
     pub planned: &'a BTreeSet<String>,
     /// The workspace output→recipe-id map (§E.3 gap-G1's ONE key-space
     /// boundary, the same map the install gate uses as `recipe_of_name`):
@@ -199,10 +206,20 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         subs,
         moves,
         installed,
+        installed_recipes,
         planned,
         recipe_of_name,
     } = *input;
     let mut plan = WavePlan::default();
+    // Rule 76: the installed world plus what this run was explicitly asked
+    // to build. A recipe installed nowhere owns no files, so nothing links
+    // through it and nothing can be rebuilt into it.
+    let in_world = |id: &str| -> bool {
+        match installed_recipes {
+            Some(world) => world.contains(id) || planned.contains(id),
+            None => true,
+        }
+    };
 
     for movement in moves {
         let provider = movement.provider.as_str();
@@ -212,6 +229,16 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         let mut push = |id: String, basis: MemberBasis, seeds: &mut Vec<WaveMember>| {
             let id = canon(recipe_of_name, &id);
             if id == provider {
+                return;
+            }
+            // Rule 76 is a TOPOLOGY statement: a recipe installed nowhere
+            // owns no files. A name the topology does not contain is not a
+            // recipe at all — an installed out-of-tree consumer's presence in
+            // the installed view is its only membership evidence, and the
+            // known/external partition below decides its fate. Filtering it
+            // here would silently drop the gap the wave exists to report
+            // (round-3 review 2026-11-20).
+            if graph.index_of(&id).is_some() && !in_world(&id) {
                 return;
             }
             if seen.insert(id.clone()) {
@@ -232,9 +259,12 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
                     direct_consumers.insert(candidate);
                 }
             }
+            // A consumer the installed world does not contain has no record
+            // because it was never built here: it must not read as an
+            // unrecorded LIVE consumer and drag the whole closure in.
             fallback = direct_consumers.iter().any(|&i| {
-                subs.token_for(graph.record(i).id.as_str(), provider)
-                    .is_none()
+                let id = graph.record(i).id.as_str();
+                in_world(&canon(recipe_of_name, id)) && subs.token_for(id, provider).is_none()
             });
             for consumer_idx in &direct_consumers {
                 let id = graph.record(*consumer_idx).id.as_str();
@@ -382,6 +412,9 @@ pub fn plan_waves(input: &WaveInputs<'_>) -> WavePlan {
         if !seed_indices.is_empty() {
             for idx in graph.consumer_closure(&seed_indices) {
                 let id = graph.record(idx).id.as_str();
+                if !in_world(&canon(recipe_of_name, id)) {
+                    continue;
+                }
                 let basis = seed_basis.get(id).copied().unwrap_or(MemberBasis::Closure);
                 members.push(WaveMember {
                     id: id.to_string(),
@@ -607,6 +640,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -629,6 +663,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("p", "T2", None)],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -661,6 +696,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -700,6 +736,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("m1", "T9", Some("T8"))],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -739,6 +776,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("m1", "T9", Some("T8"))],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -776,6 +814,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
+            installed_recipes: None,
             planned: &BTreeSet::new(),
             recipe_of_name: &Default::default(),
         });
@@ -823,6 +862,7 @@ mod tests {
             subs: &subs,
             moves: &[mv("p", "T2", Some("T1"))],
             installed: None,
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -896,6 +936,7 @@ mod tests {
             subs: &subs,
             moves: &[movement],
             installed: Some(&installed),
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &Default::default(),
         });
@@ -955,6 +996,7 @@ mod tests {
             subs: &subs,
             moves: &[movement],
             installed: Some(&installed),
+            installed_recipes: None,
             planned: &planned,
             recipe_of_name: &recipe_of_name,
         });
@@ -1055,6 +1097,7 @@ mod tests {
             subs: &subs,
             moves: &[movement],
             installed: Some(&installed),
+            installed_recipes: None,
             planned: &BTreeSet::new(),
             recipe_of_name: &BTreeMap::new(),
         });

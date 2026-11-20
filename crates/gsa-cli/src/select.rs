@@ -16,6 +16,7 @@ use gsa_recipe::{RecipeDb, SourceKind};
 use gsa_topo::ProjectConfig;
 
 use crate::prompt::{self, AppRow, PromptOutcome};
+use crate::world::InstalledWorld;
 
 /// Everything selection needs: the loaded config, the validated graph, the
 /// recipe cache, and the kv user sets (I5 — `@name` resolves over the kv
@@ -181,6 +182,12 @@ pub struct Selection {
     /// the only surface an operator has before a run and it must not hide a
     /// selection that grows (R2-juno-5).
     pub prerequisites_added: Vec<RecipeId>,
+    /// Consumers the expansion left out because the installed world does not
+    /// contain them (empty under `--leaf`, for a verb with no installed view,
+    /// and when nothing was skipped). Runs stay silent about it — the `-Sl`
+    /// listing names them, its one inspection surface (§C.3 amendment
+    /// 2026-11-20).
+    pub expansion_skipped: Vec<RecipeId>,
 }
 
 /// One parsed index range (`N..M`, `N..`, `..M`).
@@ -582,8 +589,9 @@ pub fn build_selection(
     targets: &[String],
     ranges: &[String],
     leaf: bool,
+    world: Option<&InstalledWorld>,
 ) -> Result<Selection, SelectError> {
-    resolve_selection(ctx, targets, ranges, leaf)?.finish(ctx, None)
+    resolve_selection(ctx, targets, ranges, leaf)?.finish(ctx, None, world)
 }
 
 /// The build paths' selection: the §C.4 prompt engages only when the
@@ -600,8 +608,9 @@ pub fn build_selection_for_build(
     leaf: bool,
     menu: &mut dyn Write,
     interactive: bool,
+    world: Option<&InstalledWorld>,
 ) -> Result<Selection, SelectError> {
-    resolve_selection(ctx, targets, ranges, leaf)?.finish_for_build(ctx, menu, interactive)
+    resolve_selection(ctx, targets, ranges, leaf)?.finish_for_build(ctx, menu, interactive, world)
 }
 
 impl SelectionDraft {
@@ -618,12 +627,13 @@ impl SelectionDraft {
         ctx: &Ctx<'_>,
         menu: &mut dyn Write,
         interactive: bool,
+        world: Option<&InstalledWorld>,
     ) -> Result<Selection, SelectError> {
         if interactive {
             let stdin = std::io::stdin();
-            self.finish(ctx, Some((menu, &mut stdin.lock())))
+            self.finish(ctx, Some((menu, &mut stdin.lock())), world)
         } else {
-            self.finish(ctx, None)
+            self.finish(ctx, None, world)
         }
     }
 
@@ -636,6 +646,7 @@ impl SelectionDraft {
         self,
         ctx: &Ctx<'_>,
         prompt: Option<(&mut dyn Write, &mut dyn BufRead)>,
+        world: Option<&InstalledWorld>,
     ) -> Result<Selection, SelectError> {
         let SelectionDraft {
             other_seeds,
@@ -650,7 +661,8 @@ impl SelectionDraft {
             .copied()
             .chain(app_seeds.iter().copied())
             .collect();
-        let anchor_of: HashMap<usize, usize> = closure_of(ctx, &unfiltered, leaf)
+        let anchor_of: HashMap<usize, usize> = closure_of(ctx, &unfiltered, leaf, world)
+            .members
             .into_iter()
             .enumerate()
             .map(|(pos, idx)| (idx, pos + 1))
@@ -667,7 +679,12 @@ impl SelectionDraft {
         merged.extend(app_seeds);
         let seed_vec: Vec<usize> = merged.into_iter().collect();
 
-        let closure: Vec<usize> = closure_of(ctx, &seed_vec, leaf);
+        let Closure { members, skipped } = closure_of(ctx, &seed_vec, leaf, world);
+        let closure: Vec<usize> = members;
+        let expansion_skipped: Vec<RecipeId> = skipped
+            .iter()
+            .map(|&idx| ctx.graph.record(idx).id.clone())
+            .collect();
         let seed_set: BTreeSet<usize> = seed_vec.iter().copied().collect();
         // Expansion is counted over the rows the selection ENDS UP carrying,
         // so it is derived after the range filter below (a range slices the
@@ -695,6 +712,7 @@ impl SelectionDraft {
                 notes,
                 leaf,
                 prerequisites_added: Vec::new(),
+                expansion_skipped,
             });
         }
 
@@ -757,18 +775,54 @@ impl SelectionDraft {
             notes,
             leaf,
             prerequisites_added: Vec::new(),
+            expansion_skipped,
         })
     }
 }
 
-fn closure_of(ctx: &Ctx<'_>, seeds: &[usize], leaf: bool) -> Vec<usize> {
+/// The consumer expansion over one seed set, and the rows it left out.
+struct Closure {
+    /// Seeds plus the consumers the installed world contains, canonical
+    /// build order (§C.3).
+    members: Vec<usize>,
+    /// Consumers reachable from the seeds that the installed world does not
+    /// contain, canonical build order. They join nothing and gate nothing
+    /// (`-Sl` names them).
+    skipped: Vec<usize>,
+}
+
+/// §C.3's one expansion site. A recipe installed nowhere owns no files, so
+/// it cannot link against a moved soname, cannot break, and must not be
+/// built (nor have its build prerequisites installed) on the strength of an
+/// expansion (`AGENTS.md` rule 76). Seeds are always kept — the operator
+/// named them. `None` is an unknown/unfiltered world (a verb that has no
+/// installed view, or `--leaf`).
+fn closure_of(
+    ctx: &Ctx<'_>,
+    seeds: &[usize],
+    leaf: bool,
+    world: Option<&InstalledWorld>,
+) -> Closure {
     if leaf {
-        let mut s = seeds.to_vec();
-        s.sort_by_key(|&i| ctx.graph.position(i));
-        s
-    } else {
-        ctx.graph.consumer_closure(seeds)
+        let mut members = seeds.to_vec();
+        members.sort_by_key(|&i| ctx.graph.position(i));
+        return Closure {
+            members,
+            skipped: Vec::new(),
+        };
     }
+    let reached = ctx.graph.consumer_closure(seeds);
+    let Some(world) = world else {
+        return Closure {
+            members: reached,
+            skipped: Vec::new(),
+        };
+    };
+    let seed_set: BTreeSet<usize> = seeds.iter().copied().collect();
+    let (members, skipped) = reached.into_iter().partition(|idx| {
+        seed_set.contains(idx) || world.contains(ctx.graph.record(*idx).id.as_str())
+    });
+    Closure { members, skipped }
 }
 
 /// §C.4 prompt layer — the `@app` group's contribution, and only that,

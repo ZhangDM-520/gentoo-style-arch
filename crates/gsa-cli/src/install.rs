@@ -338,6 +338,7 @@ fn candidate_id(graph: &Graph<'_>, candidate: &Candidate, pkgname: &str) -> Stri
 /// `abi-rev=`) and the installed-ELF view. Reads only — pacman-free.
 fn compute_swap(
     graph: &Graph<'_>,
+    db: &gsa_recipe::RecipeDb,
     candidates: &[Candidate],
     localdb: &LocalDb,
     state_dir: &Path,
@@ -345,6 +346,21 @@ fn compute_swap(
 ) -> Result<WavePlan, String> {
     let subs = Subscriptions::load(&gsa_abi::subscriptions_path(state_dir))?;
     let view = gsa_install::abi_view(localdb);
+    // §C.3 amendment 2026-11-20: the wave is intersected with the installed
+    // world too (its own closure cannot be silenced by a selection filter).
+    // Naming an archive stages it, so `planned` exempts it.
+    //
+    // Rule 71 / rule 25(c): a PARTIAL read is UNKNOWN world state, never an
+    // empty one. `-U` names its archives directly, so it is the one verb that
+    // could otherwise proceed with a world that silently omits a real
+    // consumer — every sibling verb already refuses here (round-4 review
+    // 2026-11-20). The swap cannot be planned on a world it cannot read.
+    if let Some(message) = crate::world::completeness_error(localdb) {
+        // The seam's own wording; `finish_refused` renders it as the
+        // `plan-failed` row, so no prefix belongs here.
+        return Err(message);
+    }
+    let world = crate::world::InstalledWorld::from_db(graph, db, localdb);
     // One movement per provider over the WHOLE candidate set: a multi-output
     // recipe's archives share one provider and contribute one current token
     // each (a record is current when ANY shipped output still carries it).
@@ -425,6 +441,7 @@ fn compute_swap(
         subs: &subs,
         moves: &moves,
         installed: Some(&view),
+        installed_recipes: Some(world.recipe_ids()),
         planned: &planned,
         recipe_of_name,
     }))
@@ -860,6 +877,7 @@ fn run_upgrade_inner(
     } else {
         match compute_swap(
             &graph,
+            &db,
             &candidates,
             &localdb,
             &state_dir,

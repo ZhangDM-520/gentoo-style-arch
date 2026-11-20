@@ -1029,6 +1029,35 @@ either number. Pinned by `tests/dashboard.sh` §P8 in both directions (a range
 whose survivor is a seed is silent; one whose survivor is a consumer reports
 `added=1 of=1`).
 
+*Amendment (2026-11-20, the installed world bounds the expansion).* A
+consumer joins the expansion only when the **installed world** contains it: a
+recipe with ANY of its output names — the record id, the committed `.SRCINFO`
+pkgbase, a declared pkgname — recorded in the local pacman DB. A recipe
+installed nowhere owns no files, links through no soname and can be rebuilt by
+nothing, so it can neither break nor be covered; it must not be built, and its
+build-order prerequisites must not be installed, on the strength of an
+expansion (`AGENTS.md` rule 76). This is the §C.3 prerequisite amendment's own
+predicate ("the system has NONE of its output names installed") read at the
+expansion site. Seeds are always in scope — positional targets, group/set
+members and `<id>-snapshot` resolutions: naming an uninstalled consumer is the
+way to build it. An installed consumer reached only through an uninstalled one
+still joins, and the uninstalled intermediate rejoins as that consumer's
+missing prerequisite when it is genuinely needed.
+
+The world is read ONCE per verb and is UNKNOWN, never empty, when the local DB
+cannot be read or holds unreadable entries (rule 71). The build run, its
+`--dry-run` plan, `-Sw` and `-Su` refuse (rc 3, `startup-refused`) in that
+case, exactly as the prerequisite amendment already does; `-Sl` still answers
+— it renders the selection as given and names the refusal a run would make.
+The skip itself is silent on runs (owner decision 2026-11-20): the `-Sl`
+footer is the inspection surface, one line naming every skipped consumer
+(`Not expanded on a run (N consumer(s) not installed): …`). Non-building
+selections keep the raw closure — `-Mc` prune and the `-Sy` sync pass neither
+build nor install, and their rows are not plans. The `added=N of=M` row counts
+over the filtered listing, so it always describes the plan beside it. Pinned by
+`tests/project.sh` §3/§6 (skip, footer, named-seed exemption) and
+`tests/gsa-abi-v2.sh` for the wave half (§E.3).
+
 ### C.4 The `app` prompt and `app-cluster` rows
 
 An `@app` build or `--dry-run` on a TTY prompts to multi-select before the
@@ -1177,6 +1206,22 @@ the §E.3 under-coverage refusal for a wave the run CARRIES. Under `--leaf`
 member the operator did not name, and a NON-leaf invocation of the same argv
 still refuses by name. Pinned by `tests/gsa-abi-v2.sh` §i's control and
 `tests/abi-batch-policy.sh` B2/B3.
+
+*Amendment (2026-11-20, the wave reads the same installed world).* A token
+move's wave is intersected with the installed world ∪ the run's planned set —
+the §C.3 amendment's one derivation, applied inside `gsa-abi` because the wave
+recomputes its own closure and a selection filter cannot silence it. A direct
+topology consumer absent from both is not a seed; because it can never hold a
+`:=` record, it also no longer counts as an unrecorded LIVE consumer and cannot
+engage the fail-toward-whole-closure fallback; and the wave's closure drops it
+along with every transitive consumer reached through it. This is what keeps
+`wave.additions` from re-adding the consumers §C.3 just filtered out. A member
+the operator named, or one already in the plan (a §C.3 prerequisite), stays in
+scope; `--leaf` keeps the wave exact/diagnostic (§C.3 amendment 2026-11-18).
+An unknown world keeps the old over-expansion answer (rule 25(c)). The skip is
+silent (owner decision 2026-11-20); `-Sl` is the operator's surface. Pinned by
+`gsa-abi`'s `wave_pipeline` cases (absent consumer, absent transitive
+consumer, named consumer, unknown world).
 
 *Amendment (2026-11-11, did pacman run?).* A checked same-version skip keeps
 the §E.3 decision row exactly as above (`skip already-current <v>` /

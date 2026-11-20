@@ -210,7 +210,7 @@ fn preflight_selection(
 ) -> Result<(), Exit> {
     match verb {
         MaintVerb::Prune(1) => {
-            select::build_selection(sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
+            select::build_selection(sel_ctx, &inv.targets, &inv.ranges, inv.leaf, None)
                 .map_err(|error| cmd_error(error.to_string()))?;
         }
         MaintVerb::Sets if has_flag(inv, "--add") || has_flag(inv, "--remove") => {
@@ -550,7 +550,7 @@ fn run_inner(inv: &Invocation, out: &mut dyn Write, err: &mut dyn Write) -> Resu
                     ));
                 }
                 let selection =
-                    select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf)
+                    select::build_selection(&sel_ctx, &inv.targets, &inv.ranges, inv.leaf, None)
                         .map_err(|error| cmd_error(error.to_string()))?;
                 write_notes(err, &selection.notes);
                 selection

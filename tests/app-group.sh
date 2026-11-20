@@ -121,7 +121,9 @@ install_fish_oracle "$fixture"
 # prerequisite the SYSTEM lacks, and this fixture pins CONSUMER expansion —
 # an installed prerequisite is never added and never rebuilt (the missing
 # case has its own section in tests/project.sh).
-mkdir -p "$fixture/db/local/extdep-1-1"
+# app3 is app2's consumer: expansion is intersected with the installed world
+# (§C.3 amendment 2026-11-20), so the expected consumer must be installed.
+mkdir -p "$fixture/db/local/extdep-1-1" "$fixture/db/local/app3-1-1"
 cat >"$fixture/bin/pacman-conf" <<'EOF'
 #!/usr/bin/env bash
 set -u
@@ -138,6 +140,12 @@ chmod +x "$fixture/bin/pacman-conf"
     printf '%%BASE%%\nextdep\n'
 } >"$fixture/db/local/extdep-1-1/desc"
 printf '%%FILES%%\n' >"$fixture/db/local/extdep-1-1/files"
+{
+    printf '%%NAME%%\napp3\n\n'
+    printf '%%VERSION%%\n1-1\n\n'
+    printf '%%BASE%%\napp3\n'
+} >"$fixture/db/local/app3-1-1/desc"
+printf '%%FILES%%\n' >"$fixture/db/local/app3-1-1/files"
 export GSA_FAKE_DB_PATH="$fixture/db"
 export PATH="$fixture/bin:$PATH"
 

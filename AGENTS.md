@@ -57,6 +57,7 @@ Rule numbers are preserved forever: ~190 code comments and contract §L.3 cite t
 | 73 | Single `config::resolve` ladder | Build root, state root, store and `SRCDEST` resolve with provenance labels |
 | 74 | Typed `Exit` renderer | `Err(Exit::...)` via `gsa_cli::exit`; `RecordOwed::Yes` prints nothing extra |
 | 75 | Single `gsa-cli::style` seam | Resolve colour/width once; paint after `truncate_{middle,end}` |
+| 76 | Installed world bounds expansion | A consumer joins only when one of its outputs is installed (∪ the seeds/planned set); the wave obeys the same rule |
 
 ## Pitfalls index
 
@@ -66,7 +67,7 @@ One line per mechanism; the full explanations and probe commands live in the mai
 
 **Store, workspace, builders** — `-Sy` refreshes only from a neutral cwd; `makepkg --nobuild` dirties trees; keep scratch out of the repo and `/tmp`; sync `config/` alongside packages; update moved `SRCDEST` `alternates`; resolve absolute child paths; re-assert `GSA_LANE_*` last in a `--config` composite and pass the same `--config` to `--verifysource`; pin `GSA_RECIPES_DIR` in every fixture.
 
-**Install, ABI, record** — a new `--print-*` seam owes a `gsa-pm` `install` line; zero expected archives return `nothing-built` and globs must exclude `.sig` and prefix twins; `--leaf` keeps the `:=` wave diagnostic (rows render, no addition, no refusal); map `DT_NEEDED` by exact `host ∪ shipped` path; stop the GUI session before a major `libLLVM*` move; ALPM `NeedsTargets` hooks need `AbortOnFail`; index `ldconfig -p` + `binpkg.jsonl` once on failure; key `kv.jsonl` rows per `(recipe_id, output)`; a torn tail is repaired by the printed `truncate -s` offset, never automatically.
+**Install, ABI, record** — a new `--print-*` seam owes a `gsa-pm` `install` line; zero expected archives return `nothing-built` and globs must exclude `.sig` and prefix twins; `--leaf` keeps the `:=` wave diagnostic (rows render, no addition, no refusal); a recipe installed nowhere cannot link, so neither expansion site may add it or the prerequisites it drags in (`-Sl` names the skip; runs stay silent); map `DT_NEEDED` by exact `host ∪ shipped` path; stop the GUI session before a major `libLLVM*` move; ALPM `NeedsTargets` hooks need `AbortOnFail`; index `ldconfig -p` + `binpkg.jsonl` once on failure; key `kv.jsonl` rows per `(recipe_id, output)`; a torn tail is repaired by the printed `truncate -s` offset, never automatically.
 
 **Signals, lanes, runs** — one TERM per lane + 30 s grace + one SIGKILL; a TERM storm leaves `db.lck` and a stripped local DB (repair via `--local-db-check`); launch detached from terminal scopes; concurrent `pacman -U` swaps can transiently break sibling loaders.
 

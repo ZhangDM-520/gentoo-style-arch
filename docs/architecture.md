@@ -82,7 +82,10 @@ disagree, the contract wins.
   version sync, VCS freshness, checksum anchoring, toolchain identity.
 - `gsa-graph` — consumer expansion (the reverse build-order closure), one
   canonical topological sort with cycle refusal, coupled-batch and
-  `app-cluster` grouping.
+  `app-cluster` grouping. The closure is pure reachability; the installed
+  world that bounds it (§C.3 amendment 2026-11-20) is applied at the two seams
+  that consume it — `gsa-cli`'s selection and `gsa-abi`'s wave — through the
+  one `gsa-cli::world::InstalledWorld` derivation.
 - `gsa-sched` — the lane supervisor: intensity budgets
   (`docs/portability.md` formulas as data), the typed lane-result codec, the
   dispatch state machine (core-solo, the `build-tools` band, the failure
@@ -113,7 +116,7 @@ disagree, the contract wins.
   waves, the installed-ELF view, and the install seam's ABI refusal rows.
 - `gsa-cli` — the `gsa` binary itself: the action-pass argv grammar
   (contract §B), selection semantics (§C), and the command surface and its
-  renderings.
+  renderings. `world.rs` is the one installed-world predicate.
 
 ### Scheduler invariants
 

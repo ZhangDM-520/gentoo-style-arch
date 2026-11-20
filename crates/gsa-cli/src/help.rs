@@ -164,7 +164,7 @@ Selection targets (contract §C; exact lookup only — a typo is never auto-corr
         ],
     },
     Section {
-        head: "A selection expands to its transitive consumers (the reverse build-order closure); --leaf suppresses the expansion and keeps exactly what you named — the ABI wave included: its abi-wave rows still print, its members join no plan.
+        head: "A selection expands to its transitive consumers that the installed world contains (the reverse build-order closure): a recipe installed nowhere cannot link against a change, so it is not built and its prerequisites are not installed — -Sl names the consumers it skipped. --leaf suppresses the expansion and keeps exactly what you named — the ABI wave included: its abi-wave rows still print, its members join no plan.
 
 Long modifiers (contract §B.8). A build run accepts:",
         blocks: &[

@@ -682,11 +682,33 @@ $FIXTURE_OUTPUT"
             fail "d: a refusing plan is pacman-free end to end (rule 25(h)):" "$GSA_FAKE_PACMAN_LOG"
         fi
 
+        # d3: a PARTIAL local DB is UNKNOWN world state (rule 71), never an
+        # empty one. `-U` names its archives directly, so it cannot refuse
+        # here — but it must not read an unreadable entry as "not installed"
+        # and drop a real consumer from the wave (round-4 review 2026-11-20).
+        cp "$db/local/ghost-1-1/desc" "$fixture/d/ghost.desc"
+        printf 'not-a-desc\n' >"$db/local/ghost-1-1/desc"
+        run_engine "$ws" -U --state-dir "$state" --config "$ws/pacman.conf" lib
+        cp "$fixture/d/ghost.desc" "$db/local/ghost-1-1/desc"
+        [[ $FIXTURE_OUTPUT == *"skipping malformed local-DB entry"* ]] ||
+            fail "d3: the corruption did not reach the reader: $FIXTURE_OUTPUT"
+        [ "$FIXTURE_RC" = 3 ] \
+            || fail "d3: a partial DB must refuse the swap, got rc $FIXTURE_RC: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT == *"installed world is unknown"* ]] ||
+            fail "d3: the refusal does not name the unknown world: $FIXTURE_OUTPUT"
+        [[ $FIXTURE_OUTPUT != *"ghost refused"* ]] ||
+            fail "d3: a partial DB still produced a wave verdict: $FIXTURE_OUTPUT"
+
         # d2: the dead-record refinement (2026-10-30). `deadghost` is NEITHER
         # in the topology NOR installed — a retired/uninstalled build's
         # leftover record that can neither break nor be covered. It is
         # skipped by name (never silently), the live wave member (c1, stale
         # record, archive present) still lands, and the run is NOT refused.
+        # c1 is a LIVE consumer: it must be in the installed world, or the
+        # wave correctly treats its record as dead (§C.3/§E.3 amendments
+        # 2026-11-20). Entry before the archive keeps its install date older,
+        # so the decision is `install`, not `already-current`.
+        db_entry "$db" c1 "0:1.0.0-1" >/dev/null
         stage="$fixture/d/stage-c1"
         stage_pkginfo "$stage" c1 c1 "1.0.0-1"
         make_archive "$ws/packages/c1/c1-1.0.0-1-any.pkg.tar.zst" "$stage"
@@ -984,6 +1006,11 @@ if want h; then
         stage_tree "$fixture/h/stage" lib2 "1.0.0-1" 'provides = libz.so=1-64'
         stage_tree "$fixture/h/stage" c4 "1.0.0-1"
         stage_tree "$fixture/h/stage" c5 "1.0.0-1"
+        # The non-leaf control below grows the plan by the wave; both
+        # consumers are LIVE (installed) so the wave's own world filter keeps
+        # them (§E.3 amendment 2026-11-20).
+        db_entry "$db" c4 "0:1.0.0-1" >/dev/null
+        db_entry "$db" c5 "0:1.0.0-1" >/dev/null
         run_engine "$ws" -B --no-prefetch --state-dir "$state" lib2 c4 c5
         [ "$FIXTURE_RC" = 0 ] || fail "h: the stub build pass is rc 0, got $FIXTURE_RC: $FIXTURE_OUTPUT"
 

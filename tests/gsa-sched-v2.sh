@@ -208,6 +208,10 @@ codec_roundtrip() {
     add_package "$ws" u "$gsa_meta_any" git
     set_topology_record "$ws" b git a
     set_topology_record "$ws" c git b
+    # The cone members are INSTALLED (§C.3 amendment 2026-11-20: expansion
+    # is intersected with the installed world), so they park as before.
+    fixture_installed "$fixture/cone" b c
+    export PATH="$fixture/cone/bin:$ws/bin:$PATH"
     # the fixture's build-order edges (consumer prereq) — the derivation
     # source for the expected cone and the order check
     edges="$fixture/cone/edges"
@@ -294,6 +298,8 @@ codec_roundtrip() {
     add_package "$ws" u "$gsa_meta_any" git
     set_topology_record "$ws" b git a
     set_topology_record "$ws" c git b
+    fixture_installed "$fixture/failfast" b c
+    export PATH="$fixture/failfast/bin:$ws/bin:$PATH"
     edges="$fixture/failfast/edges"
     printf 'b a\nc b\n' >"$edges"
     write_stub_makepkg "$ws"
@@ -345,6 +351,8 @@ codec_roundtrip() {
     add_package "$ws" u "$gsa_meta_any" git
     set_topology_record "$ws" b git a
     set_topology_record "$ws" c git b
+    fixture_installed "$fixture/defer" b c
+    export PATH="$fixture/defer/bin:$ws/bin:$PATH"
     edges="$fixture/defer/edges"
     printf 'b a\nc b\n' >"$edges"
     write_stub_makepkg "$ws"
