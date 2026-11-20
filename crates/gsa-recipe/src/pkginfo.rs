@@ -147,7 +147,11 @@ fn parse_pkginfo_body(body: &str) -> Result<Pkginfo, PkginfoError> {
                 }
             }
             "provides" => provides.push(value.to_string()),
-            "depends" => depends.push(value.to_string()),
+            // Real makepkg writes `depend = …`; older/other writers use
+            // `depends = …`. Accepting only one spelling left `depends`
+            // silently empty for every real archive (found 2026-11-20 while
+            // verifying a `--with` pin against a real `.PKGINFO`).
+            "depend" | "depends" => depends.push(value.to_string()),
             _ => {}
         }
     }
@@ -519,7 +523,7 @@ mod tests {
             &archive,
             &[(
                 ".PKGINFO",
-                b"pkgbase = foo\npkgname = foo\nepoch = 2\npkgver = 1.2.3-1\narch = x86_64\nprovides = libfoo.so=1-64\nprovides = bar=1.0\ndepends = glibc>=2.28\n",
+                b"pkgbase = foo\npkgname = foo\nepoch = 2\npkgver = 1.2.3-1\narch = x86_64\nprovides = libfoo.so=1-64\nprovides = bar=1.0\ndepend = glibc>=2.28\ndepends = libc.so=6-64\n",
             )],
         );
         let info = read_pkginfo(&archive).unwrap();
@@ -527,7 +531,8 @@ mod tests {
         assert_eq!(info.pkgname, "foo");
         assert_eq!(info.version, "2:1.2.3-1");
         assert_eq!(info.provides, vec!["libfoo.so=1-64", "bar=1.0"]);
-        assert_eq!(info.depends, vec!["glibc>=2.28"]);
+        // Both spellings parse: `depend` is what makepkg writes.
+        assert_eq!(info.depends, vec!["glibc>=2.28", "libc.so=6-64"]);
         assert_eq!(info.arch, "x86_64");
         let _ = std::fs::remove_dir_all(&dir);
     }

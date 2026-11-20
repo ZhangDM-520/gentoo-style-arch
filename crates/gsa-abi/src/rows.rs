@@ -266,6 +266,31 @@ pub struct AbiGate {
     /// forced-rebuild marker under that same key (§E.3 gap-G1 amendment) —
     /// repairs ride the plan even alongside refusals.
     pub repairs: Vec<String>,
+    /// Installed names covered by a repo archive the operator put in THIS
+    /// transaction (`--with`), in the order the gate met them: the archives
+    /// the caller must add to its one `pacman -U` so the coverage it granted
+    /// is real (§E.3 2026-11-20 amendment). Empty when no `--with` name was
+    /// needed.
+    pub with_members: Vec<String>,
+    /// Out-of-tree names this refusal stands on (uncovered consumers and
+    /// stock pinners, deduped) — the population the caller may offer as
+    /// `abi-stock-upgrade` hints. Empty on a clean plan.
+    pub stranded: Vec<String>,
+}
+
+/// The transaction-membership inputs of the gate — every name this `pacman
+/// -U` invocation installs. `tx_names` are the plan's own archives;
+/// `with_names` are repo archives the operator named (`--with`). Both are
+/// ONE coverage class (§E.3 2026-11-20 amendment) carried with provenance:
+/// the gate's coverage test is over the union, while `with_members` needs to
+/// know which names it granted so the caller can transact exactly those.
+/// `later_installs` stays separate: it is in-run repair, not membership.
+pub struct Coverage<'a> {
+    pub tx_names: &'a [String],
+    pub with_names: &'a [String],
+    pub later_installs: &'a [String],
+    pub recipe_of_name: &'a std::collections::BTreeMap<String, String>,
+    pub workspace: &'a std::collections::BTreeSet<String>,
 }
 
 /// The ABI gate's rows for one drifted candidate (the shapes the fixtures
@@ -293,15 +318,14 @@ pub fn abi_refusal_rows(
     archive: &str,
     drift: &[Drift],
     view: &InstalledView,
-    tx_names: &[String],
-    later_installs: &[String],
-    recipe_of_name: &std::collections::BTreeMap<String, String>,
-    workspace: &std::collections::BTreeSet<String>,
+    coverage: &Coverage<'_>,
 ) -> AbiGate {
-    let in_tx = |name: &str| tx_names.iter().any(|t| t == name);
-    let in_run = |name: &str| later_installs.iter().any(|t| t == name);
+    let in_tx = |name: &str| coverage.tx_names.iter().any(|t| t == name);
+    let in_with = |name: &str| coverage.with_names.iter().any(|t| t == name);
+    let in_run = |name: &str| coverage.later_installs.iter().any(|t| t == name);
     let canon = |name: &str| -> String {
-        recipe_of_name
+        coverage
+            .recipe_of_name
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
@@ -313,8 +337,15 @@ pub fn abi_refusal_rows(
     // its consume side — use.
     let mut uncovered: Vec<String> = Vec::new();
     let mut repairs: Vec<String> = Vec::new();
+    let mut with_members: Vec<String> = Vec::new();
     for consumer in linked_consumers(view, drift) {
         if in_tx(&consumer) {
+            continue;
+        }
+        if in_with(&consumer) {
+            if !with_members.contains(&consumer) {
+                with_members.push(consumer);
+            }
             continue;
         }
         let key = canon(&consumer);
@@ -328,13 +359,24 @@ pub fn abi_refusal_rows(
     }
     // Stock-pinner class: out-of-tree declared pinners only, uncovered
     // unless they ride THIS transaction. A name already in the consumer
-    // class is never double-rowed.
+    // class is never double-rowed. A `--with` upgrade of the pinner is
+    // coverage too — the new archive's own Depends are verified against the
+    // moved provide by the caller (`--with` pin check), never assumed here.
     let pinners: Vec<(String, String)> = stock_pinners(view, drift)
         .into_iter()
-        .filter(|(pinner, _)| !workspace.contains(pinner))
+        .filter(|(pinner, _)| !coverage.workspace.contains(pinner))
         .filter(|(pinner, _)| !in_tx(pinner))
         .filter(|(pinner, _)| !uncovered.iter().any(|c| c == pinner))
         .filter(|(pinner, _)| !repairs.iter().any(|c| c == &canon(pinner)))
+        .filter(|(pinner, _)| {
+            if in_with(pinner) {
+                if !with_members.contains(pinner) {
+                    with_members.push(pinner.clone());
+                }
+                return false;
+            }
+            true
+        })
         .collect();
 
     let mut rows: Vec<DecisionRow> = Vec::new();
@@ -367,7 +409,19 @@ pub fn abi_refusal_rows(
             });
         }
     }
-    AbiGate { rows, repairs }
+    let mut stranded: Vec<String> = uncovered
+        .iter()
+        .chain(pinners.iter().map(|(name, _)| name))
+        .filter(|name| !coverage.workspace.contains(*name))
+        .cloned()
+        .collect();
+    stranded.dedup();
+    AbiGate {
+        rows,
+        repairs,
+        with_members,
+        stranded,
+    }
 }
 
 /// One under-coverage refusal row (§E.3 `abi-consumer-uncovered`): the
@@ -501,13 +555,71 @@ mod tests {
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
-            &["abipkg".to_string()],
-            &[],
-            &Default::default(),
-            &Default::default(),
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &[],
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &Default::default(),
+            },
         );
         assert!(gate.rows.is_empty(), "nothing stranded plans clean");
         assert!(gate.repairs.is_empty());
+    }
+
+    #[test]
+    fn a_with_member_covers_and_names_itself() {
+        // Issue #6: an out-of-tree consumer of the moved soname is covered
+        // only as a member of the SAME transaction. `with_names` grants that
+        // coverage and `with_members` reports the archive the caller must
+        // add — the plan never pretends a refusal is gone when nothing will
+        // install the consumer.
+        let view = InstalledView::new([pkg(
+            "stock-pin",
+            &[],
+            &["libfoo.so=1-64"],
+            &["usr/lib/libstock.so"],
+        )]);
+        let drift = vec![Drift {
+            pkgname: "abipkg".to_string(),
+            name: "libfoo.so".to_string(),
+            inst_ver: "1-64".to_string(),
+            built_ver: Some("2-64".to_string()),
+        }];
+        let with = ["stock-pin".to_string()];
+        let gate = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &with,
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &Default::default(),
+            },
+        );
+        assert!(gate.rows.is_empty(), "a transaction member is coverage");
+        // The pinner class is covered by the upgrade only when its archive
+        // is transacted: the caller's own pin check is what makes that real.
+        assert_eq!(gate.with_members, vec!["stock-pin".to_string()]);
+        // A with name that covers nothing is never added to the transaction.
+        let unused = abi_refusal_rows(
+            "abipkg",
+            "/a/abipkg.pkg.tar.zst",
+            &drift,
+            &view,
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &["bystander".to_string()],
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &Default::default(),
+            },
+        );
+        assert!(unused.with_members.is_empty());
+        assert_eq!(unused.rows.len(), 2, "the refusal still stands");
     }
 
     #[test]
@@ -531,10 +643,13 @@ mod tests {
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
-            &["abipkg".to_string()],
-            &[],
-            &Default::default(),
-            &Default::default(),
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &[],
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &Default::default(),
+            },
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert!(rendered.contains(
@@ -587,10 +702,13 @@ mod tests {
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
-            &["abipkg".to_string()],
-            &[],
-            &Default::default(),
-            &Default::default(),
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &[],
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &Default::default(),
+            },
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert_eq!(rendered.len(), 2, "abi-soname + abi-consumer: {rendered:?}");
@@ -611,10 +729,13 @@ mod tests {
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
-            &["abipkg".to_string()],
-            &["consumer-app".to_string()],
-            &recipe_of_name,
-            &Default::default(),
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &[],
+                later_installs: &["consumer-app".to_string()],
+                recipe_of_name: &recipe_of_name,
+                workspace: &Default::default(),
+            },
         );
         assert!(gate.rows.is_empty(), "covered plans clean");
         assert_eq!(gate.repairs, vec!["consumer-app".to_string()]);
@@ -679,10 +800,13 @@ mod tests {
             "/a/abipkg.pkg.tar.zst",
             &drift,
             &view,
-            &["abipkg".to_string()],
-            &[],
-            &Default::default(),
-            &workspace,
+            &Coverage {
+                tx_names: &["abipkg".to_string()],
+                with_names: &[],
+                later_installs: &[],
+                recipe_of_name: &Default::default(),
+                workspace: &workspace,
+            },
         );
         let rendered: Vec<String> = gate.rows.iter().map(|r| r.render()).collect();
         assert!(

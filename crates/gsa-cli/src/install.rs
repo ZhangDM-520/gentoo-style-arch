@@ -1004,6 +1004,10 @@ fn run_upgrade_inner(
         abi_exclusions: workspace_exclusions(&root),
         wave_heal,
         state_dir: Some(state_dir.clone()),
+        // `-U` installs exactly the archives it was given (each is a
+        // target), so it has no `--with` set to add — the flag is refused
+        // for this family (REAL_UPGRADE_FLAGS).
+        with: Vec::new(),
     };
     // A plan whose rows already explain themselves — every item rejected
     // before the seam (a shrunken split set, a failed discovery) — never
@@ -2090,6 +2094,10 @@ fn run_install_decide_inner(
         // §J.4 index gate stands down (`state_dir: None`) and nothing here
         // writes — the one state read is §E.5's park report above.
         state_dir: None,
+        // The order-blind seam takes no `--with`: it is `--install-decide`
+        // / `-U`'s plan surface, and both install exactly what they were
+        // given.
+        with: Vec::new(),
     };
     let rows = match pacman_db_root_for(None).map(|root| LocalDb::load(&root)) {
         Ok(Ok(localdb)) => match decide(&candidates, &ctx, &localdb) {

@@ -116,7 +116,10 @@ disagree, the contract wins.
   waves, the installed-ELF view, and the install seam's ABI refusal rows.
 - `gsa-cli` — the `gsa` binary itself: the action-pass argv grammar
   (contract §B), selection semantics (§C), and the command surface and its
-  renderings. `world.rs` is the one installed-world predicate.
+  renderings. `world.rs` is the one installed-world predicate; `stock.rs` is
+  the one repo-archive resolver behind `--with` (§E.3 amendment 2026-11-20):
+  a stock consumer of a moved soname joins the provider's transaction or the
+  refusal stands.
 
 ### Scheduler invariants
 

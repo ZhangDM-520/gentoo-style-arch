@@ -287,6 +287,13 @@ pub const FLAGS: &[FlagSpec] = &[
         families: &[Family::S, Family::U],
     },
     FlagSpec {
+        name: "with",
+        description:
+            "repo package that joins the install transaction (stock consumer of a moved soname)",
+        takes_value: true,
+        families: &[Family::S],
+    },
+    FlagSpec {
         name: "prefetch-ahead",
         description: "fetch-ahead window size (default 8)",
         takes_value: true,
@@ -625,6 +632,11 @@ pub struct Invocation {
     pub show: Option<String>,
     /// Arguments after `--`, forwarded verbatim to a `pacman -U` transaction.
     pub pacman_args: Option<Vec<String>>,
+    /// `--with PKG` (repeatable, contract §L.1): a repo package that joins
+    /// the ONE install transaction of a `-S` run — the only coverage class
+    /// an installed out-of-tree consumer of a moved soname can have. Names
+    /// resolve to their current repo archives after the privilege gate.
+    pub with: Vec<String>,
     /// The staged workspace of a standalone-target run (docs/plans/plan-gsa-isolation.md
     /// W4). Set by `standalone::apply`, which also rewrites `targets` to the
     /// staged ids; `crate::resolve_workspace` prefers this root over
@@ -885,6 +897,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         keep: None,
         show: None,
         pacman_args: None,
+        with: Vec::new(),
         no_prefetch: false,
         prefetch_ahead: None,
         skip: false,
@@ -1037,7 +1050,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                 }
                 "vcs-skip-tolerance" | "lanes" | "jobs" | "intensity" | "color" | "state-dir"
                 | "config" | "tail" | "keep" | "show" | "prefetch-ahead" | "build-dir"
-                | "toolchain" => {
+                | "toolchain" | "with" => {
                     let value = match value {
                         Some(v) => v,
                         None => {
@@ -1064,6 +1077,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                             | "lanes"
                             | "jobs"
                             | "intensity"
+                            | "with"
                     ) && value.contains(['\n', '\r'])
                     {
                         return Err(format!(
@@ -1093,6 +1107,14 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                         },
                         "build-dir" => inv.build_dir = Some(value.clone()),
                         "config" => inv.config = Some(value.clone()),
+                        // Repeatable, and `--with=a,b` is the same set: a
+                        // set the operator has to repeat a flag for is a
+                        // set they will mistype.
+                        "with" => {
+                            for name in value.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                                inv.with.push(name.to_string());
+                            }
+                        }
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
                         "vcs-skip-tolerance" => inv.vcs_skip_tolerance = Some(value.clone()),
                         "tail" => inv.tail = Some(value.clone()),
@@ -1647,8 +1669,16 @@ mod tests {
 
     #[test]
     fn mirrored_value_flags_reject_newlines() {
-        for flag in ["--toolchain", "--vcs-skip-tolerance", "--prefetch-ahead"] {
-            let err = parse_err(&["-B", flag, "bad\nvalue", "mesa-git"]);
+        // `--with` is mirrored into the record's one-line `command:`
+        // (§H.2), so its value obeys the same grammar as every other
+        // mirrored value.
+        for flag in [
+            "--toolchain",
+            "--vcs-skip-tolerance",
+            "--prefetch-ahead",
+            "--with",
+        ] {
+            let err = parse_err(&["-S", flag, "bad\nvalue", "mesa-git"]);
             assert!(
                 err.contains("must be a single line"),
                 "{flag} allowed newline: {err}"

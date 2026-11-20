@@ -1092,6 +1092,7 @@ fn install_built_package_refuses_an_incomplete_output_set_pacman_free() {
         later_installs: Vec::new(),
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
+        with: Vec::new(),
     };
     let built = install_built_package(&recipe, &run).unwrap();
     let (rows, outcome) = (built.rows, built.txn);
@@ -1134,6 +1135,7 @@ fn install_built_package_refuses_a_mixed_version_set() {
         later_installs: Vec::new(),
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
+        with: Vec::new(),
     };
     let built = install_built_package(&recipe, &run).unwrap();
     let (rows, outcome) = (built.rows, built.txn);
@@ -1188,6 +1190,7 @@ fn corrupt_committed_metadata_fails_discovery_instead_of_widening_the_set() {
         later_installs: Vec::new(),
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
+        with: Vec::new(),
     };
     let error = install_built_package(&recipe, &run)
         .expect_err("an unreadable committed .SRCINFO is discovery damage");
@@ -1725,6 +1728,7 @@ fn install_built_package_force_mode_refuses_unreadable_pkginfo() {
         later_installs: Vec::new(),
         recipe_of_name: Default::default(),
         workspace_names: Vec::new(),
+        with: Vec::new(),
     };
     let built = install_built_package(&recipe, &run).unwrap();
     let (rows, outcome) = (built.rows, built.txn);
@@ -1818,6 +1822,192 @@ fn discovery_skips_a_fifo_that_would_hang_the_open() {
         found.unreadable.is_empty(),
         "a special file is not a DAMAGED archive: {:?}",
         found.unreadable
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #6: `--with` is the ONLY coverage an installed out-of-tree package
+/// can have. Without it the pinner strands the move; with it the plan is
+/// clean, and the caller must add that archive to the same transaction
+/// (`Plan::with_used`, observed through the install step's argv).
+#[test]
+fn a_with_archive_covers_an_out_of_tree_pinner() {
+    let dir = scratch("with-cover");
+    let provider = dir.join("foo-2.1-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &provider,
+        &[
+            (
+                ".PKGINFO",
+                &pkginfo_body("foo", "2.1-1", &["libfoo.so=2-64"]),
+            ),
+            ("usr/lib/libfoo.so.2", &elf64_with_needed("libc.so.6")),
+        ],
+    );
+    let stock = dir.join("stock-pin-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &stock,
+        &[
+            (".PKGINFO", &pkginfo_body("stock-pin", "2.0-1", &[])),
+            ("usr/lib/libstock.so", &elf64_with_needed("libfoo.so.2")),
+        ],
+    );
+    let db = LocalDb::from_packages(vec![
+        installed(
+            "foo",
+            "0:1.0-1",
+            &["libfoo.so=1-64"],
+            &[],
+            Some(SystemTime::now()),
+        ),
+        installed(
+            "stock-pin",
+            "0:1.0-1",
+            &[],
+            &["libfoo.so=1-64"],
+            Some(SystemTime::now()),
+        ),
+    ]);
+    // Without the member: the refusal stands.
+    let refused = decide(
+        std::slice::from_ref(&candidate(&provider, None)),
+        &force_ctx(),
+        &db,
+    )
+    .unwrap();
+    assert_eq!(
+        refused.iter().map(|r| r.render()).collect::<Vec<_>>(),
+        vec![
+            format!(
+                "foo refuse abi-soname {} foo libfoo.so 1-64 2-64",
+                provider.display()
+            ),
+            format!(
+                "foo refuse abi-stock-pinner {} stock-pin libfoo.so=1-64",
+                provider.display()
+            ),
+        ]
+    );
+    // With it: transaction membership covers, and the archive's own bytes
+    // resolve against what the transaction ships.
+    let with = vec![gsa_install::WithArchive::load(&stock).unwrap()];
+    let mut ctx = force_ctx();
+    ctx.with = with;
+    let covered = decide(std::slice::from_ref(&candidate(&provider, None)), &ctx, &db).unwrap();
+    assert_eq!(
+        covered.iter().map(|r| r.render()).collect::<Vec<_>>(),
+        vec!["foo install ok".to_string()],
+        "the stock upgrade is a transaction member, not a promise"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A split archive's `pkgbase` is not a transaction member: `pacman -U`
+/// installs the one `pkgname` it carries, so naming `lib32-sndio` must never
+/// cover the installed 64-bit `sndio` of the same `pkgbase` (round-3 review
+/// 2026-11-20).
+#[test]
+fn a_split_output_does_not_cover_its_pkgbase() {
+    let dir = scratch("with-split");
+    let provider = dir.join("foo-2.1-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &provider,
+        &[(
+            ".PKGINFO",
+            &pkginfo_body("foo", "2.1-1", &["libfoo.so=2-64"]),
+        )],
+    );
+    let sibling = dir.join("lib32-sndio-2.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &sibling,
+        &[
+            (
+                ".PKGINFO",
+                b"pkgbase = sndio\npkgname = lib32-sndio\npkgver = 2.0-1\narch = x86_64\n",
+            ),
+            ("usr/lib32/libsndio.so.9", &elf64_with_needed("libc.so.6")),
+        ],
+    );
+    let db = LocalDb::from_packages(vec![
+        installed(
+            "foo",
+            "0:1.0-1",
+            &["libfoo.so=1-64"],
+            &[],
+            Some(SystemTime::now()),
+        ),
+        installed(
+            "sndio",
+            "0:1.0-1",
+            &[],
+            &["libfoo.so=1-64"],
+            Some(SystemTime::now()),
+        ),
+    ]);
+    let mut ctx = force_ctx();
+    ctx.with = vec![gsa_install::WithArchive::load(&sibling).unwrap()];
+    let rendered: Vec<String> =
+        decide(std::slice::from_ref(&candidate(&provider, None)), &ctx, &db)
+            .unwrap()
+            .iter()
+            .map(|r| r.render())
+            .collect();
+    assert!(
+        rendered
+            .iter()
+            .any(|row| row.contains("abi-stock-pinner") && row.contains(" sndio ")),
+        "a sibling archive covered its pkgbase: {rendered:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The added bytes are verified, never trusted: a stock archive that still
+/// links the generation this transaction removes is refused, because the
+/// installed DB would otherwise "resolve" it right up to the moment its
+/// file disappears.
+#[test]
+fn a_stale_with_archive_is_refused_by_name() {
+    let dir = scratch("with-stale");
+    let provider = dir.join("foo-2.1-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &provider,
+        &[(
+            ".PKGINFO",
+            &pkginfo_body("foo", "2.1-1", &["libfoo.so=2-64"]),
+        )],
+    );
+    let stale = dir.join("stock-pin-1.0-1-x86_64.pkg.tar.zst");
+    write_archive(
+        &stale,
+        &[
+            (".PKGINFO", &pkginfo_body("stock-pin", "1.0-1", &[])),
+            ("usr/lib/libstock.so", &elf64_with_needed("libfoo.so.1")),
+        ],
+    );
+    let db = LocalDb::from_packages(vec![
+        installed(
+            "foo",
+            "0:1.0-1",
+            &["libfoo.so=1-64"],
+            &[],
+            Some(SystemTime::now()),
+        ),
+        installed(
+            "stock-pin",
+            "0:1.0-1",
+            &[],
+            &["libfoo.so=1-64"],
+            Some(SystemTime::now()),
+        ),
+    ]);
+    let mut ctx = force_ctx();
+    ctx.with = vec![gsa_install::WithArchive::load(&stale).unwrap()];
+    let rows = decide(std::slice::from_ref(&candidate(&provider, None)), &ctx, &db).unwrap();
+    let rendered: Vec<String> = rows.iter().map(|r| r.render()).collect();
+    assert!(
+        rendered.iter().any(|row| row.contains("with-unresolved")
+            && row.contains("stock-pin-1.0-1-x86_64.pkg.tar.zst")),
+        "a stale member must be refused by name: {rendered:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -125,6 +125,10 @@ pub struct DecisionContext {
     /// installs). `None` = no consultation (the order-blind
     /// `--install-decide` seam and standalone plans).
     pub state_dir: Option<PathBuf>,
+    /// Repo archives the operator put in THIS transaction (`--with`, issue
+    /// #6): transaction membership for the ABI gate, plus bytes the gate
+    /// verifies. Empty on every plan that transacts only built archives.
+    pub with: Vec<WithArchive>,
 }
 
 /// The discovery result for one recipe directory (house layout: archives
@@ -546,6 +550,23 @@ struct Plan {
     /// whose forced-rebuild markers the provider's install stages before
     /// the transaction (§E.3 gap-G1).
     repairs: Vec<(String, String)>,
+    /// `--with` installed names the ABI gate actually needed: the archives
+    /// that must join the one `pacman -U` so the coverage granted is real
+    /// (§E.3 2026-11-20 amendment). Empty = the plan installs only what it
+    /// built.
+    with_used: Vec<String>,
+    /// `(provider subject, out-of-tree name)` pairs the refusal stands on —
+    /// the population the `abi-stock-upgrade` hint may name. Empty on a
+    /// clean plan.
+    stranded: Vec<(String, String)>,
+    /// The moves those refusals stand on (the refusing candidate's drift):
+    /// the hint verifies a cached stock archive against them.
+    moved: Vec<gsa_abi::Drift>,
+    /// The archives THIS plan judged as transaction members (non-parked,
+    /// gate-1-surviving): the shipped-byte set the hint must verify against.
+    /// Carried rather than recomputed, so a parked or unreadable sibling can
+    /// never lend its bytes to a promise the plan would not keep.
+    transaction: Vec<std::path::PathBuf>,
 }
 
 impl Plan {
@@ -780,6 +801,12 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     let view = abi_view(db);
     // In-run repair targets collected across candidates (rule 25(d)).
     let mut plan_repairs: Vec<(String, String)> = Vec::new();
+    // `--with` archives the ABI gate needed (see `Plan::with_used`).
+    let mut with_used: Vec<String> = Vec::new();
+    // Out-of-tree names a refusal stands on (see `Plan::stranded`).
+    let mut stranded: Vec<(String, String)> = Vec::new();
+    // The moves those refusals stand on (see `Plan::moved`).
+    let mut moved: Vec<gsa_abi::Drift> = Vec::new();
     // §J.4's install-time gate source: the hash-bound binpkg index (one
     // load per plan; a real run always names its state root). No root → no
     // rows to consult → the gate stands down (never a silent pass of a row
@@ -804,6 +831,10 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
             plan_rows: vec![row("-", decision, "empty-list")],
             candidates: Vec::new(),
             repairs: Vec::new(),
+            with_used: Vec::new(),
+            stranded: Vec::new(),
+            moved: Vec::new(),
+            transaction: Vec::new(),
         });
     }
 
@@ -914,6 +945,7 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         .filter(|m| m.src_err.is_none() && m.parked_reason.is_none() && m.pkginfo.is_some())
         .map(|m| m.candidate.archive.as_path())
         .collect();
+    let transaction: Vec<std::path::PathBuf> = archives.iter().map(|a| a.to_path_buf()).collect();
     let shipped = gates::ShippedBytes::collect(&archives)?;
 
     // The QA gate's installed-DB view (contract §E.4): one conversion per
@@ -1146,18 +1178,36 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
         if !drift.is_empty() {
             // The ABI subsystem computes the gate outcome (contract §E.3's
             // frozen shapes — conditional on coverage); this seam only folds
-            // it into its one plan.
+            // it into its one plan. `--with` names are transaction
+            // membership alongside this plan's own archives (§E.3 2026-11-20
+            // amendment): an out-of-tree consumer of the moved soname has no
+            // other coverage class.
+            let with_names: Vec<String> = ctx.with.iter().map(|w| w.member().to_string()).collect();
             let gate = gsa_abi::abi_refusal_rows(
                 &info.pkgbase,
                 &archive,
                 &drift,
                 &view,
-                &tx_names,
-                &ctx.later_installs,
-                &ctx.recipe_of_name,
-                &ctx.workspace_names,
+                &gsa_abi::Coverage {
+                    tx_names: &tx_names,
+                    with_names: &with_names,
+                    later_installs: &ctx.later_installs,
+                    recipe_of_name: &ctx.recipe_of_name,
+                    workspace: &ctx.workspace_names,
+                },
             );
             if !gate.rows.is_empty() {
+                for name in &gate.stranded {
+                    let pair = (info.pkgbase.clone(), name.clone());
+                    if !stranded.contains(&pair) {
+                        stranded.push(pair);
+                    }
+                }
+                for d in &drift {
+                    if !moved.contains(d) {
+                        moved.push(d.clone());
+                    }
+                }
                 rows.extend(gate.rows);
                 plans.push(CandidatePlan {
                     candidate: candidate.clone(),
@@ -1165,6 +1215,53 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
                     rows,
                 });
                 continue;
+            }
+            // The coverage the gate just granted is only real if these
+            // archives transact — and only legal if their own bytes fit the
+            // post-transaction system. Membership is never an assertion.
+            let used: Vec<&WithArchive> = ctx
+                .with
+                .iter()
+                .filter(|w| gate.with_members.iter().any(|n| w.member() == n))
+                .collect();
+            if !used.is_empty() {
+                let mut tx_archives: Vec<&Path> = archives.clone();
+                tx_archives.extend(used.iter().map(|w| w.archive.as_path()));
+                let shipped_all = gates::ShippedBytes::collect(&tx_archives)?;
+                for with in &used {
+                    let archive_path = with.archive.display();
+                    for miss in gates::with_unresolved(with, &drift, &shipped_all, db, &exclusions)?
+                    {
+                        rows.push(row(
+                            &info.pkgbase,
+                            Decision::Refuse,
+                            format!(
+                                "with-unresolved {archive_path} {} {}",
+                                miss.member, miss.soname
+                            ),
+                        ));
+                    }
+                    for dep in gates::with_old_pins(with, &drift) {
+                        rows.push(row(
+                            &info.pkgbase,
+                            Decision::Refuse,
+                            format!("with-unresolved {archive_path} pin {dep}"),
+                        ));
+                    }
+                }
+                if !rows.is_empty() {
+                    plans.push(CandidatePlan {
+                        candidate: candidate.clone(),
+                        pkginfo: Some(info),
+                        rows,
+                    });
+                    continue;
+                }
+                for with in used {
+                    if !with_used.contains(&with.pkginfo.pkgname) {
+                        with_used.push(with.pkginfo.pkgname.clone());
+                    }
+                }
             }
             repairs = gate.repairs;
         }
@@ -1255,9 +1352,18 @@ fn plan(candidates: &[Candidate], ctx: &DecisionContext, db: &LocalDb) -> Result
     }
 
     Ok(Plan {
+        // A `--with` name a step did not need is not a row: the CLI announces
+        // every resolved member once when it resolves them, and `with_used`
+        // is per transaction (a later provider may still need the same
+        // archive). A per-step `with-unused` row would repeat once per
+        // package and say nothing about the run.
         plan_rows: Vec::new(),
         candidates: plans,
         repairs: plan_repairs,
+        with_used,
+        stranded,
+        moved,
+        transaction,
     })
 }
 
@@ -1408,12 +1514,93 @@ pub fn install_built_package(recipe_dir: &Path, run: &InstallRun) -> Result<Buil
         abi_exclusions: None,
         wave_heal: Vec::new(),
         state_dir: Some(run.state_dir.clone()),
+        with: run.with.clone(),
     };
     let db_root = localdb::pacman_db_root_for(run.conf.as_deref())?;
     let db = LocalDb::load(&db_root)?;
     let plan = plan(&discovered.candidates, &ctx, &db)?;
-    let rows = plan.rows();
+    let mut rows = plan.rows();
     if plan.refused() {
+        // §E.3 2026-11-20 amendment: a refusal standing on out-of-tree
+        // consumers names the repo upgrade each of them has, so the heal is
+        // discoverable from the refusal itself (`-S … --with <names>`). The
+        // rows are ADVISORY and run only when a refusal is already owed; a
+        // repo read that fails simply adds nothing.
+        if !plan.stranded.is_empty() {
+            // The hint must ask the SAME question `--with` asks, so it runs
+            // the plan's own exclusions and the exact archive set this plan
+            // judged (a parked or unreadable sibling's bytes are not
+            // transaction members — §E.3).
+            let exclusions = resolve_exclusions(&ctx, &discovered.candidates)?;
+            let archives: Vec<&Path> = plan
+                .transaction
+                .iter()
+                .map(|archive| archive.as_path())
+                .collect();
+            let upgrades = gates::stock_upgrades(
+                &plan.stranded,
+                &plan.moved,
+                &db,
+                run.conf.as_deref(),
+                &exclusions,
+                &archives,
+            );
+            if !upgrades.is_empty() {
+                let mut names: Vec<&str> = Vec::new();
+                for upgrade in &upgrades {
+                    // The note states the fact in the operator's words,
+                    // because a step's refusal rows collapse to the FIRST
+                    // reason in the record (`install_step`): the repair must
+                    // not ride a row nobody renders.
+                    let hint = upgrade.hint;
+                    match hint {
+                        gates::StockHint::Verified => {
+                            eprintln!(
+                                "gsa: note: stock upgrade available: {} {} -> {} (cached; --with {} adds it to this transaction)",
+                                upgrade.name, upgrade.installed, upgrade.repo, upgrade.name
+                            );
+                            let reason = format!(
+                                "abi-stock-upgrade {} {} {}",
+                                upgrade.name, upgrade.installed, upgrade.repo
+                            );
+                            for (subject, name) in &plan.stranded {
+                                if name == &upgrade.name {
+                                    rows.push(row(subject, Decision::Refuse, reason.clone()));
+                                }
+                            }
+                        }
+                        // The version moved but the bytes would not be
+                        // accepted: `--with` would refuse this archive
+                        // (`with-unresolved`), so the note states the fact
+                        // without promising the member. Advising a `--with`
+                        // the gate rejects is the one thing the hint may
+                        // never do.
+                        gates::StockHint::CachedUnfit => eprintln!(
+                            "gsa: note: stock upgrade available: {} {} -> {} (the cached archive does not fit this transaction — --with would refuse it)",
+                            upgrade.name, upgrade.installed, upgrade.repo
+                        ),
+                        // Nothing cached: `--with` downloads and verifies.
+                        gates::StockHint::Absent => eprintln!(
+                            "gsa: note: stock upgrade available: {} {} -> {} (not cached; --with {} downloads and verifies it)",
+                            upgrade.name, upgrade.installed, upgrade.repo, upgrade.name
+                        ),
+                    }
+                    // Only a name `--with` can actually transact is offered:
+                    // a cached-but-unfit archive would be refused.
+                    if hint != gates::StockHint::CachedUnfit
+                        && !names.contains(&upgrade.name.as_str())
+                    {
+                        names.push(upgrade.name.as_str());
+                    }
+                }
+                if !names.is_empty() {
+                    eprintln!(
+                        "gsa: note: transact the stock upgrades with --with {}",
+                        names.join(" ")
+                    );
+                }
+            }
+        }
         return Ok(BuiltInstall {
             rows,
             txn: None,
@@ -1427,7 +1614,7 @@ pub fn install_built_package(recipe_dir: &Path, run: &InstallRun) -> Result<Buil
     // plan never transacts, so its refusal already reaches the operator as
     // the run's own failure/refusal rows; only a plan that stood or went to
     // `pacman` owes the "did this touch /usr?" answer this adds.
-    let announcements: Vec<gsa_model::ArchiveAnnouncement> = plan
+    let mut announcements: Vec<gsa_model::ArchiveAnnouncement> = plan
         .candidates
         .iter()
         .flat_map(|group| {
@@ -1444,6 +1631,21 @@ pub fn install_built_package(recipe_dir: &Path, run: &InstallRun) -> Result<Buil
                 })
         })
         .collect();
+    // The `--with` members this transaction carries get the same "did this
+    // touch /usr, and with which bytes?" answer as the built archives
+    // (§E.1): they install bytes the run did not build, so silence here
+    // would be the one unaccounted write.
+    for with in &run.with {
+        if plan.with_used.contains(&with.pkginfo.pkgname) {
+            announcements.push(gsa_model::ArchiveAnnouncement {
+                decision: Decision::Install,
+                pkgname: with.pkginfo.pkgname.clone(),
+                version: with.pkginfo.version.clone(),
+                archive: with.archive.display().to_string(),
+                detail: "with".to_string(),
+            });
+        }
+    }
 
     // Rule 9: every ACCEPTED archive (install AND skip rows) has its
     // pkgbase+pkgname registered before anything can install it. Parked
@@ -1509,12 +1711,21 @@ pub fn install_built_package(recipe_dir: &Path, run: &InstallRun) -> Result<Buil
         );
     }
 
-    let install_archives: Vec<PathBuf> = plan
+    let mut install_archives: Vec<PathBuf> = plan
         .candidates
         .iter()
         .filter(|group| group.rows.iter().any(|r| r.decision == Decision::Install))
         .map(|group| group.candidate.archive.clone())
         .collect();
+    // The `--with` archives the ABI gate needed ride the SAME invocation
+    // (§E.3 2026-11-20 amendment): stock consumers of a moved soname have
+    // no other coverage class, and a second `pacman -U` would leave a dead
+    // binary between the two.
+    for with in &run.with {
+        if plan.with_used.contains(&with.pkginfo.pkgname) {
+            install_archives.push(with.archive.clone());
+        }
+    }
     if install_archives.is_empty() {
         return Ok(BuiltInstall {
             rows,
@@ -1698,6 +1909,44 @@ pub struct InstallRun {
     /// Workspace recipe OUTPUT names (`pkgbase` + `pkgname`s of every
     /// committed recipe) — the ABI gate's workspace/out-of-tree class split.
     pub workspace_names: Vec<String>,
+    /// Repo archives the operator put in THIS transaction (`--with`, issue
+    /// #6): stock consumers of a moved soname join the provider's single
+    /// `pacman -U` or the refusal stands. They are never built and never
+    /// candidates; their names are transaction membership (§E.3), and the
+    /// bytes are verified here before they may cover anything.
+    pub with: Vec<WithArchive>,
+}
+
+/// One `--with` archive: a repo package the engine installs but never
+/// builds. Its `.PKGINFO` is the authority for the names it contributes to
+/// the transaction; its bytes are verified by [`gates::with_unresolved`],
+/// so membership is never a bare assertion.
+#[derive(Clone, Debug)]
+pub struct WithArchive {
+    pub archive: PathBuf,
+    pub pkginfo: gsa_recipe::pkginfo::Pkginfo,
+}
+
+impl WithArchive {
+    /// Read the archive's own `.PKGINFO` (rule 71: an unreadable archive is
+    /// a refusal, never an empty member set).
+    pub fn load(archive: &Path) -> Result<WithArchive, String> {
+        let pkginfo = gsa_recipe::pkginfo::read_pkginfo(archive)
+            .map_err(|e| format!("cannot read {}: {e}", archive.display()))?;
+        Ok(WithArchive {
+            archive: archive.to_path_buf(),
+            pkginfo,
+        })
+    }
+
+    /// The installed name this archive puts in the transaction: the one
+    /// `pkgname` it carries. Its `pkgbase` is NOT one of them — `pacman -U`
+    /// installs this archive alone, so a split sibling's `pkgbase` alias
+    /// would grant coverage for a package the transaction never touches
+    /// (round-3 review 2026-11-20).
+    pub fn member(&self) -> &str {
+        &self.pkginfo.pkgname
+    }
 }
 
 /// Render the seam's stdout rows (§E.2) — one row per line.

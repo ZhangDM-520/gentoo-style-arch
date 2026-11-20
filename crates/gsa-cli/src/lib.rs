@@ -28,6 +28,7 @@ mod record;
 mod render;
 mod select;
 mod standalone;
+mod stock;
 mod style;
 mod world;
 
@@ -475,6 +476,16 @@ fn classify(inv: &Invocation) -> Disposition {
     {
         return Disposition::Bad(
             "--dry-run applies to build/install/fetch/update actions (-S/-B/-U/-Sw/-Su) and the -M maintain verbs; queries are already read-only and `gsa -Sy` is the rewrite pass itself (recipe rewrites left uncommitted — there is no dry form)"
+                .to_string(),
+        );
+    }
+    // `--with` names the transaction's membership, and only `-S` builds one
+    // from repo archives; `-U` already takes archives as targets and
+    // `-Su`/`-Syu` compute their own stale set (a named member there would
+    // resolve and then transact nothing — blind review 2026-11-20).
+    if !inv.with.is_empty() && !matches!(command, Command::BuildInstall | Command::Plan) {
+        return Disposition::Bad(
+            "--with applies to a -S install (-S PKG…, or its --dry-run plan): -U takes archives as targets, -B builds without installing, and -Su/-Syu compute their own stale set"
                 .to_string(),
         );
     }

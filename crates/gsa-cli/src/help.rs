@@ -191,13 +191,17 @@ Long modifiers (contract §B.8). A build run accepts:",
     Section {
         head: "--skip and --skip-built are different claims and cannot combine. The side-car queries (-Qb/-Qp) accept --state-dir PATH.
 
-An install run (-S/-U) additionally accepts:",
+An install run additionally accepts --config PATH, --no-register-ignorepkg, --with PKG (-S only) and -- <pacman args…>; the -U family takes the first, second and last:",
         blocks: &[
             (
                 "--config PATH",
                 "the target pacman.conf — its DBPath is the database every gate reads and the transaction writes",
             ),
             ("--no-register-ignorepkg", "skip the dynamic IgnorePkg registration, loudly"),
+            (
+                "--with PKG",
+                "a repo package that joins the SAME install transaction of a -S run (repeatable; --with=a,b is the same set): the only coverage an installed out-of-tree consumer of a moved soname can have. The name resolves to its current repo archive (cached, else downloaded) and its own links are verified; it joins the step whose ABI gate needs it, and a plan shows what would resolve without downloading anything",
+            ),
             (
                 "-- <pacman args…>",
                 "forwarded to every pacman -U; a database rebind (--dbpath/--root/--sysroot/--config) is refused",

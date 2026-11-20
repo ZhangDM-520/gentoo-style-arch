@@ -111,6 +111,14 @@ links through nothing, so it is neither broken by a change nor built for it
 in scope.
 _Avoid_: dependency closure, reverse-dependency sweep
 
+**With-set** (`--with PKG`):
+The repo archives an operator admits to a `-S` run's ONE install transaction,
+resolved from the repos (cached, else downloaded) and verified link-by-link.
+It is transaction membership, not a build: a stock consumer of a moved soname
+has no other coverage class, because only its own upgrade clears it
+(contract §E.3 amendment 2026-11-20).
+_Avoid_: extra packages, add-on installs (it is the same transaction)
+
 **Pruning strengths**:
 The three maintain wipes, weakest first: `-Mc` (the selection's build trees
 and archives), `-Mcc` (every built archive in the workspace plus its

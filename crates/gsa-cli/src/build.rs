@@ -55,7 +55,7 @@ pub const REAL_BUILD_FLAGS: [&str; 10] = [
 
 /// What a `-S` build+install run additionally accepts (§B.8): the dynamic
 /// IgnorePkg registration switch and the target pacman.conf.
-pub const REAL_INSTALL_FLAGS: [&str; 12] = [
+pub const REAL_INSTALL_FLAGS: [&str; 13] = [
     "--fail-fast",
     "--lanes",
     "--jobs",
@@ -68,6 +68,7 @@ pub const REAL_INSTALL_FLAGS: [&str; 12] = [
     "--no-register-ignorepkg",
     "--config",
     "--toolchain",
+    "--with",
 ];
 
 /// `gsa -B <targets…> [ranges…]` — run the selection build-only. Returns the
@@ -242,6 +243,44 @@ fn run_build_with(
             RefusalClass::StartupRefused,
             || resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b),
         ));
+    }
+
+    // ── `--with` repo archives (§L.1, §E.3 2026-11-20 amendment) ────────
+    // A stock consumer of a moved soname has no coverage but membership of
+    // the provider's own transaction, so the archives the operator named
+    // resolve BEFORE anything builds: a name that resolves to nothing is a
+    // startup refusal (rc 3), never a run that builds and then cannot
+    // transact.
+    let with_archives = match crate::stock::resolve(inv.config.as_deref(), &inv.with) {
+        Ok(archives) => archives,
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            return Err(refuse_startup(
+                inv,
+                &selection,
+                &state_dir,
+                out,
+                err,
+                RefusalClass::StartupRefused,
+                || resolve_budget(inv, &project, selection.listed.len()).map(|(b, _)| b),
+            ));
+        }
+    };
+    for archive in &with_archives {
+        // Epoch 0 is the default: the note names the version the way
+        // `pacman -Q` shows it, never the canonical `0:` prefix.
+        let version = archive
+            .pkginfo
+            .version
+            .strip_prefix("0:")
+            .unwrap_or(&archive.pkginfo.version);
+        let _ = writeln!(
+            err,
+            "gsa: note: with {} {} {} — joins the transaction only where the ABI gate needs it",
+            archive.pkginfo.pkgname,
+            version,
+            archive.archive.display()
+        );
     }
 
     // ── missing build-order prerequisites (owner decision 2026-11-11) ────
@@ -634,6 +673,11 @@ fn run_build_with(
                         later_installs: later,
                         recipe_of_name: recipe_of_name.clone(),
                         workspace_names: workspace_names.clone(),
+                        // `--with` members ride EVERY install step's plan:
+                        // only the step whose provider drifts adopts them
+                        // (`Plan::with_used`), so the other steps transact
+                        // exactly their own archive.
+                        with: with_archives.clone(),
                     };
                     crate::install::install_step_from_result(gsa_install::install_built_package(
                         recipe_dir, &run,
@@ -1132,6 +1176,22 @@ pub(crate) fn plan_only(
     // the dry-run shows the wave it would build — additions join the plan,
     // and an under-covered member refuses (rc 3).
     let state_dir = gsa_state::resolve_state_root(inv.state_dir.as_deref()).map_err(Exit::Usage)?;
+    // `--with` in a plan: what the run WOULD transact — resolved against
+    // the repos, never downloaded (`--dry-run` mutates nothing). A name that
+    // resolves to no repo package is still the run's refusal, so the plan's
+    // rc reports that predicted class.
+    let mut with_refused = false;
+    match crate::stock::describe(inv.config.as_deref(), &inv.with) {
+        Ok(lines) => {
+            for line in lines {
+                let _ = writeln!(err, "gsa: note: with {line}");
+            }
+        }
+        Err(message) => {
+            let _ = writeln!(err, "gsa: {message}");
+            with_refused = true;
+        }
+    }
     // The same prerequisite expansion the run performs (owner decision
     // 2026-11-11): a dry run must show the additions it would build. An
     // unreadable installed DB is the run's refusal, so the plan reports that
@@ -1218,7 +1278,7 @@ pub(crate) fn plan_only(
     );
     // §H.2: the record's `rc` scalar is the run's exit code — a refusing
     // plan reports its refusal, never a success.
-    let rc = if wave.uncovered || wave_refused || prereq_refused {
+    let rc = if wave.uncovered || wave_refused || prereq_refused || with_refused {
         crate::RC_REFUSED
     } else {
         crate::RC_OK
@@ -2431,6 +2491,7 @@ mod tests {
             keep: None,
             show: None,
             pacman_args: None,
+            with: Vec::new(),
             no_prefetch: false,
             prefetch_ahead: None,
             skip: false,

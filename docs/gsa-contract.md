@@ -451,6 +451,7 @@ reverted to the census, drift row dropped, backfill adding the unbuilt names).
 | `--no-build-dir-prompt` | restore the pre-prompt behaviour: resolve the build root silently from the layers above instead of asking on a TTY. Mirrored into the continuation |
 | `--no-prefetch`, `--prefetch-ahead N` | advisory fetch-ahead window (default-on): `--no-prefetch` opts out, `--prefetch-ahead N` sizes it; the two are mutually exclusive (added 2026-10-14, see amendment 4) |
 | `--config PATH`, `--noconfirm` | pacman-familiar globals; `--noconfirm` consents to the engine's own destroyed-set confirmations (`-Mcc`, `-Mccc`, `-Mm`) and never to a pacman question flag |
+| `--with PKG` | (`-S` only, added 2026-11-20) a repo package that joins the SAME install transaction — the only coverage an installed out-of-tree consumer of a moved soname can have (§E.3 amendment). Repeatable; `--with=a,b` is the same set. The name resolves to its current repo archive — `pacman -Si` for version/arch, `pacman-conf [--config PATH] CacheDir` for the cache, `pacman -Sw` on a miss, and an exact `<name>-<version>-<arch>.pkg.tar.*` match (never a `.sig` sibling or a `.part` residue). The archive's own links and pins are verified before it may cover anything, it joins the step whose ABI gate needs it, and the resolved set is mirrored into the continuation |
 | `--quiet`, `--verbose` | **deferred**: recognised and refused (rc 2, naming the flag) by every command; never mirrored (§H.2) |
 | `--machine` | select the machine vocabulary explicitly (the default when stdout is captured); presentation only, never mirrored (§H.2) |
 | `--color auto\|always\|never` | colour for the HUMAN rendering, every family (added 2026-11-11): `auto` (the default) colours only when stdout is a terminal, `TERM` is set and not `dumb`, and `NO_COLOR` is unset or empty; `always` asks for the human rendering WITH colour even through a pipe (the only rendering that has colour), and `never` keeps the terminal's own vocabulary without colour. `--machine` is the machine vocabulary and is never coloured, whatever the flag says — an escape byte in the record, the kv lines or a decision row is a contract break, not a style choice. Colour is never the only signal: every state keeps its word and glyph (`✓ DONE`, `✗ FAILED`, `parked`, `deferred`), so a piped or `NO_COLOR` reader loses nothing. Presentation only, never mirrored (§H.2); resolved once in `gsa-cli::style`, never at a call site |
@@ -1223,6 +1224,44 @@ silent (owner decision 2026-11-20); `-Sl` is the operator's surface. Pinned by
 `gsa-abi`'s `wave_pipeline` cases (absent consumer, absent transitive
 consumer, named consumer, unknown world).
 
+*Amendment (2026-11-20, `--with`: transaction membership for out-of-tree
+consumers).* Coverage stayed `transaction membership ∪ in-run repair`, but an
+installed OUT-OF-TREE package could be in neither — `-S` transactions carried
+only engine-built archives, and `-U` needs consumer archives that cannot exist
+before the provider installs, so a soname move was unhealable through the
+engine (issue #6). `--with PKG` (§B.8) admits the named repo archives to the
+ONE `pacman -U`: the one `pkgname` each archive carries (NEVER its `pkgbase` —
+`pacman -U` installs that archive alone, so a split sibling's alias would grant
+coverage for a package the transaction never touches) joins the gate's
+transaction MEMBERSHIP — one coverage class, carried with provenance
+(`tx_names` = this install's own archives, `with_names` = the operator's)
+because the installer's name registration may only claim the archives it owns
+while the gate must see the whole transaction. `Plan::with_used` reports which of them the gate
+actually needed, so a step transacts them only where the coverage was granted. Admission is never an assertion: every `DT_NEEDED` of a
+`--with` archive must resolve against the transaction's shipped files ∪ the
+post-transaction host, and never through the generation this transaction
+removes (the installed DB still answers for the file that is about to
+disappear); a `Depends` pinning the removed generation refuses too. Both emit
+`refuse with-unresolved <archive> <member> <soname>` (or `… pin <dep>`).
+Every resolved member is announced once when it resolves, and a member a
+given step did not need joins nothing — `with_used` is per transaction (a
+later provider may still need it), so there is no per-step row to repeat. When a refusal stands on
+out-of-tree names, the gate names the repair: `refuse abi-stock-upgrade
+<name> <installed-ver> <repo-ver>` rows plus two notes (`stock upgrade
+available: <name> <installed> -> <repo>` and `transact the stock upgrades
+with --with <names>`), because a step's refusal rows collapse to the first
+reason in the record. The hint is advisory, never downloads, and never
+promises a member the gate would refuse: its `Verified` state is the
+`--with` acceptance itself (`with_old_pins` plus `with_unresolved` over the
+plan's own exclusions, shipped bytes and installed DB), so a repo version
+whose cached archive the gate would refuse is named WITHOUT the row and
+without the `--with` advice. Only a strictly NEWER repo version is an upgrade
+(a local build ahead of the repo is not), and a repo read that fails yields
+nothing for THAT name while the other stranded names keep their hints
+(`pacman -Si known unknown` prints the known block and exits non-zero).
+Pinned by `tests/with-stock.sh` and `gsa-install`'s `decision_rows` `--with`
+cases.
+
 *Amendment (2026-11-11, did pacman run?).* A checked same-version skip keeps
 the §E.3 decision row exactly as above (`skip already-current <v>` /
 `skip not-newer <v>`), and the RUN RECORD's outcome row names the class under
@@ -1583,6 +1622,14 @@ the same reason (amendment 2026-11-11): it selects the compiler family AND
 feeds the toolchain identity digest, so a continuation without it rebuilds
 under the other family — and takes a surprise clean — while claiming to be the
 same run.
+
+*Amendment (2026-11-20, `--with` in the continuation).* `--with PKG`
+(repeatable) is mirrored: a continuation that dropped it would rebuild a
+provider whose one `pacman -U` no longer carries the stock consumer the move
+was healed with (§E.3 2026-11-20 amendment), i.e. the run would re-enter the
+refusal it recorded as solved. The roster above is therefore a list of
+examples, not exhaustive — `crates/gsa-cli/src/record.rs` remains the
+authority §L.1 names.
 
 *Amendment (2026-10-28, H3 — argv-scoped `not-mirrored:`, vocabulary sync).*
 The `not-mirrored:` line lists **only the run's own argv spellings** the

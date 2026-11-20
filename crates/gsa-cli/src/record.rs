@@ -329,6 +329,12 @@ pub(crate) fn argv_seams(inv: &Invocation) -> String {
     if let Some(conf) = &inv.config {
         out.push_str(&format!(" --config {}", shell_quote(conf)));
     }
+    // `--with` members are the transaction's composition (§L.1): a replay
+    // that drops them rebuilds the same provider and then REFUSES on the
+    // stock consumer it was healing, so the continuation must carry them.
+    for name in &inv.with {
+        out.push_str(&format!(" --with {}", shell_quote(name)));
+    }
     out
 }
 
@@ -1077,6 +1083,7 @@ mod tests {
             keep: None,
             show: None,
             pacman_args: None,
+            with: Vec::new(),
             no_prefetch: false,
             prefetch_ahead: None,
             skip: false,
@@ -1150,6 +1157,7 @@ mod tests {
             keep: None,
             show: None,
             pacman_args: None,
+            with: Vec::new(),
             no_prefetch: false,
             prefetch_ahead: None,
             skip: false,
@@ -1204,6 +1212,7 @@ mod tests {
             keep: None,
             show: None,
             pacman_args: None,
+            with: Vec::new(),
             no_prefetch: false,
             prefetch_ahead: None,
             skip: false,
@@ -1341,6 +1350,7 @@ mod tests {
             keep: None,
             show: None,
             pacman_args: None,
+            with: Vec::new(),
             no_prefetch: false,
             prefetch_ahead: None,
             skip: false,
