@@ -863,6 +863,11 @@ knob.
 
 ## Reading the output
 
+In a terminal, `gsa -Ql`, `gsa -Qu`, and `gsa -Qr` align their columns and
+use the same colour settings as `gsa -Q`. Use `--machine` for the plain rows
+or to copy full paths and other values that may be shortened to fit the
+terminal.
+
 Every human surface — the dashboard, `-Q*`, `-Sl`/`-Bl`, `-M*`, `-Qi`, the
 plan and the run summary — paints its states through one seam
 (`gsa-cli::style`), and every surface answers to the same switch:

@@ -464,6 +464,46 @@ fn declared_provides(recipe_dir: Option<&Path>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Fit a headerless human query table. Compute widths on sanitized text
+/// before painting, and leave the last column all remaining space.
+fn write_query_table<const N: usize>(
+    out: &mut dyn Write,
+    rows: impl IntoIterator<Item = [String; N]>,
+    roles: [style::Role; N],
+) -> std::io::Result<()> {
+    let rows: Vec<_> = rows
+        .into_iter()
+        .map(|row| row.map(|cell| style::sanitize_data(&cell)))
+        .collect();
+    let mut remaining = crate::dashboard::terminal_width() - 1;
+    let widths: [usize; N] = std::array::from_fn(|index| {
+        let columns_left = N - index - 1;
+        if columns_left == 0 {
+            return remaining;
+        }
+        let natural = rows
+            .iter()
+            .map(|row| style::visible_width(&row[index]))
+            .max()
+            .unwrap_or(0);
+        let width = natural.min((remaining - 2 * columns_left) / (columns_left + 1));
+        remaining -= width + 2;
+        width
+    });
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            let fitted = style::truncate_middle(cell, widths[index]);
+            write!(out, "{}", style::paint(roles[index], &fitted))?;
+            if index + 1 < N {
+                let padding = widths[index] - style::visible_width(&fitted) + 2;
+                write!(out, "{:padding$}", "")?;
+            }
+        }
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
 /// `gsa -Qr` — the revdep report over the installed-ELF view (contract
 /// §B.3): unresolved `DT_NEEDED`, preserved-lib survivors, exact-pin
 /// leftovers (`gsa_abi::revdep`). Read-only; rc 0 — report-only like every
@@ -499,19 +539,56 @@ pub fn query_revdep(
     for line in corrupt {
         let _ = writeln!(err, "gsa: note: {line}");
     }
-    let rows = gsa_abi::render_revdep(&report);
-    for row in &rows {
-        let _ = writeln!(out, "{row}");
+    if !crate::output::is_human() {
+        for row in gsa_abi::render_revdep(&report) {
+            writeln!(out, "{row}").map_err(|e| e.to_string())?;
+        }
+        return Ok(());
     }
-    // A clean report renders its verdict instead of nothing (the same
-    // `clean`/`empty` answer the `-M` surfaces give).
-    if rows.is_empty() && crate::output::is_human() {
-        let _ = writeln!(
+    if report.is_empty() {
+        return writeln!(
             out,
-            "revdep clean no unresolved DT_NEEDED, preserved survivors, or exact-pin leftovers"
-        );
+            "{} no unresolved DT_NEEDED, preserved survivors, or exact-pin leftovers",
+            style::paint(style::Role::Ok, "revdep clean"),
+        )
+        .map_err(|e| e.to_string());
     }
-    Ok(())
+    let rows = report
+        .unresolved
+        .into_iter()
+        .map(|finding| {
+            [
+                "unresolved".into(),
+                finding.consumer,
+                format!("{} {}", finding.member, finding.soname),
+            ]
+        })
+        .chain(report.preserved.into_iter().map(|finding| {
+            [
+                "preserved".into(),
+                finding.entry.soname,
+                format!(
+                    "{} {} {} {}",
+                    finding.entry.path,
+                    finding.entry.owner,
+                    finding.entry.version,
+                    finding.consumers.join(","),
+                ),
+            ]
+        }))
+        .chain(report.exact_pins.into_iter().map(|finding| {
+            [
+                "exact-pin".into(),
+                finding.consumer,
+                format!("{} {}", finding.dep, finding.status),
+            ]
+        }));
+    write_query_table(
+        out,
+        rows,
+        [style::Role::Warn, style::Role::Bold, style::Role::Dim],
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The side-car read of the `-Q` family (I1): the binpkg index of the state
@@ -1052,6 +1129,34 @@ pub fn query_updates(
     let ids: Vec<gsa_model::RecipeId> = ctx.graph.records().iter().map(|r| r.id.clone()).collect();
     let installed = LocalDb::load(&pacman_db_root()).map_err(|e| e.to_string())?;
     let rows = crate::prepare::stale_set(root, ctx.graph, ctx.db, &installed, &ids);
+    if crate::output::is_human() {
+        if rows.is_empty() {
+            return writeln!(
+                out,
+                "{} no stale recipes",
+                style::paint(style::Role::Ok, "stale clean"),
+            )
+            .map_err(|e| e.to_string());
+        }
+        return write_query_table(
+            out,
+            rows.into_iter().map(|row| {
+                [
+                    row.id.to_string(),
+                    format!("tracked={}", row.tracked),
+                    format!("installed={}", row.installed.as_deref().unwrap_or("-")),
+                    format!("built={}", row.built.as_deref().unwrap_or("-")),
+                ]
+            }),
+            [
+                style::Role::Bold,
+                style::Role::Warn,
+                style::Role::Dim,
+                style::Role::Dim,
+            ],
+        )
+        .map_err(|e| e.to_string());
+    }
     for row in &rows {
         writeln!(
             out,
@@ -1063,15 +1168,13 @@ pub fn query_updates(
         )
         .map_err(|e| e.to_string())?;
     }
-    if rows.is_empty() && crate::output::is_human() {
-        let _ = writeln!(out, "stale clean no stale recipes");
-    }
     Ok(())
 }
 
 /// `-Ql`/`-Qo` (§B.3, I3 + H8: "pacman queries stay pacman"): pacman
 /// delegates — the query IS pacman's own, so the engine runs the pacman
-/// argv verbatim and passes its stdout, stderr and exit code through.
+/// argv verbatim and passes stderr and exit status through. The human
+/// `-Ql` view aligns package and path columns.
 pub fn pacman_delegate(
     pacman_action: &str,
     inv: &Invocation,
@@ -1096,7 +1199,17 @@ pub fn pacman_delegate(
         .args(&inv.targets)
         .output()
         .map_err(|e| format!("cannot run pacman {pacman_action}: {e}"))?;
-    out.write_all(&output.stdout).map_err(|e| e.to_string())?;
+    if pacman_action == "-Ql" && crate::output::is_human() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let rows = text.lines().map(|line| {
+            let (package, path) = line.split_once(' ').unwrap_or((line, ""));
+            [package.to_owned(), path.to_owned()]
+        });
+        write_query_table(out, rows, [style::Role::Bold, style::Role::Info])
+            .map_err(|e| e.to_string())?;
+    } else {
+        out.write_all(&output.stdout).map_err(|e| e.to_string())?;
+    }
     err.write_all(&output.stderr).map_err(|e| e.to_string())?;
     Ok(output.status.code().unwrap_or(1))
 }

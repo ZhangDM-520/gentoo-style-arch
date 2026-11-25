@@ -172,9 +172,16 @@ the selection`, never that the index itself is empty), `-Qu` `stale clean …`,
 `-Qr` `revdep clean …`
 (selected by the §L.9 ladder, so `--color=always` reaches it through a pipe).
 A clean query must never be mistaken for a broken one. The machine channel
-and the data channels (`-Qt`, `-Qs`, `-Ql`/`-Qo`'s pacman passthrough) stay
+and the data channels (`-Qt`, `-Qs`, and `-Qo`'s pacman passthrough) stay
 row-only: a zero-row capture is scriptable and never grows a synthetic row.
 Pinned by `tests/gsa-query.sh` §h.
+
+*Amendment (2026-11-25, query tables).* On the human rendering, `-Ql`
+aligns package names and paths, `-Qu` aligns recipe and version columns,
+and `-Qr` aligns finding kind, subject, and detail. They use the shared
+colour and width rules (§L.9). Machine rows keep their existing shape,
+including byte-for-byte pacman stdout for `-Ql`. Pacman stderr and exit
+status pass through in both renderings.
 
 ### B.4 `-S` — build + install
 
