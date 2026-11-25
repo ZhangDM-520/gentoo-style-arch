@@ -28,13 +28,23 @@ pub struct HostTool {
     pub program: &'static str,
     /// The Arch package that ships it (the remedy a refusal names).
     pub package: &'static str,
+    /// Why the build cannot start without it, in one clause.
+    pub why: &'static str,
 }
 
 /// The tools every build the engine issues requires from the host.
-pub const REQUIRED_HOST_TOOLS: [HostTool; 1] = [HostTool {
-    program: "fakeroot",
-    package: "fakeroot",
-}];
+pub const REQUIRED_HOST_TOOLS: [HostTool; 2] = [
+    HostTool {
+        program: "fakeroot",
+        package: "fakeroot",
+        why: "makepkg's setup gate requires it",
+    },
+    HostTool {
+        program: "mold",
+        package: "mold",
+        why: "the engine's makepkg configuration links with it (-fuse-ld=mold)",
+    },
+];
 
 /// The first required tool absent from this process's PATH — the PATH a lane
 /// inherits, because the build-user drop preserves it. `None` when all are
@@ -70,7 +80,10 @@ mod tests {
 
     #[test]
     fn an_empty_path_reports_every_required_tool() {
-        with_path(|_| assert_eq!(missing(), Some(&REQUIRED_HOST_TOOLS[0])));
+        with_path(|_| {
+            assert_eq!(missing(), Some(&REQUIRED_HOST_TOOLS[0]));
+            assert_eq!(REQUIRED_HOST_TOOLS.len(), 2);
+        });
     }
 
     #[test]
@@ -78,10 +91,14 @@ mod tests {
         with_path(|dir| {
             // A 0644 file is not `type -p`-visible: the probe must never be
             // satisfied by a name it could not run.
-            std::fs::write(dir.join("fakeroot"), b"#!/bin/sh\n").unwrap();
+            for tool in ["fakeroot", "mold"] {
+                std::fs::write(dir.join(tool), b"#!/bin/sh\n").unwrap();
+            }
             assert!(missing().is_some(), "a 0644 file is not a tool");
-            std::fs::set_permissions(dir.join("fakeroot"), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            for tool in ["fakeroot", "mold"] {
+                std::fs::set_permissions(dir.join(tool), std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            }
             assert_eq!(missing(), None);
         });
     }

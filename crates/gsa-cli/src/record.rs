@@ -346,8 +346,8 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     if inv.skip_built {
         out.push_str(" --skip-built");
     }
-    if let Some(tolerance) = &inv.vcs_skip_tolerance {
-        out.push_str(&format!(" --vcs-skip-tolerance {}", shell_quote(tolerance)));
+    if let Some(tolerance) = inv.vcs_skip_tolerance {
+        out.push_str(&format!(" --vcs-skip-tolerance {tolerance}"));
     }
     if inv.no_sync {
         out.push_str(" --no-sync");
@@ -2063,14 +2063,11 @@ mod tests {
     fn mirrored_value_flags_are_shell_quoted() {
         let mut inv = inv_for(Family::B);
         inv.toolchain = Some("my clang".to_string());
-        inv.vcs_skip_tolerance = Some("2;rm".to_string());
+        inv.vcs_skip_tolerance = Some(2);
         inv.prefetch_ahead = Some("3 x".to_string());
         let mirrored = mirror_flags(&inv, None);
         assert!(mirrored.contains("--toolchain 'my clang'"), "{mirrored}");
-        assert!(
-            mirrored.contains("--vcs-skip-tolerance '2;rm'"),
-            "{mirrored}"
-        );
+        assert!(mirrored.contains("--vcs-skip-tolerance 2"), "{mirrored}");
         assert!(mirrored.contains("--prefetch-ahead '3 x'"), "{mirrored}");
     }
 }

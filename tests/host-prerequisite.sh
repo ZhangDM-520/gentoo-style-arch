@@ -69,6 +69,12 @@ chmod +x "$ws/bin/makepkg"
 # makepkg's `type -p fakeroot` sees on a host without it.
 farm="$fixture/farm"
 mkdir -p "$farm"
+# The link driver the engine's OWN makepkg configuration names. It is a stub
+# here so the sections below test one prerequisite at a time, on any host.
+tools="$fixture/tools"
+mkdir -p "$tools"
+printf '#!/bin/sh\nexit 0\n' >"$tools/mold"
+chmod +x "$tools/mold"
 for tool_bin in /usr/bin/*; do
     [ "${tool_bin##*/}" = fakeroot ] && continue
     ln -s "$tool_bin" "$farm/${tool_bin##*/}" 2>/dev/null || true
@@ -110,7 +116,7 @@ done
     mkdir -p "$fixture/b"
 
     # 1. build it once on the normal PATH (the archive is what step 2 skips).
-    export PATH="$ws/bin:$PATH"
+    export PATH="$tools:$ws/bin:$PATH"
     run_engine "$ws" -B --leaf --no-sync \
         --state-dir "$fixture/b/state" --build-dir "$fixture/b/build" p1
     printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/b/prime.txt"
@@ -139,6 +145,8 @@ lane_bin="$fixture/lane-bin"
 mkdir -p "$lane_bin"
 printf '#!/bin/sh\nexit 0\n' >"$lane_bin/fakeroot"
 chmod +x "$lane_bin/fakeroot"
+printf '#!/bin/sh\nexit 0\n' >"$lane_bin/mold"
+chmod +x "$lane_bin/mold"
 cat >"$ws/bin/makepkg" <<'EOF'
 #!/usr/bin/env bash
 set -eu
@@ -170,3 +178,37 @@ for case in '15 host-prerequisite-missing' '8 dependency-install-failed'; do
         fi
     )
 done
+
+# ─── E. no mold: the engine's own `-fuse-ld=mold` is a host prerequisite ───
+# On a clean Arch box the documented prerequisites install no mold, and every
+# C link died in gcc's `collect2: fatal error: cannot find 'ld'` — naming a
+# tool that IS present. The engine now refuses pre-dispatch, naming mold and
+# the package that ships it, so the first build is not a mystery.
+(
+    set -euo pipefail
+    farm_nomold="$fixture/farm-nomold"
+    mkdir -p "$farm_nomold"
+    for tool_bin in /usr/bin/*; do
+        [ "${tool_bin##*/}" = mold ] && continue
+        ln -s "$tool_bin" "$farm_nomold/${tool_bin##*/}" 2>/dev/null || true
+    done
+    export PATH="$ws/bin:$farm_nomold"
+    export GSA_FAKE_MAKEPKG_LOG="$fixture/e/makepkg.log"
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    mkdir -p "$fixture/e"
+
+    run_engine "$ws" -B --leaf --no-sync \
+        --state-dir "$fixture/e/state" --build-dir "$fixture/e/build" p1
+    printf '%s\n' "$FIXTURE_OUTPUT" >"$fixture/e/out.txt"
+
+    [ "$FIXTURE_RC" -eq 3 ] ||
+        fail "E: a host without mold exited $FIXTURE_RC, want the refusal class 3 (§G.1):" "$fixture/e/out.txt"
+    vgrep "$FIXTURE_OUTPUT" -Fq 'mold' ||
+        fail 'E: the refusal does not name the missing link driver:' "$fixture/e/out.txt"
+    vgrep "$FIXTURE_OUTPUT" -Fq 'pacman -S mold' ||
+        fail 'E: the refusal does not name the package that provides it:' "$fixture/e/out.txt"
+    [ "$(rr2_outcome p1 <"$fixture/e/out.txt")" = 'p1 never-started - - host-prerequisite-missing' ] ||
+        fail "E: row wrong: $(rr2_outcome p1 <"$fixture/e/out.txt")" "$fixture/e/out.txt"
+    [ ! -s "$fixture/e/makepkg.log" ] ||
+        fail 'E: the run refused but still spawned makepkg:' "$fixture/e/makepkg.log"
+)

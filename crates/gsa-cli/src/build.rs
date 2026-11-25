@@ -568,8 +568,9 @@ fn run_build_with(
         if let Some(tool) = gsa_build::prereq::missing() {
             let _ = writeln!(
                 err,
-                "gsa: this host cannot start a build: makepkg needs `{}` before any build begins and it is not on PATH — install it (pacman -S {}){}",
+                "gsa: this host cannot start a build: `{}` is not on PATH — {} — install it (pacman -S {}){}",
                 tool.program,
+                tool.why,
                 tool.package,
                 prepare::secure_path_hint(&format!("`{}`", tool.program))
             );

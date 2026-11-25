@@ -604,9 +604,9 @@ pub struct Invocation {
     /// `--skip-built`: the built-set claim only — newest complete set at any
     /// version, no upstream probes, recipe-change gate (§B.8).
     pub skip_built: bool,
-    /// `--vcs-skip-tolerance N` (raw; the freshness resolver validates and
-    /// beats `GSA_VCS_SKIP_TOLERANCE`, §B.8). Positive integers only.
-    pub vcs_skip_tolerance: Option<String>,
+    /// `--vcs-skip-tolerance N` — validated once at parse time, positive
+    /// only, and beats `GSA_VCS_SKIP_TOLERANCE` (§B.8).
+    pub vcs_skip_tolerance: Option<u64>,
     /// `--no-sync`: build the committed version and sums as-is — no provider
     /// query, no anchoring, no rewrite (§B.8).
     pub no_sync: bool,
@@ -1116,7 +1116,14 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                             }
                         }
                         "prefetch-ahead" => inv.prefetch_ahead = Some(value.clone()),
-                        "vcs-skip-tolerance" => inv.vcs_skip_tolerance = Some(value.clone()),
+                        "vcs-skip-tolerance" => match value.parse::<u64>() {
+                            Ok(n) if n >= 1 => inv.vcs_skip_tolerance = Some(n),
+                            _ => {
+                                return Err(format!(
+                                    "--vcs-skip-tolerance: '{value}' must be a positive integer"
+                                ))
+                            }
+                        },
                         "tail" => inv.tail = Some(value.clone()),
                         "keep" => inv.keep = Some(value.clone()),
                         "show" => inv.show = Some(value.clone()),
@@ -1382,6 +1389,17 @@ mod tests {
                 assert!(
                     parse(&["-Q".to_string(), format!("{flag}=nope")]).is_err(),
                     "--color accepted a value outside its three rungs"
+                );
+                continue;
+            }
+            // `--vcs-skip-tolerance` is a validated positive integer, so the
+            // generic "v" probe is not a legal invocation.
+            if spec.name == "vcs-skip-tolerance" {
+                assert!(parse(&["-Q".to_string(), flag.clone(), "2".to_string()]).is_ok());
+                assert!(parse(&["-Q".to_string(), format!("{flag}=2")]).is_ok());
+                assert!(
+                    parse(&["-Q".to_string(), flag.clone(), "0".to_string()]).is_err(),
+                    "--vcs-skip-tolerance accepted a non-positive value"
                 );
                 continue;
             }
@@ -1684,5 +1702,20 @@ mod tests {
                 "{flag} allowed newline: {err}"
             );
         }
+    }
+
+    #[test]
+    fn vcs_skip_tolerance_refuses_non_positive_and_non_integer() {
+        for value in ["0", "-1", "1.5", "abc"] {
+            let err = parse_err(&["-S", "--dry-run", "--vcs-skip-tolerance", value, "app"]);
+            assert!(
+                err.contains("must be a positive integer"),
+                "{value} was accepted: {err}"
+            );
+        }
+        assert_eq!(
+            parse_ok(&["-S", "--vcs-skip-tolerance", "2", "app"]).vcs_skip_tolerance,
+            Some(2)
+        );
     }
 }

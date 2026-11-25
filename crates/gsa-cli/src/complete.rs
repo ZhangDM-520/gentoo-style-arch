@@ -92,6 +92,21 @@ fn family_in(words: &[String]) -> Option<Family> {
     None
 }
 
+/// The action letter a family cluster carries (`-Qp` -> 'p'), if any.
+fn action_in(words: &[String]) -> Option<char> {
+    for word in words {
+        if let Some(rest) = word.strip_prefix('-') {
+            let mut letters = rest.chars();
+            if let Some(first) = letters.next() {
+                if Family::ALL.iter().any(|family| family.letter() == first) {
+                    return letters.next();
+                }
+            }
+        }
+    }
+    None
+}
+
 /// A flag's value position: the choices the engine will itself accept,
 /// read from the vocabulary that owns them (`Toolchain::ALL`,
 /// `gsa_topo::INTENSITY_LEVELS`) rather than restated here.
@@ -285,6 +300,12 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
         ));
         out.retain(|(value, _)| value.starts_with(partial));
         return Answer::Values(out);
+    }
+
+    // `-Qp <archive…>` and `-Qo <path…>` are filesystem positions (§B.3,
+    // §D.1): the shell owns them, so never offer recipe ids.
+    if family == Some(Family::Q) && matches!(action_in(preceding), Some('p' | 'o')) {
+        return Answer::Files;
     }
 
     // `-U` takes archives as well as refs: a path-looking word is the shell's.
@@ -557,6 +578,22 @@ mod tests {
             Answer::Files
         );
         assert_eq!(answer(&words(&["-Ua", "--", ""]), no_names), Answer::Files);
+    }
+
+    #[test]
+    fn query_path_positions_are_the_shells_business() {
+        for action in ["-Qp", "-Qo"] {
+            assert_eq!(
+                answer(&words(&[action, "/et"]), no_names),
+                Answer::Files,
+                "{action} did not hand its path to the shell"
+            );
+            assert_eq!(
+                answer(&words(&[action, ""]), no_names),
+                Answer::Files,
+                "{action} offered names instead of files"
+            );
+        }
     }
 
     #[test]

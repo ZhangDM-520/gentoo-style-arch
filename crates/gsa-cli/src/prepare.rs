@@ -143,21 +143,8 @@ pub struct PassConfig {
 /// Resolve the pass configuration from an invocation; `Err` is a usage-class
 /// message naming the flag (rc 2).
 pub fn pass_config(inv: &Invocation) -> Result<PassConfig, String> {
-    let tolerance_flag = match &inv.vcs_skip_tolerance {
-        Some(raw) => {
-            let parsed: Option<u64> = raw.parse().ok();
-            match parsed {
-                Some(n) if n >= 1 => Some(n),
-                _ => {
-                    return Err(format!(
-                        "--vcs-skip-tolerance: '{raw}' must be a positive integer"
-                    ))
-                }
-            }
-        }
-        None => None,
-    };
-    let resolution = freshness::resolve_vcs_skip_tolerance(tolerance_flag);
+    // `args::parse` validated the spelling once; this is the typed value.
+    let resolution = freshness::resolve_vcs_skip_tolerance(inv.vcs_skip_tolerance);
     // One skip MODE per run (§B.8): the two claims are different analyses,
     // not combinable. `args::parse` refuses the both-set spelling at parse
     // time; this gate keeps the invariant at the seam itself for callers
@@ -542,11 +529,12 @@ pub fn missing_prerequisite_ids(
     inv: &Invocation,
     installed: &gsa_install::LocalDb,
 ) -> Result<Vec<String>, String> {
-    let candidates = prerequisite_candidates(graph, selection, inv.leaf);
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(missing_prerequisites(graph, &candidates, db, installed))
+    Ok(
+        prerequisite_candidates(graph, selection, inv.leaf, db, installed)
+            .into_iter()
+            .map(|idx| graph.record(idx).id.as_str().to_string())
+            .collect(),
+    )
 }
 
 /// Merge prerequisite additions into the selection in BUILD ORDER: plan,
@@ -977,7 +965,20 @@ pub fn pass_selection(
 /// installed before its consumers compile" (blind-review 2026-11-11,
 /// packaging-novice). `--leaf` is exempt by definition: it builds exactly
 /// what was named.
-pub fn prerequisite_candidates(graph: &Graph<'_>, selection: &Selection, leaf: bool) -> Vec<usize> {
+///
+/// The installed boundary STOPS the walk (contract §C.3): an installed
+/// prerequisite is never added, never rebuilt, and its own prerequisites are
+/// not installed on the strength of this expansion. Rebuilding a seed cannot
+/// need a package this host already satisfies as a prerequisite, so the
+/// uninstalled cone *behind* an installed prerequisite belongs to that
+/// package's own maintenance, not to this selection.
+pub fn prerequisite_candidates(
+    graph: &Graph<'_>,
+    selection: &Selection,
+    leaf: bool,
+    db: &RecipeDb,
+    installed: &gsa_install::LocalDb,
+) -> Vec<usize> {
     if leaf || selection.listed.is_empty() {
         return Vec::new();
     }
@@ -986,42 +987,26 @@ pub fn prerequisite_candidates(graph: &Graph<'_>, selection: &Selection, leaf: b
         .iter()
         .filter_map(|(_, id)| graph.index_of(id.as_str()))
         .collect();
-    let mut wanted = selected.clone();
+    let mut seen = selected.clone();
+    let mut additions = Vec::new();
     let mut frontier: Vec<usize> = selected.iter().copied().collect();
     while let Some(idx) = frontier.pop() {
         for prereq in graph.prerequisites(idx) {
-            if wanted.insert(prereq) {
-                frontier.push(prereq);
+            if !seen.insert(prereq) {
+                continue;
             }
+            let installed_already = crate::world::output_names(db, graph.record(prereq))
+                .iter()
+                .any(|name| installed.get(name).is_some());
+            if installed_already {
+                continue;
+            }
+            additions.push(prereq);
+            frontier.push(prereq);
         }
     }
-    let mut out: Vec<usize> = wanted.difference(&selected).copied().collect();
-    out.sort_by_key(|idx| graph.position(*idx));
-    out
-}
-
-/// The prerequisite additions a run actually makes: a candidate is added
-/// only when the SYSTEM has NONE of its output names installed.
-///
-/// Owner decision 2026-11-11: expand to what is missing, never rebuild. A
-/// partially installed split recipe is left alone for the same reason (the
-/// missing output is an install, not a build).
-pub fn missing_prerequisites(
-    graph: &Graph<'_>,
-    candidates: &[usize],
-    db: &RecipeDb,
-    installed: &gsa_install::LocalDb,
-) -> Vec<String> {
-    candidates
-        .iter()
-        .filter(|&&idx| {
-            let record = graph.record(idx);
-            !crate::world::output_names(db, record)
-                .iter()
-                .any(|name| installed.get(name).is_some())
-        })
-        .map(|&idx| graph.record(idx).id.as_str().to_string())
-        .collect()
+    additions.sort_by_key(|idx| graph.position(*idx));
+    additions
 }
 
 /// The `-Sy` phase shared by `gsa -Sy` and `gsa -Syu`: sync every selected

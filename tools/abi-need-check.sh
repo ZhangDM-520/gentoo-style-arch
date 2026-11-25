@@ -95,6 +95,12 @@ while (($# > 0)); do
     shift
 done
 
+# Absent-family names are exempt only in the pacman HOOK mode
+# (`--from-names`): a stock sync/upgrade transaction may carry a package whose
+# binary links an optional feature's provider (cairo/X11 for hwloc's lstopo,
+# libgd for glibc's memusagestat). An explicit scan (`archive|pkgdir`) keeps
+# the strict unresolved-is-fatal contract.
+exempt_absent=$from_names
 if ((from_names)) && ((${#targets[@]} > 0)); then
     printf 'abi-need-check: --from-names takes names on stdin, not arguments\n' >&2
     usage
@@ -561,6 +567,33 @@ host_resolves() {
     return 1
 }
 
+# host_stem_present STEM CLASS — is ANY version of this library family
+# installed? A moved SONAME leaves `libfoo.so.2` where the payload wants
+# `libfoo.so.1`, and that is the breakage this gate exists for. An OPTIONAL
+# runtime dependency (libcairo/libX11 for hwloc's lstopo on a headless host,
+# libgd for glibc's memusagestat, the X11 libs for groff's xditview) leaves
+# no member of the family at all: the package is not broken, it simply uses
+# a feature whose provider is not installed. Only the movED family is fatal.
+host_stem_present() {
+    local stem=$1 dir
+    load_ld_cache
+    # Any cache row naming the family counts — including a row whose file is
+    # gone and a row of the wrong ELF class: both are a provider this host is
+    # supposed to have, not an optional dependency. The class is judged by
+    # host_resolves; this helper answers only "is the family known at all".
+    local name
+    for name in "${!ld_cache_by_name[@]}"; do
+        [[ $name == "$stem".* ]] && return 0
+    done
+    local IFS=':'
+    for dir in $libdirs; do
+        dir=${dir%/}
+        [[ -n $dir ]] || continue
+        compgen -G "$dir/$stem.*" >/dev/null && return 0
+    done
+    return 1
+}
+
 # ld.so.cache truth, loaded once (spawn count is the whole cost): the
 # loader's search includes the ld.so.conf.d dirs and filename-indexed
 # libraries that no dir scan sees (R's libR.so has NO DT_SONAME —
@@ -803,8 +836,10 @@ for root in "${roots[@]}"; do
                 fi
             done
             if ((covered == 0)); then
+                provide_match=0
                 for name in ${tx_provides[@]+"${tx_provides[@]}"}; do
                     if [[ $needed == "$name" || $needed == "$name".* ]]; then
+                        provide_match=1
                         # The runtime oracle is the FILE SYSTEM, not the
                         # pacman database: a provide-name match covers a
                         # stem only when a real file stands behind the
@@ -830,14 +865,56 @@ for root in "${roots[@]}"; do
                 continue
             fi
             if ((covered == 0)); then
+                stem=${needed##*/}
+                while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
+                # The consumer's OWN runpath claiming the family is not an
+                # optional dependency: the package ships a library tree for
+                # it, and a dangling link there is the tk `libtk.so` breakage.
+                own_family=0
+                if [[ -n ${runpath:-} ]]; then
+                    rp_list=$runpath
+                    while [[ -n $rp_list ]]; do
+                        if [[ $rp_list == *:* ]]; then
+                            rp=${rp_list%%:*}
+                            rp_list=${rp_list#*:}
+                        else
+                            rp=$rp_list
+                            rp_list=''
+                        fi
+                        rp=${rp//\$ORIGIN/$elf_dir}
+                        rp=${rp//\$\{ORIGIN\}/$elf_dir}
+                        [[ -n $rp ]] || continue
+                        compgen -G "${rp%/}/$stem.*" >/dev/null && {
+                            own_family=1
+                            break
+                        }
+                    done
+                fi
+                # A member of the family placed in the payload's own default
+                # libdir is shipped by THIS transaction: a dangling or
+                # unresolved one is this transaction's defect, not a missing
+                # optional provider on the host.
+                if ((own_family == 0)); then
+                    compgen -G "$root/usr/lib/$stem.*" >/dev/null && own_family=1
+                fi
+                # A name whose library family has no installed member is a
+                # missing OPTIONAL runtime dependency, not a soname move: the
+                # package is not broken, it just uses a feature whose provider
+                # was never installed (cairo for hwloc's lstopo, libgd for
+                # glibc's memusagestat). Aborting every transaction on those
+                # made `pacman -S`/`gsa -S` unusable on a fresh host. A
+                # path-style name is still the vanished-provider case, and a
+                # family the transaction itself provides stays fatal.
+                if ((exempt_absent)) && [[ $needed != /* ]] && ((provide_match == 0)) &&
+                    ((own_family == 0)) && ! host_stem_present "$stem"; then
+                    continue
+                fi
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \
                     "$pkg" "${relpath##*/}" "$needed"
                 pkg_findings=$((pkg_findings + 1))
                 # Attribution input for the summary: the family stem, never
                 # the versioned name — and never the directory part of a
                 # path-style name, which no provide entry spells.
-                stem=${needed##*/}
-                while [[ $stem =~ \.[0-9]+$ ]]; do stem=${stem%.*}; done
                 missing_stems[$stem]=1
             fi
         done

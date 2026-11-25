@@ -170,12 +170,12 @@ run out err -- "$tmp/a" || status=$?
 [[ $out == *'pkg-clean: clean'* ]] || fail "missing clean line: $out"
 
 # ── 2. fatal: a needed soname nothing resolves ───────────────────────────
-make_bin "$tmp/b/usr/bin" broken libmissing-fixture.so.42
+make_bin "$tmp/b/usr/bin" broken libz.so.999
 make_pkgroot "$tmp/b" pkg-fatal
 status=0
 run out err -- "$tmp/b" || status=$?
 [[ $status == 1 ]] || fail "fatal case exited $status (want 1): $err"
-expected="abi-need-check: pkg-fatal: 'broken' needs 'libmissing-fixture.so.42' — no file resolves it (fatal)"
+expected="abi-need-check: pkg-fatal: 'broken' needs 'libz.so.999' — no file resolves it (fatal)"
 [[ $out == *"$expected"* ]] || fail "finding message drifted: $out"
 
 # ── 3. dangling symlink is NOT resolution (tk lesson) ───────────────────
@@ -256,7 +256,7 @@ status=0
 out=$(printf 'pkg-fatal\n' |
     GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
 [[ $status == 1 ]] || fail "cached fatal went soft (want 1), got $status: $out"
-[[ $out == *'libmissing-fixture.so.42'* ]] || fail "fatal finding lost: $out"
+[[ $out == *'libz.so.999'* ]] || fail "fatal finding lost: $out"
 
 # explicit mode with nothing scannable is still a caller error
 status=0
@@ -281,7 +281,7 @@ status=0
 out=$(printf 'pkg-clean-headers\n' |
     GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
 [[ $status == 1 ]] || fail "twin name missed its own archive (want 1), got $status: $out"
-[[ $out == *'libmissing-fixture.so.42'* ]] || fail "twin finding lost: $out"
+[[ $out == *'libz.so.999'* ]] || fail "twin finding lost: $out"
 
 # ── 9. kernel-class whitelist: skipped by name, carve-outs scanned ──────
 # The owner's optimisation: kernel/firmware payloads cannot carry userspace
@@ -315,7 +315,7 @@ status=0
 out=$(printf 'linux-tools\n' |
     GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
 [[ $status == 1 ]] || fail "linux-tools-shaped name skipped (want fatal 1), got $status: $out"
-[[ $out == *'libmissing-fixture.so.42'* ]] || fail "linux-tools-shaped payload not scanned: $out"
+[[ $out == *'libz.so.999'* ]] || fail "linux-tools-shaped payload not scanned: $out"
 
 # …but the -headers carve-out is NOT kernel-class (22 runtime links
 # measured in linux-cachyos-headers, 2026-10-22): same fatal payload stays
@@ -343,14 +343,14 @@ sha=${sha%% *}
 {
     printf '# gsa-abi-need-check facts v3 %s\n' "$sha"
     printf 'pkg\x1fpkg-clean\n'
-    printf 'file\x1fusr/bin/consumer\x1fELF64\x1f\x1f\x1flibmissing-fixture.so.42\n'
+    printf 'file\x1fusr/bin/consumer\x1fELF64\x1f\x1f\x1flibz.so.999\n'
 } >"$tmp/factcache/$sha.facts"
 status=0
 out=$(printf 'pkg-clean\n' |
     GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" GSA_ABI_NEED_CHECK_FACTCACHE="$tmp/factcache" \
     "$tool" --from-names 2>/dev/null) || status=$?
 [[ $status == 1 ]] || fail "poisoned fact cache not used (want 1), got $status: $out"
-[[ $out == *'libmissing-fixture.so.42'* ]] || fail "poisoned facts ignored: $out"
+[[ $out == *'libz.so.999'* ]] || fail "poisoned facts ignored: $out"
 rm -f "$tmp/factcache/$sha.facts"
 status=0
 out=$(printf 'pkg-clean\n' |
@@ -365,15 +365,15 @@ out=$(printf 'pkg-clean\n' |
 # misattributes one of them whichever file `find` yields first.
 # (Mutation-probed 2026-10-22: a dead marker regex passed every case above
 # — verdicts survive melding — and passed the first draft of this one.)
-make_bin "$tmp/m/usr/bin" first-broken libmissing-a.so.1
-make_bin "$tmp/m/usr/bin" second-broken libmissing-b.so.2
+make_bin "$tmp/m/usr/bin" first-broken libz.so.999
+make_bin "$tmp/m/usr/bin" second-broken liblzma.so.999
 make_pkgroot "$tmp/m" pkg-multi
 status=0
 run out err -- "$tmp/m" || status=$?
 [[ $status == 1 ]] || fail "multi-file fatal exited $status (want 1): $err"
-[[ $out == *"pkg-multi: 'first-broken' needs 'libmissing-a.so.1'"* ]] ||
+[[ $out == *"pkg-multi: 'first-broken' needs 'libz.so.999'"* ]] ||
     fail "first file's finding lost/misattributed: $out"
-[[ $out == *"pkg-multi: 'second-broken' needs 'libmissing-b.so.2'"* ]] ||
+[[ $out == *"pkg-multi: 'second-broken' needs 'liblzma.so.999'"* ]] ||
     fail "second file's finding lost/misattributed: $out"
 
 # ── 12. S1: a provide covers its stems ONLY with a file behind them ─────
@@ -417,7 +417,7 @@ status=0
 out=$(printf 'pkg-twin\n' |
     GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
 [[ $status == 1 ]] || fail "cached twin not scanned outside -U (want fatal 1), got $status: $out"
-[[ $out == *'libmissing-fixture.so.42'* ]] || fail "cached payload finding lost: $out"
+[[ $out == *'libz.so.999'* ]] || fail "cached payload finding lost: $out"
 
 # …but under `pacman -U <different file>` the hook stands down entirely.
 cc -x c - "-DTOOL_PATH=\"$tool\"" -o "$tmp/pacman" <<'STUB' || fail "cannot build the pacman argv stub"
@@ -478,16 +478,16 @@ PATH="$tmp/stubbin:$PATH" run out err -- --quiet "$tmp/e" || status=$?
 # checker answers it from the side-car binpkg index — one pass over
 # line-delimited JSON, NAMES ONLY (never a version, never a command) — and
 # only on the abort path: a clean run collects no stems and reads no index.
-make_bin "$tmp/i/usr/bin" owned-consumer libmissing-fixture.so.42
+make_bin "$tmp/i/usr/bin" owned-consumer libz.so.999
 make_pkgroot "$tmp/i" pkg-owned
 printf '%s\n' \
-    '{"op":"row","recipe_id":"fixture-lib","pkgbase":"fixture-lib","version":"0:1.0.0-1","provides":["libmissing-fixture.so=1-64"],"instance":1}' \
+    '{"op":"row","recipe_id":"fixture-lib","pkgbase":"fixture-lib","version":"0:1.0.0-1","provides":["libz.so=1-64"],"instance":1}' \
     '{"op":"row","recipe_id":"other-lib","pkgbase":"other-lib","version":"0:2.0.0-1","provides":["libother.so=2-64"],"instance":1}' \
     >"$tmp/index.jsonl"
 status=0
 GSA_ABI_NEED_CHECK_BINPKG="$tmp/index.jsonl" run out err -- "$tmp/i" || status=$?
 [[ $status == 1 ]] || fail "attributed case exited $status (want 1): $err"
-[[ $out == *"'owned-consumer' needs 'libmissing-fixture.so.42'"* ]] ||
+[[ $out == *"'owned-consumer' needs 'libz.so.999'"* ]] ||
     fail "fatal line lost under attribution: $out"
 [[ $out == *'gsa-owned provider behind: fixture-lib'* ]] ||
     fail "attribution missing: $out"

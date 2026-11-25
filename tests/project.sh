@@ -1315,5 +1315,27 @@ EOF
     grep -F 'a later build retries the fetch' <<<"$FIXTURE_OUTPUT" >/dev/null ||
         fail "h: the warning must still say what a later build does: $FIXTURE_OUTPUT"
 
-    printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stays out, --leaf exact, listing and summary agree)\n'
+    # i. the installed boundary STOPS the traversal (§C.3: an installed
+    # prerequisite is never added, and its own prerequisites must not be
+    # installed on the strength of this expansion). app -> mid (INSTALLED)
+    # -> deep (not installed): the plan is exactly [app], not [deep app].
+    add_package "$ws" mid "$gsa_meta_any" git
+    add_package "$ws" deep "$gsa_meta_any" git
+    set_topology_record "$ws" mid git 'deep'
+    set_topology_record "$ws" deep git ''
+    set_topology_record "$ws" app app 'mid'
+    rm -rf "$db"
+    db_install mid
+    run_engine "$ws" -B --dry-run app
+    [ "$FIXTURE_RC" = 0 ] || fail "i: dry run through an installed prerequisite failed: $FIXTURE_OUTPUT"
+    [ "$(rr2_scalar order <<<"$FIXTURE_OUTPUT")" = app ] ||
+        fail "i: dry-run order is [$(rr2_scalar order <<<"$FIXTURE_OUTPUT")], want exactly [app] (an installed prerequisite stops the traversal)"
+    if rr2_plan deep plan <<<"$FIXTURE_OUTPUT" >/dev/null 2>&1; then
+        fail "i: a prerequisite of an INSTALLED prerequisite was added: $(rr2_plan deep <<<"$FIXTURE_OUTPUT")"
+    fi
+    if grep -F 'added build-order prerequisite' <<<"$FIXTURE_OUTPUT" >/dev/null; then
+        fail "i: an installed boundary still produced an addition note: $FIXTURE_OUTPUT"
+    fi
+
+    printf 'missing prerequisite fixture: PASS (missing joins before its consumer, installed stops the traversal, --leaf exact, listing and summary agree)\n'
 )
