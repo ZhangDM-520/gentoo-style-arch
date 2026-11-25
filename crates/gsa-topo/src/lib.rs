@@ -357,7 +357,7 @@ impl Default for BuildDefaults {
         BuildDefaults {
             lanes: "auto".to_string(),
             jobs: "auto".to_string(),
-            intensity: "xhigh".to_string(),
+            intensity: gsa_model::DEFAULT_INTENSITY.to_string(),
             memory_per_job_gib: "3".to_string(),
             core_memory_per_job_gib: "4".to_string(),
             reserved_memory_gib: "2".to_string(),
@@ -367,8 +367,7 @@ impl Default for BuildDefaults {
     }
 }
 
-/// The intensity roster (`docs/portability.md`; `configure_intensity`).
-pub const INTENSITY_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub use gsa_model::INTENSITY_LEVELS;
 
 /// The newest recipe-store format this engine build understands. A store may
 /// declare anything up to this; above it the engine cannot know what the
@@ -455,7 +454,7 @@ pub fn parse_build_defaults(content: &str, file: &str) -> Result<BuildDefaults, 
                         line_no,
                         format!(
                             "invalid value for intensity (expected one of {}): {value}",
-                            INTENSITY_LEVELS.join(",")
+                            INTENSITY_LEVELS.join(", ")
                         ),
                     ));
                 }
@@ -885,6 +884,11 @@ delta|packages/app/delta|app|beta|app-cluster=qt5,version-sync=nvchecker
 
     #[test]
     fn build_defaults_parse_and_validate() {
+        let default = parse_build_defaults("", "config/build-defaults.conf").unwrap();
+        assert_eq!(default.intensity, "medium");
+        let retired =
+            parse_build_defaults("intensity=max", "config/build-defaults.conf").unwrap_err();
+        assert!(retired.to_string().contains("low, medium, high, xhigh"));
         let ok = parse_build_defaults(
             "lanes=auto\njobs=4\nintensity=xhigh\nmemory_per_job_gib=3\n",
             "config/build-defaults.conf",

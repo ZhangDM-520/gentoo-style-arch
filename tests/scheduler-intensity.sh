@@ -82,13 +82,12 @@ declare -A expected
 # lanes / normal-jobs / core-jobs as the run record reports them (the
 # 'parallelism:' sentence is rendering; its wording is pinned once in
 # tests/dashboard.sh's prose section).
-expected[low]='1 3 3'
-expected[medium]='2 3 4'
-expected[high]='3 3 6'
-expected[xhigh]='4 3 7'
-expected[max]='6 3 9'
+expected[low]='1 2 1'
+expected[medium]='3 1 3'
+expected[high]='4 1 4'
+expected[xhigh]='4 1 5'
 
-for level in low medium high xhigh max; do
+for level in low medium high xhigh; do
     # The caller's own job flags are deliberately present: §K.1's rewrite is
     # observable only when there is something to strip and something to keep.
     PATH="$fixture/bin:$PATH" \
@@ -205,33 +204,43 @@ if [[ $FIXTURE_RC -ne 2 ]]; then
     fail "a plan with an unparseable --lanes must be a usage error (rc 2), got rc=$FIXTURE_RC:
 $plan_bad"
 fi
-PATH="$fixture/bin:$PATH" \
-    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
-    run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
-        --intensity turbo "${ids[0]}"
-plan_bad_intensity=$FIXTURE_OUTPUT
-if [[ $FIXTURE_RC -ne 2 ]]; then
-    fail "a plan with an unknown --intensity must be a usage error (rc 2), got rc=$FIXTURE_RC:
-$plan_bad_intensity"
-fi
-# The value names its own source, like the --lanes/--jobs ladder does
-# (blind-review finding, 2026-11-11): GSA_INTENSITY and the config rung
-# already say where the bad value came from; the flag must too.
-if [[ $plan_bad_intensity != *'--intensity:'* ]]; then
-    fail "an unknown --intensity does not name the flag that supplied it:
-$plan_bad_intensity"
-fi
+(
+    empty=$(mktemp -d "${TMPDIR:-/tmp}/gsa-intensity-empty.XXXXXX")
+    trap 'rmdir "$empty"' EXIT
+    GSA_RECIPES_DIR="$empty/absent" run_engine_user "$empty" -B --intensity max p1
+    [[ $FIXTURE_RC == 2 && $FIXTURE_OUTPUT == *"--intensity: intensity must be one of"* ]] ||
+        fail "a retired intensity must fail before workspace discovery:
+$FIXTURE_OUTPUT"
+    GSA_RECIPES_DIR="$empty/absent" GSA_INTENSITY=ex run_engine_user "$empty" -B p1
+    [[ $FIXTURE_RC == 2 && $FIXTURE_OUTPUT == *"GSA_INTENSITY: intensity must be one of"* ]] ||
+        fail "an invalid GSA_INTENSITY must fail before workspace discovery:
+$FIXTURE_OUTPUT"
+)
+
+for invalid in ex max; do
+    PATH="$fixture/bin:$PATH" \
+        GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
+        run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
+            --intensity "$invalid" "${ids[0]}"
+    [[ $FIXTURE_RC == 2 && $FIXTURE_OUTPUT == *"--intensity: intensity must be one of low, medium, high, xhigh (got '$invalid')"* ]] ||
+        fail "the rejected --intensity value '$invalid' must name the flag and the accepted levels:
+$FIXTURE_OUTPUT"
+done
 
 PATH="$fixture/bin:$PATH" \
-    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 \
+    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 GSA_INTENSITY=low \
     run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" \
-        --intensity max "${ids[0]}"
-plan_ok=$FIXTURE_OUTPUT
-[[ $FIXTURE_RC == 0 ]] || fail "a valid --dry-run plan failed rc=$FIXTURE_RC:
-$plan_ok"
-if [[ $(rr2_scalar intensity <<<"$plan_ok") != max ]]; then
-    fail "the plan recorded intensity $(rr2_scalar intensity <<<"$plan_ok") — the run override --intensity max never reached it:
-$plan_ok"
-fi
+        --intensity high "${ids[0]}"
+[[ $FIXTURE_RC == 0 && $(rr2_scalar intensity <<<"$FIXTURE_OUTPUT") == high ]] ||
+    fail "the flag must beat the environment and workspace defaults:
+$FIXTURE_OUTPUT"
+
+sed -i '/^intensity=/d' "$fixture/config/build-defaults.conf"
+PATH="$fixture/bin:$PATH" \
+    GSA_CPU_THREADS=24 GSA_MEMORY_GIB=21 GSA_INTENSITY= \
+    run_engine "$fixture" -S --dry-run --state-dir "$fixture/state-dry" "${ids[@]}"
+[[ $FIXTURE_RC == 0 && $(rr2_scalar intensity <<<"$FIXTURE_OUTPUT") == medium ]] ||
+    fail "the built-in default must be medium:
+$FIXTURE_OUTPUT"
 
 printf 'scheduler intensity fixture: PASS\n'

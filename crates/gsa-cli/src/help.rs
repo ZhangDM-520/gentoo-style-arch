@@ -172,7 +172,7 @@ Long modifiers (contract §B.8). A build run accepts:",
             ("--fail-fast", "stop dispatch on the first failure; cone-stop is the default"),
             ("--lanes N|auto", "concurrent build lanes"),
             ("--jobs N|auto", "makepkg jobs per lane"),
-            ("--intensity LEVEL", "scheduler intensity profile"),
+            ("--intensity LEVEL", "CPU and memory budget: {intensity}"),
             ("--toolchain gcc|clang", "compiler family; overrides the topology tag and PKGBUILD inference"),
             ("--state-dir PATH", "state root; precedence is flag, GSA_STATE_DIR, gsa.conf, /var/lib/gsa"),
             ("--build-dir PATH", "build cache; precedence is flag, GSA_BUILD_DIR, gsa.conf, ~/.cache/gsa (build user)"),
@@ -321,6 +321,21 @@ pub(crate) fn render_at(w: usize) -> String {
             let rendered_right;
             let right: &str = if right.contains("{groups}") {
                 rendered_right = right.replace("{groups}", &group_roster());
+                &rendered_right
+            } else if right.contains("{intensity}") {
+                let roster = gsa_model::INTENSITY_PROFILES
+                    .into_iter()
+                    .map(|(name, percent)| {
+                        let default = if name == gsa_model::DEFAULT_INTENSITY {
+                            " (default)"
+                        } else {
+                            ""
+                        };
+                        format!("{name} {percent}%{default}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                rendered_right = right.replace("{intensity}", &roster);
                 &rendered_right
             } else {
                 right

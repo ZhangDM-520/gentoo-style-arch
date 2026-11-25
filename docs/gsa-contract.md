@@ -2108,6 +2108,15 @@ are host-derived (intensity profiles) and never hand-predicted — the plan line
 the run prints is the truth. A deferral parks one recipe and never stops
 dispatch; a failure parks a cone (§I).
 
+*Amendment (2026-11-25).* Intensity scales detected CPU threads and memory
+after the configured reserve: `low` 35%, `medium` 75% (default), `high` 95%,
+and `xhigh` 110%. All four levels share one automatic lane policy (up to four
+lanes, sized at four scaled threads and four scaled GiB per lane). See
+[portability](portability.md) for rounding, job budgets and overrides. The
+retired `max` value is rejected for new invocations. Historical format-2
+records remain readable. Select a supported level before replaying a saved
+continuation that carries `--intensity max`.
+
 ### K.3 Transactions and signals
 
 - **One `pacman -U` at a time**, serialized by the state-root mutex; makepkg's

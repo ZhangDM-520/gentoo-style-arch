@@ -180,15 +180,10 @@ printf 'zlib-fixture\n' >"$ws/config/sets/deskworld"
     complete_at "$ws" -B --toolchain=gc
     [[ $FIXTURE_OUTPUT == *'--toolchain=gcc'* && $FIXTURE_OUTPUT != *clang* ]] ||
         fail "5b: the inline value form does not complete: $FIXTURE_OUTPUT"
-    # `auto` is a lanes/jobs answer; the budget resolver rejects it for
-    # --intensity, so the roster must not hand it over.
     complete_at "$ws" -B --intensity ""
-    [[ $FIXTURE_OUTPUT != *auto* ]] ||
-        fail "5b: --intensity offers 'auto', which the engine refuses: $FIXTURE_OUTPUT"
-    for level in low medium high xhigh max; do
-        [[ $FIXTURE_OUTPUT == *"$level"* ]] ||
-            fail "5b: --intensity drops '$level': $FIXTURE_OUTPUT"
-    done
+    expected_levels=$'low\nmedium\nhigh\nxhigh'
+    [[ $(cut -f1 <<<"$FIXTURE_OUTPUT") == "$expected_levels" ]] ||
+        fail "5b: unexpected --intensity roster: $FIXTURE_OUTPUT"
     printf '5b: the mask, the inline form and the real vocabularies hold\n'
 )
 

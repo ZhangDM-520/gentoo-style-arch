@@ -790,8 +790,9 @@ the three planning defaults):
   `config/build-defaults.conf` (`auto`).
 - `GSA_JOBS` — default per-lane job count. Default: `jobs` in
   `config/build-defaults.conf` (`auto`).
-- `GSA_INTENSITY` — default intensity level (`low`, `medium`, `high`, `xhigh`,
-  `max`). Default: `intensity` in `config/build-defaults.conf`.
+- `GSA_INTENSITY` — default intensity level (`low` 35%, `medium` 75%,
+  `high` 95%, `xhigh` 110% of CPU and usable memory). Defaults to
+  `intensity` in `config/build-defaults.conf`, or `medium` if unset.
 - `GSA_CPU_THREADS` — overrides the detected CPU thread count the parallelism
   plan is computed from; must be a positive integer (anything else is a usage
   error). Default: CPU detection.

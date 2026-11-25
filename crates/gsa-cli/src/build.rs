@@ -1633,13 +1633,7 @@ fn resolve_budget(
     project: &ProjectConfig,
     package_count: usize,
 ) -> Result<(Budget, Vec<String>), String> {
-    let intensity = match &inv.intensity {
-        // The profile error is `Budget::resolve`'s; a flag-supplied value
-        // names its source the way the `--lanes`/`--jobs` ladder does
-        // (blind-review finding, 2026-11-11).
-        Some(value) => value.clone(),
-        None => crate::resolve_intensity(project)?,
-    };
+    let intensity = argv_or_env_intensity(inv)?.unwrap_or(&project.defaults.intensity);
     let (lanes, lanes_source) =
         override_value(inv.lanes.as_deref(), "GSA_LANES", &project.defaults.lanes)?;
     let (jobs, jobs_source) =
@@ -1661,14 +1655,7 @@ fn resolve_budget(
         )?,
     };
     let facts = budget::host_facts()?;
-    let budget = Budget::resolve(&intensity, lanes, jobs, baselines, facts, package_count)
-        .map_err(|e| {
-            if inv.intensity.is_some() {
-                format!("--intensity: {e}")
-            } else {
-                e
-            }
-        })?;
+    let budget = Budget::resolve(intensity, lanes, jobs, baselines, facts, package_count)?;
     let mut warnings = Vec::new();
     // `--lanes` is bounded by the selection (one lane per package, and the
     // auto budget also bounds it by CPU/memory/profile). An EXPLICIT request
@@ -1716,7 +1703,25 @@ fn preflight_budget_syntax(inv: &Invocation) -> Result<(), Exit> {
     ] {
         argv_or_env_override(flag, raw, env_name).map_err(Exit::Usage)?;
     }
+    argv_or_env_intensity(inv).map_err(Exit::Usage)?;
     Ok(())
+}
+
+/// Validate the workspace-independent rungs before probing project defaults.
+fn argv_or_env_intensity(inv: &Invocation) -> Result<Option<&'static str>, String> {
+    let (raw, source) = if let Some(raw) = &inv.intensity {
+        (raw.clone(), "--intensity")
+    } else if let Ok(raw) = std::env::var("GSA_INTENSITY") {
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        (raw, "GSA_INTENSITY")
+    } else {
+        return Ok(None);
+    };
+    budget::intensity_profile(&raw)
+        .map(|(name, _)| Some(name))
+        .map_err(|error| format!("{source}: {error}"))
 }
 
 /// The two rungs a host can answer with before any configuration is read:

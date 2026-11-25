@@ -11,52 +11,45 @@ in `docs/build-guide.md`.
 `gsa` derives its whole resource plan from the host on every run — CPU
 threads, available memory, the GiB-per-job baselines in
 `config/build-defaults.conf` (`memory_per_job_gib`, `core_memory_per_job_gib`,
-`reserved_memory_gib`), and one intensity profile. `--intensity xhigh` is the
-default automatic profile; `--lanes`/`--jobs` (each `N` or `auto`) override
-its values. This section is the whole parallelism story.
-
-The old automatic output reported `-j` per lane, so `2 lanes × -j6` could
-represent twelve normal job slots while each lane independently received the
-same memory allowance. The profiles therefore budget normal jobs globally,
-and each profile scales lanes, jobs and memory together.
+`reserved_memory_gib`), and one intensity profile. `medium` is the default
+unless a project, environment variable, or flag selects another level.
 
 ### Profiles
 
-| Profile | lane cap | CPU per lane | GiB per lane | normal-memory factor | core-memory factor |
-| --- | --- | --- | --- | --- | --- |
-| `low` | 1 | 16 | 16 | 2.0 | 1.5 |
-| `medium` | 2 | 8 | 8 | 1.0 | 1.0 |
-| `high` | 3 | 6 | 6 | 0.67 | 0.75 |
-| `xhigh` (default) | 4 | 4 | 4 | 0.5 | 0.625 |
-| `max` | 6 | 2 | 2 | 0.34 | 0.5 |
+| Level | Share of CPU threads and usable memory |
+| --- | ---: |
+| `low` | 35% |
+| `medium` (default) | 75% |
+| `high` | 95% |
+| `xhigh` | 110% |
 
-In words: `low` is one conservative lane with maximum headroom; `medium` is
-the balanced baseline (its factors are 1.0, so the raw `build-defaults.conf`
-GiB numbers are the medium-profile per-job cost); `high` adds lanes and lowers
-the per-job memory estimate; `xhigh` is the aggressive default; `max` is the
-highest automatic utilization with the greatest OOM risk.
+`xhigh` can budget more CPU threads and memory than the host reports. The
+configured reserve is subtracted before scaling memory. The configured
+normal and core GiB-per-job values apply at every level.
 
 ### Formulas
 
-`threads` = CPU threads, `memory_gib` = available memory in GiB — detected
-unless overridden; the factors come from the profile table above:
+`share` is the level's percentage divided by 100. CPU threads and available
+memory in GiB come from host detection or the environment overrides below.
 
 ```
-normal_memory         = max(1, memory_gib - reserved_memory_gib)
-normal_memory_per_job = memory_per_job_gib * normal-memory factor
-normal_job_budget     = max(1, floor(normal_memory / normal_memory_per_job))
+cpu_budget        = max(1, floor(threads * share))
+memory_budget     = max(1, memory_gib - reserved_memory_gib) * share
+normal_job_budget = max(1, floor(memory_budget / memory_per_job_gib))
 
-lanes (auto)     = max(1, min(lane cap,
-                              max(1, floor(threads / CPU-per-lane)),
-                              max(1, floor(memory_gib / GiB-per-lane)),
-                              normal_job_budget, package_count))
-lane_jobs (auto) = max(1, min(floor(threads / lanes),
-                              floor(normal_job_budget / lanes)))
+lanes (auto)      = max(1, min(4,
+                               floor(cpu_budget / 4),
+                               floor(memory_budget / 4),
+                               normal_job_budget, package_count))
+lane_jobs (auto)  = max(1, min(floor(cpu_budget / lanes),
+                               floor(normal_job_budget / lanes)))
 
-core_memory_per_job = core_memory_per_job_gib * core-memory factor
-core_jobs           = max(1, min(threads,
-                                 floor(normal_memory / core_memory_per_job)))
+core_jobs         = max(1, min(cpu_budget,
+                               floor(memory_budget / core_memory_per_job_gib)))
 ```
+
+When converting scaled memory to whole lanes or job slots, allow one
+floating-point step at the integer boundary for decimal inputs.
 
 The same profile on a 24-thread workstation and an 8-thread laptop yields
 different lane and job counts by design: the intent is to raise independent
@@ -94,16 +87,16 @@ A flag beats its env twin (`--lanes`/`--jobs`/`--intensity` over
 `auto`, `--intensity` a profile name. An explicit `--jobs` (or `GSA_JOBS`)
 BELOW the automatic per-lane ceiling is honoured; ABOVE it the value is
 clamped to that ceiling and the clamp is announced on stderr with the value
-used — the automatic value is the host's safe ceiling (threads and memory
-shared across the lanes), and an unbounded `--jobs` would reintroduce the
-oversubscription the budget exists to prevent. An explicit `--lanes` (or
+used — the ceiling shares the
+scaled CPU and memory budgets across the resolved lanes. An explicit `--lanes` (or
 `GSA_LANES`) above the selection's package count is clamped to one lane per
 package and announced the same way; the automatic lane count already includes
-that bound. `GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
+that bound. Explicit lane counts can exceed the automatic lane limit.
+`GSA_CPU_THREADS` and `GSA_MEMORY_GIB`
 override resource discovery for a container or a deterministic scheduler
 fixture — leave them unset on a normal host. `GSA_TARGET_CPU` is the
 intentional CPU-tuning override of the next section. The numeric defaults in
-`config/build-defaults.conf` are the medium-profile per-job baseline: change
+`config/build-defaults.conf` are the per-job baselines for all levels: change
 them in a local branch or use an explicit override; never encode one host's
 RAM size in a recipe.
 

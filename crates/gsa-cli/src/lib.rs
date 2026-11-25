@@ -633,22 +633,6 @@ fn bare_root_refusal(err: &mut dyn Write) -> Option<i32> {
     None
 }
 
-pub(crate) fn resolve_intensity(project: &gsa_topo::ProjectConfig) -> Result<String, String> {
-    match std::env::var("GSA_INTENSITY") {
-        Ok(value) if !value.is_empty() => {
-            if gsa_topo::INTENSITY_LEVELS.contains(&value.as_str()) {
-                Ok(value)
-            } else {
-                Err(format!(
-                    "GSA_INTENSITY must be one of {} (got '{value}')",
-                    gsa_topo::INTENSITY_LEVELS.join(",")
-                ))
-            }
-        }
-        _ => Ok(project.defaults.intensity.clone()),
-    }
-}
-
 fn cmd_error(message: impl Into<String>) -> Exit {
     Exit::usage(message)
 }

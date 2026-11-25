@@ -13,6 +13,25 @@
 //! two host-surface modules the engine shares: `privilege` (the W1 drop) and
 //! `config` (the W2 `gsa.conf` layers).
 
+/// Accepted scheduler intensity names and their CPU and memory percentages.
+pub const INTENSITY_PROFILES: [(&str, u32); 4] = [
+    ("low", 35),
+    (DEFAULT_INTENSITY, 75),
+    ("high", 95),
+    ("xhigh", 110),
+];
+pub const DEFAULT_INTENSITY: &str = "medium";
+
+pub const INTENSITY_LEVELS: [&str; INTENSITY_PROFILES.len()] = {
+    let mut names = [""; INTENSITY_PROFILES.len()];
+    let mut index = 0;
+    while index < INTENSITY_PROFILES.len() {
+        names[index] = INTENSITY_PROFILES[index].0;
+        index += 1;
+    }
+    names
+};
+
 pub mod abi;
 pub mod config;
 pub mod guard;

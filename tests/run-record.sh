@@ -177,7 +177,7 @@ remaining_matches() {
     ws="$fixture/success/ws"
     make_case_workspace "$ws"
     export PATH="$ws/bin:$PATH"
-    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=26
 
     run_engine "$ws" -B --leaf --lanes 1 --jobs 2 --intensity low \
         --state-dir "$fixture/success/state" p1 p2 p3
@@ -272,7 +272,7 @@ remaining_matches() {
     ws="$fixture/failfast/ws"
     make_case_workspace "$ws"
     export PATH="$ws/bin:$PATH"
-    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=26
     export GSA_FAKE_FAIL_PACKAGE=p2
 
     run_engine "$ws" -B --leaf --fail-fast --lanes 1 --jobs 2 --intensity low \
@@ -428,7 +428,7 @@ remaining_matches() {
     ws="$fixture/interrupt/ws"
     make_case_workspace "$ws"
     export PATH="$ws/bin:$PATH"
-    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16
+    export GSA_CPU_THREADS=8 GSA_MEMORY_GIB=26
     # Event markers: the fixture waits for p1's start before signalling INT,
     # so the interrupt deterministically lands mid-build instead of racing
     # the pre-dispatch phase on wall-clock time.
@@ -587,8 +587,8 @@ EOF
         fail "the plan's lanes scalar must be 3" "$fixture/s7.out"
     [ "$(rr2_scalar normal-jobs <"$fixture/s7.out")" = 1 ] ||
         fail "the plan's normal-jobs scalar must be the clamped 1: $(rr2_scalar normal-jobs <"$fixture/s7.out")" "$fixture/s7.out"
-    [ "$(rr2_scalar core-jobs <"$fixture/s7.out")" = 2 ] ||
-        fail "the plan's core-jobs scalar must be 2: $(rr2_scalar core-jobs <"$fixture/s7.out")" "$fixture/s7.out"
+    [ "$(rr2_scalar core-jobs <"$fixture/s7.out")" = 1 ] ||
+        fail "the plan's core-jobs scalar must be 1: $(rr2_scalar core-jobs <"$fixture/s7.out")" "$fixture/s7.out"
     grep -qF -- 'gsa: warning: --jobs 5 exceeds the host budget; using 1' "$fixture/s7.out" ||
         fail "an over-budget --jobs must warn with the value used" "$fixture/s7.out"
     # An explicit --lanes above the selection is clamped to one lane per

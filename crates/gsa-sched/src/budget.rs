@@ -1,70 +1,22 @@
 //! Resource budgets: the `docs/portability.md` intensity formulas as data.
 //!
-//! Every term is host-derived (CPU threads, available memory) or stated by
-//! `config/build-defaults.conf` (the GiB-per-job baselines) or by the
-//! intensity profile constants ported verbatim from `configure_intensity`
-//! (`build-all.fish`). The resolved plan is printed once (`parallelism:`) and
-//! is the truth — nothing predicts a plan before it (docs/portability.md:
-//! "do not predict the plan — read the line the builder prints").
+use gsa_model::{INTENSITY_LEVELS, INTENSITY_PROFILES};
 
-/// One intensity profile (`docs/portability.md` "Parallelism"; the fish
-/// `configure_intensity` constants, kept numerically identical).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Profile {
-    pub name: &'static str,
-    pub lane_cap: u32,
-    pub cpu_per_lane: u32,
-    pub memory_per_lane: u32,
-    pub normal_memory_factor: f64,
-    pub core_memory_factor: f64,
-}
+const MAX_AUTO_LANES: u32 = 4;
+const CPU_PER_AUTO_LANE: u32 = 4;
+const GIB_PER_AUTO_LANE: f64 = 4.0;
 
-/// The closed intensity roster, in `gsa-topo::INTENSITY_LEVELS` order.
-pub const PROFILES: [Profile; 5] = [
-    Profile {
-        name: "low",
-        lane_cap: 1,
-        cpu_per_lane: 16,
-        memory_per_lane: 16,
-        normal_memory_factor: 2.0,
-        core_memory_factor: 1.5,
-    },
-    Profile {
-        name: "medium",
-        lane_cap: 2,
-        cpu_per_lane: 8,
-        memory_per_lane: 8,
-        normal_memory_factor: 1.0,
-        core_memory_factor: 1.0,
-    },
-    Profile {
-        name: "high",
-        lane_cap: 3,
-        cpu_per_lane: 6,
-        memory_per_lane: 6,
-        normal_memory_factor: 0.67,
-        core_memory_factor: 0.75,
-    },
-    Profile {
-        name: "xhigh",
-        lane_cap: 4,
-        cpu_per_lane: 4,
-        memory_per_lane: 4,
-        normal_memory_factor: 0.5,
-        core_memory_factor: 0.625,
-    },
-    Profile {
-        name: "max",
-        lane_cap: 6,
-        cpu_per_lane: 2,
-        memory_per_lane: 2,
-        normal_memory_factor: 0.34,
-        core_memory_factor: 0.5,
-    },
-];
-
-pub fn profile(name: &str) -> Option<Profile> {
-    PROFILES.into_iter().find(|p| p.name == name)
+/// Resolve a level and its resource percentage from the shared roster.
+pub fn intensity_profile(intensity: &str) -> Result<(&'static str, u32), String> {
+    INTENSITY_PROFILES
+        .into_iter()
+        .find(|&(name, _)| name == intensity)
+        .ok_or_else(|| {
+            format!(
+                "intensity must be one of {} (got '{intensity}')",
+                INTENSITY_LEVELS.join(", ")
+            )
+        })
 }
 
 /// The GiB-per-job baselines from `config/build-defaults.conf`.
@@ -203,12 +155,7 @@ pub struct Budget {
 }
 
 impl Budget {
-    /// Resolve the plan exactly as `docs/portability.md`'s formulas state
-    /// them (`build-all.fish` `run_lanes`' budget block is the reference
-    /// semantics): normal jobs are budgeted globally, `lanes` is bounded by
-    /// the profile cap, per-lane CPU/memory, the job budget and the package
-    /// count; explicit `--lanes`/`--jobs` values (or their env twins) beat
-    /// the profile.
+    /// Scale CPU and usable memory before sizing lanes and job counts.
     pub fn resolve(
         intensity: &str,
         lanes_override: Override,
@@ -217,27 +164,32 @@ impl Budget {
         facts: HostFacts,
         package_count: usize,
     ) -> Result<Budget, String> {
-        let profile = profile(intensity).ok_or_else(|| {
-            format!("intensity must be one of low, medium, high, xhigh, or max (got '{intensity}')")
-        })?;
+        let (intensity, percent) = intensity_profile(intensity)?;
         let threads = facts.threads.max(1);
         let memory_gib = facts.memory_gib.max(1);
         let package_count = package_count.max(1) as u32;
 
-        let normal_memory = (memory_gib as f64 - baselines.reserved_memory_gib).max(1.0);
-        let normal_memory_per_job =
-            (baselines.memory_per_job_gib * profile.normal_memory_factor).max(f64::MIN_POSITIVE);
-        let normal_job_budget = (normal_memory / normal_memory_per_job).floor().max(1.0) as u32;
+        let cpu_budget =
+            (u64::from(threads) * u64::from(percent) / 100).clamp(1, u64::from(u32::MAX)) as u32;
+        let usable_memory = (f64::from(memory_gib) - baselines.reserved_memory_gib).max(1.0);
+        let scaled_memory = usable_memory * f64::from(percent);
+        let memory_jobs = |per_job: f64| {
+            // Decimal baselines can land one floating-point step below an
+            // exact whole slot. Allow that step before rounding down.
+            (scaled_memory / (100.0 * per_job.max(f64::MIN_POSITIVE)))
+                .next_up()
+                .floor() as u32
+        };
+        let normal_job_budget = memory_jobs(baselines.memory_per_job_gib).max(1);
 
         let lanes = match lanes_override {
             Override::Value(n) => n,
             Override::Auto => {
-                let lane_cap = profile.lane_cap;
-                let cpu_term = threads / profile.cpu_per_lane;
-                let mem_term = memory_gib / profile.memory_per_lane;
-                lane_cap
-                    .min(cpu_term.max(1))
-                    .min(mem_term.max(1))
+                let cpu_lanes = cpu_budget / CPU_PER_AUTO_LANE;
+                let memory_lanes = memory_jobs(GIB_PER_AUTO_LANE);
+                MAX_AUTO_LANES
+                    .min(cpu_lanes)
+                    .min(memory_lanes)
                     .min(normal_job_budget)
                     .min(package_count)
                     .max(1)
@@ -246,14 +198,9 @@ impl Budget {
         .min(package_count)
         .max(1);
 
-        // The automatic per-lane job count is the host's safe ceiling: CPU
-        // threads and memory shared across the lanes. An explicit `--jobs`
-        // below it is honoured (under-subscribing is never unsafe); above it
-        // the request is clamped, because an unbounded value reintroduces the
-        // oversubscription the auto budget exists to prevent — the caller
-        // announces the clamp rather than silently rewriting the request.
+        // Explicit jobs may use up to the scaled per-lane ceiling.
         let auto_jobs = {
-            let cpu_jobs = threads / lanes;
+            let cpu_jobs = cpu_budget / lanes;
             let memory_jobs = normal_job_budget / lanes;
             cpu_jobs.min(memory_jobs).max(1)
         };
@@ -262,16 +209,14 @@ impl Budget {
             Override::Auto => auto_jobs,
         };
 
-        let core_memory_per_job =
-            (baselines.core_memory_per_job_gib * profile.core_memory_factor).max(f64::MIN_POSITIVE);
-        let core_jobs = threads
-            .min((normal_memory / core_memory_per_job).floor().max(1.0) as u32)
+        let core_jobs = cpu_budget
+            .min(memory_jobs(baselines.core_memory_per_job_gib))
             .max(1);
 
         Ok(Budget {
             threads,
             memory_gib,
-            intensity: profile.name,
+            intensity,
             lanes,
             normal_jobs,
             core_jobs,
@@ -300,23 +245,75 @@ mod tests {
     }
 
     #[test]
-    fn profiles_match_the_ported_constants() {
-        let xhigh = profile("xhigh").unwrap();
-        assert_eq!(xhigh.lane_cap, 4);
-        assert_eq!(xhigh.cpu_per_lane, 4);
-        assert_eq!(xhigh.memory_per_lane, 4);
-        assert_eq!(xhigh.normal_memory_factor, 0.5);
-        assert_eq!(xhigh.core_memory_factor, 0.625);
-        assert!(profile("turbo").is_none());
-        assert_eq!(PROFILES.len(), 5);
+    fn retired_or_unknown_intensity_is_rejected() {
+        for level in ["max", "ex"] {
+            let error = Budget::resolve(
+                level,
+                Override::Auto,
+                Override::Auto,
+                Baselines::default(),
+                facts(24, 29),
+                4,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("intensity must be one of low, medium, high, xhigh (got '{level}')")
+            );
+        }
+    }
+
+    #[test]
+    fn xhigh_can_exceed_both_detected_limits() {
+        let budget = Budget::resolve(
+            "xhigh",
+            Override::Value(1),
+            Override::Auto,
+            Baselines {
+                memory_per_job_gib: 1.0,
+                core_memory_per_job_gib: 1.0,
+                reserved_memory_gib: 0.0,
+            },
+            facts(10, 10),
+            1,
+        )
+        .unwrap();
+        assert_eq!((budget.normal_jobs, budget.core_jobs), (11, 11));
+    }
+
+    #[test]
+    fn fractional_memory_baseline_keeps_whole_job_at_boundary() {
+        for (level, per_job, expected) in [
+            ("low", 0.05, 7),
+            ("low", 0.07, 5),
+            ("low", 0.071, 4),
+            ("xhigh", 0.55, 2),
+        ] {
+            let budget = Budget::resolve(
+                level,
+                Override::Value(1),
+                Override::Auto,
+                Baselines {
+                    memory_per_job_gib: per_job,
+                    core_memory_per_job_gib: per_job,
+                    reserved_memory_gib: 0.0,
+                },
+                facts(40, 1),
+                1,
+            )
+            .unwrap();
+            assert_eq!(
+                (budget.normal_jobs, budget.core_jobs),
+                (expected, expected),
+                "{level} with {per_job} GiB per job"
+            );
+        }
     }
 
     #[test]
     fn budget_formulas_follow_portability_doc() {
-        // 24 threads / 29 GiB / xhigh / 3-4-2 baselines, 4 packages:
-        // normal_memory = 27; per-job = 1.5; budget = 18
-        // lanes = min(4, 6, 7, 18, 4) = 4; lane_jobs = min(6, 4) = 4
-        // core: per-job = 2.5; core_jobs = min(24, 10) = 10
+        // 26 scaled threads and 29.7 scaled GiB yield 9 normal slots
+        // across 4 lanes and 7 slots for a solo core package.
         let b = Budget::resolve(
             "xhigh",
             Override::Auto,
@@ -327,8 +324,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.lanes, 4);
-        assert_eq!(b.normal_jobs, 4);
-        assert_eq!(b.core_jobs, 10);
+        assert_eq!(b.normal_jobs, 2);
+        assert_eq!(b.core_jobs, 7);
     }
 
     #[test]
@@ -336,21 +333,18 @@ mod tests {
         let b = Budget::resolve(
             "xhigh",
             Override::Value(2),
-            Override::Value(6),
+            Override::Value(3),
             Baselines::default(),
             facts(24, 29),
             40,
         )
         .unwrap();
         assert_eq!(b.lanes, 2);
-        assert_eq!(b.normal_jobs, 6);
+        assert_eq!(b.normal_jobs, 3);
     }
 
     #[test]
     fn explicit_jobs_above_the_host_budget_is_clamped() {
-        // Same host as the formula test: normal_jobs auto = min(24/4, 18/4)
-        // = 4 with 4 lanes. A larger explicit request is clamped to it; a
-        // smaller one is honoured.
         let clamped = Budget::resolve(
             "xhigh",
             Override::Auto,
@@ -360,23 +354,23 @@ mod tests {
             10,
         )
         .unwrap();
-        assert_eq!(clamped.normal_jobs, 4);
+        assert_eq!(clamped.normal_jobs, 2);
         let under = Budget::resolve(
             "xhigh",
             Override::Auto,
-            Override::Value(2),
+            Override::Value(1),
             Baselines::default(),
             facts(24, 29),
             10,
         )
         .unwrap();
-        assert_eq!(under.normal_jobs, 2);
+        assert_eq!(under.normal_jobs, 1);
     }
 
     #[test]
     fn lanes_never_exceed_the_package_count() {
         let b = Budget::resolve(
-            "max",
+            "low",
             Override::Auto,
             Override::Auto,
             Baselines::default(),
@@ -413,7 +407,7 @@ mod tests {
     #[test]
     fn tiny_host_still_gets_one_lane_and_one_job() {
         let b = Budget::resolve(
-            "max",
+            "low",
             Override::Auto,
             Override::Auto,
             Baselines::default(),
@@ -447,7 +441,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             b.parallelism_line(),
-            "parallelism: 24 CPU threads, 29 GiB available, intensity xhigh, 4 lane(s), normal -j4, core -j10"
+            "parallelism: 24 CPU threads, 29 GiB available, intensity xhigh, 4 lane(s), normal -j2, core -j7"
         );
     }
 }
