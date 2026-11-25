@@ -59,6 +59,31 @@ add_package "$ws" alpha-fixture
 mkdir -p "$ws/config/sets"
 printf 'zlib-fixture\n' >"$ws/config/sets/deskworld"
 
+# ─── 0. the first token grows from family to short cluster ───────────────────
+(
+    complete_at "$ws" -Q
+    ((FIXTURE_RC == 0)) || fail "0: -Q completion exited $FIXTURE_RC"
+    grep -q $'^-Qo\t.' <<<"$FIXTURE_OUTPUT" ||
+        fail "0: -Q must offer -Qo with menu text: $FIXTURE_OUTPUT"
+    for pair in '- -Q' '-S -Sf' '-S -Sc' '-B -Bc' '-U -Ua' '-U -Uf' \
+        '-Sy -Syu' '-Syu -Syuf' '-Sf -Sfc' '-Mc -Mcc' '-Mcc -Mccc'; do
+        read -r prefix candidate <<<"$pair"
+        complete_at "$ws" "$prefix"
+        grep -q "^$candidate"$'\t.' <<<"$FIXTURE_OUTPUT" ||
+            fail "0: $prefix must offer $candidate with menu text: $FIXTURE_OUTPUT"
+    done
+    for prefix in -Qo -Sl -Mccc -Si -Z; do
+        complete_at "$ws" "$prefix"
+        [[ -z $FIXTURE_OUTPUT ]] || fail "0: $prefix offered an invalid extension: $FIXTURE_OUTPUT"
+    done
+    complete_at "$ws" -Q -
+    grep -q '^--machine' <<<"$FIXTURE_OUTPUT" || fail "0: missing long options after a space"
+    if grep -q '^-[^-]' <<<"$FIXTURE_OUTPUT"; then
+        fail "0: short clusters must stay in the first token: $FIXTURE_OUTPUT"
+    fi
+    printf '0: short flags extend the family token\n'
+)
+
 # ─── 1. names come from the workspace ───────────────────────────────────────
 (
     set -euo pipefail

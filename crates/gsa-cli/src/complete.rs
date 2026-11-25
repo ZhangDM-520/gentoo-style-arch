@@ -18,7 +18,7 @@
 
 use std::io::Write;
 
-use crate::args::{flag_spec, Family, ACTIONS, FLAGS};
+use crate::args::{flag_spec, parse, Family, ACTIONS, FLAGS};
 
 /// One completion position's answer.
 #[derive(Debug, PartialEq, Eq)]
@@ -134,27 +134,61 @@ fn value_answer(name: &str, partial: &str) -> Answer {
     }
 }
 
-/// The cluster tokens a family accepts: `-S<letter>` per action, plus the one
-/// two-letter action (`-Syu`).
-fn clusters(family: Family) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = ACTIONS
-        .iter()
-        .filter(|action| {
-            action.family == family
-                && !(action.family == Family::S && matches!(action.letter, 'i' | 's' | 'g'))
-        })
-        .map(|action| {
-            (
-                format!("{}{}", family.as_str(), action.letter),
-                action.description.to_string(),
-            )
-        })
-        .collect();
-    if family == Family::S {
-        out.push((
+/// Extend the first token in place. The parser checks modifier combinations,
+/// while the action roster supplies the descriptions for a bare family.
+fn cluster_extensions(family: Family, partial: &str) -> Vec<(String, String)> {
+    let suffix = &partial[family.as_str().len()..];
+    let mut out = Vec::new();
+
+    if suffix.is_empty() {
+        out.extend(
+            ACTIONS
+                .iter()
+                .filter(|action| {
+                    action.family == family
+                        && !(family == Family::S && matches!(action.letter, 'i' | 's' | 'g'))
+                })
+                .map(|action| {
+                    (
+                        format!("{partial}{}", action.letter),
+                        action.description.to_string(),
+                    )
+                }),
+        );
+    }
+    match (family, suffix) {
+        (Family::S, "" | "y") => out.push((
             "-Syu".to_string(),
-            "sync the store first, then build + install the stale set".to_string(),
-        ));
+            "sync versions, then build and install stale recipes".to_string(),
+        )),
+        (Family::M, "c") => out.push((
+            "-Mcc".to_string(),
+            "prune all workspace archives and their VCS sidecars".to_string(),
+        )),
+        (Family::M, "cc") => out.push((
+            "-Mccc".to_string(),
+            "also prune downloaded sources".to_string(),
+        )),
+        _ => {}
+    }
+    if family
+        .modifiers()
+        .chars()
+        .any(|letter| suffix.matches(letter).count() > 1)
+    {
+        return out;
+    }
+    for letter in family.modifiers().chars().filter(|c| !suffix.contains(*c)) {
+        let candidate = format!("{partial}{letter}");
+        if parse(std::slice::from_ref(&candidate)).is_ok() {
+            let description = match (family, letter) {
+                (Family::U, 'a') => "install all complete indexed archives in one transaction",
+                (_, 'f') => "force install, bypassing the already-current check",
+                (_, 'c') => "prune build trees and archives before building",
+                _ => continue,
+            };
+            out.push((candidate, description.to_string()));
+        }
     }
     out
 }
@@ -189,6 +223,12 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
     }
 
     if preceding.is_empty() {
+        if let Some(family) = Family::ALL
+            .into_iter()
+            .find(|f| partial.starts_with(f.as_str()))
+        {
+            return Answer::Values(cluster_extensions(family, partial));
+        }
         return Answer::Values(
             families()
                 .into_iter()
@@ -233,9 +273,6 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
 
     if partial.starts_with('-') {
         let mut out: Vec<(String, String)> = Vec::new();
-        if let Some(family) = family {
-            out.extend(clusters(family));
-        }
         out.extend(
             FLAGS
                 .iter()
@@ -431,19 +468,30 @@ mod tests {
             vec!["-Q", "-S", "-B", "-U", "-M", "fetch", "--help"]
         );
         // A prefix narrows without a store read.
-        assert_eq!(offered(answer(&words(&["-S"]), no_names)), vec!["-S"]);
+        assert_eq!(
+            offered(answer(&words(&["-"]), no_names)),
+            vec!["-Q", "-S", "-B", "-U", "-M", "--help"]
+        );
     }
 
     #[test]
     fn a_family_offers_its_clusters_and_its_documented_flags() {
+        let clusters = offered(answer(&words(&["-S"]), no_names));
         let list = values(answer(&words(&["-S", "-"]), no_names));
         let spellings: Vec<&str> = list.iter().map(|(value, _)| value.as_str()).collect();
-        assert!(spellings.contains(&"-Sl"), "the selection listing letter");
-        assert!(spellings.contains(&"-Syu"), "the one two-letter action");
+        assert!(
+            clusters.contains(&"-Sl".to_string()),
+            "the selection listing letter"
+        );
+        assert!(
+            clusters.contains(&"-Syu".to_string()),
+            "the one two-letter action"
+        );
         assert!(spellings.contains(&"--dry-run"), "the roster flags");
         assert!(spellings.contains(&"--toolchain"));
         // Clusters are family-scoped: a -Q letter is not offered on -S.
-        assert!(!spellings.contains(&"-Qt"));
+        assert!(!clusters.contains(&"-Qt".to_string()));
+        assert!(spellings.iter().all(|flag| flag.starts_with("--")));
         // So are the flags: a maintainer-only modifier is not suggested on a
         // build run, and a build knob is not suggested on a query.
         assert!(!spellings.contains(&"--tail") && !spellings.contains(&"--keep"));
@@ -588,7 +636,7 @@ mod tests {
 
     #[test]
     fn completion_omits_retired_s_query_clusters() {
-        let spellings = offered(answer(&words(&["-S", "-"]), no_names));
+        let spellings = offered(answer(&words(&["-S"]), no_names));
         for retired in ["-Si", "-Ss", "-Sg"] {
             assert!(
                 !spellings.contains(&retired.to_string()),

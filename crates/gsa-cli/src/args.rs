@@ -55,7 +55,7 @@ impl Family {
     }
 
     /// Modifier letters of the family.
-    fn modifiers(self) -> &'static str {
+    pub(crate) fn modifiers(self) -> &'static str {
         match self {
             Family::Q => "",
             Family::S => "fc",

@@ -1135,6 +1135,12 @@ requires each such file to be byte-identical to the engine's own output.
 | `--print-completion` | `gsa --print-completion <fish\|bash\|zsh>` | prints the completion wrapper for one shell, which `gsa-pm` installs (`fish/vendor_completions.d/gsa.fish`, `bash-completion/completions/gsa`, `zsh/site-functions/_gsa`). The wrapper carries **no grammar** — it forwards the command line to `--complete` — so a shipped completion cannot drift from the binary, for the same reason `--print-conf` exists. rc 0 / 2 missing or unknown shell |
 | `--seam-roster` | `gsa --seam-roster` | prints the text-producing seams (`TEXT_SEAMS`: `--print-conf`, `--print-completion`) one per line, so `gsa-pm`'s packaging battery can diff its roster against the engine's and fail when an engine seam ships unpackaged. Reads nothing, mutates nothing, needs no workspace. Deliberately not named `--print-*`: that name would make this seam owe a shipped file of its own. rc 0 / 2 arguments given |
 
+*Amendment (2026-11-25, short-cluster completion).* A lone `-` in the first
+token offers the action families and `--help`. A family prefix in that same
+token offers its described short-cluster extensions. After whitespace, short
+letters are no longer candidates. Wrappers still forward the partial token
+unchanged, and flag completion reads no workspace data.
+
 *Amendment (2026-10-14, cutover gap G10 — the `--lane-job` flags payload
 grammar).* `<flags…>` is the makepkg argument set the lane forwards verbatim
 (job flags included — `GSA_BUILD_JOBS`/`MAKEFLAGS` shaping happens before).

@@ -692,9 +692,12 @@ forward the command line to the hidden `gsa --complete` seam, so a recipe id
 or a group added in the recipe repository appears on the next TAB with no
 engine change, and a shipped completion can never disagree with the parser.
 
+- `gsa -<TAB>` lists the families. With no space after the family,
+  `gsa -Q<TAB>` offers query actions such as `-Qi` and `-Qo`. You can keep
+  completing a cluster, for example from `-Sy` to `-Syu`.
 - `gsa -S <TAB>` offers the roster's recipe ids; `gsa -S @<TAB>` offers the
-  six groups and the user's `config/sets/` and kv sets; `gsa -S --tool<TAB>`
-  offers `gcc clang`; `gsa -U <TAB>` offers refs and hands a path back to the
+  six groups and the user's `config/sets/` and kv sets; `gsa -S --toolchain <TAB>`
+  offers `gcc` and `clang`; `gsa -U <TAB>` offers refs and hands a path back to the
   shell.
 - Completion runs as the invoking user (a `sudo gsa …` line still completes
   against your own recipe store) and reads only the topology and the sets.
