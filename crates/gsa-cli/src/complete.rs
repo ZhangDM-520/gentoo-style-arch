@@ -219,6 +219,14 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
         &words[..words.len() - 1]
     };
 
+    if preceding.len() == 1 && preceding[0] == "-M" && "--export-build-history".starts_with(partial)
+    {
+        return Answer::Values(vec![(
+            "--export-build-history".into(),
+            "export the build user's resource samples".into(),
+        )]);
+    }
+
     // Everything after `--` belongs to pacman: a path, never a word of ours.
     if preceding.iter().any(|word| word == "--") {
         return Answer::Files;

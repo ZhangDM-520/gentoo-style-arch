@@ -33,9 +33,8 @@ fail() {
 }
 
 ws=$fixture/ws
-# lanes 2 / jobs 1: the low profile's memory formula (8 threads, 16 GiB,
-# memory_per_job_gib=3 × factor 2.0 ⇒ a 2-job budget split across 2 lanes)
-# resolves one job per lane — an explicit 2 would be clamped (§B.8).
+# At low intensity, 8 threads and 22 GiB leave two CPU slots and 7 GiB
+# after the reserve and scaling. Both lanes can reserve one 3-GiB worker.
 make_workspace "$ws" 2 1 low
 add_package "$ws" p1 "$gsa_meta_any" git
 add_package "$ws" p2 "$gsa_meta_any" git
@@ -124,9 +123,9 @@ run_pty() {
     shift 3
     set +e
     timeout 90 script -qec \
-        "/usr/bin/sudo -n env PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
+        "/usr/bin/sudo -n env GSA_BUILD_HISTORY=off PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
             TMPDIR='$fixture/tmp' GSA_STATE_DIR='$state' GSA_BUILD_DIR='$fixture/build' \
-            GSA_RECIPES_DIR='$fixture/recipes' GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 \
+            GSA_RECIPES_DIR='$fixture/recipes' GSA_CPU_THREADS=8 GSA_MEMORY_GIB=22 \
             GSA_FAKE_BUILD_SECONDS='$secs' TERM='$term' \
             bash -c 'cd \"$ws\" && exec $gsa_bin -B --leaf --lanes 2 --intensity low \
                 --state-dir \"$state\" $* p1 p2'" /dev/null >"$out" 2>&1
@@ -141,10 +140,10 @@ run_pipe() {
     local secs=$1 state=$2 out=$3
     shift 3
     set +e
-    (cd "$ws" && timeout 90 /usr/bin/sudo -n env PATH="$ws/bin:/usr/bin:/bin" \
+    (cd "$ws" && timeout 90 /usr/bin/sudo -n env GSA_BUILD_HISTORY=off PATH="$ws/bin:/usr/bin:/bin" \
         HOME="$ws/home" TMPDIR="$fixture/tmp" GSA_STATE_DIR="$state" \
         GSA_BUILD_DIR="$fixture/build" GSA_RECIPES_DIR="$fixture/recipes" \
-        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 GSA_FAKE_BUILD_SECONDS="$secs" \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=22 GSA_FAKE_BUILD_SECONDS="$secs" \
         "$gsa_bin" -B --leaf --lanes 2 --intensity low --state-dir "$state" "$@" p1 p2) \
         >"$out" 2>&1
     RC=$?
@@ -229,10 +228,10 @@ echo "D: a --leaf install run shows its own count, never the latent pool"
 out=$fixture/latent.out
 set +e
 timeout 90 script -qec \
-    "/usr/bin/sudo -n env PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
+    "/usr/bin/sudo -n env GSA_BUILD_HISTORY=off PATH='$ws/bin:/usr/bin:/bin' HOME='$ws/home' \
         TMPDIR='$fixture/tmp' GSA_STATE_DIR='$fixture/state-latent' \
         GSA_BUILD_DIR='$fixture/build' GSA_RECIPES_DIR='$fixture/recipes' \
-        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=16 GSA_FAKE_BUILD_SECONDS=1 \
+        GSA_CPU_THREADS=8 GSA_MEMORY_GIB=22 GSA_FAKE_BUILD_SECONDS=1 \
         GSA_FAKE_REAL_ARCHIVE=1 TERM=xterm \
         bash -c 'cd \"$ws\" && exec $gsa_bin -S --leaf --lanes 2 --intensity low \
             --config \"$ws/pacman.conf\" --no-prefetch \

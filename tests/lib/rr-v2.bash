@@ -543,8 +543,11 @@ rr2_engine_argv() {
     shift 3
     local -n _rr2_argv_out=$out
     local -a guard=()
+    if [[ -z ${GSA_BUILD_HISTORY:-} ]]; then
+        guard+=(GSA_BUILD_HISTORY=off)
+    fi
     if [[ -z ${GSA_STATE_DIR:-} ]] && ! rr2_has_state_root "$@"; then
-        guard=(GSA_STATE_DIR="$ws/../.rr2-state")
+        guard+=(GSA_STATE_DIR="$ws/../.rr2-state")
     fi
     if [[ -z ${GSA_BUILD_DIR:-} ]]; then
         guard+=(GSA_BUILD_DIR="$ws/../.rr2-build")
@@ -621,7 +624,7 @@ rr2_env_forward() {
 # script reads is declared HERE and added here in the same change that
 # introduces it. The engine's own inputs are exactly the §B.8 roster
 # (GSA_STATE_DIR, GSA_LANES, GSA_JOBS, GSA_INTENSITY, GSA_CPU_THREADS,
-# GSA_MEMORY_GIB, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE); GSA_BUILD_JOBS is
+# GSA_MEMORY_GIB, GSA_BUILD_HISTORY, GSA_TARGET_CPU, GSA_VCS_SKIP_TOLERANCE); GSA_BUILD_JOBS is
 # engine OUTPUT exported per lane. None of those is a stub knob and
 # rr2_stub_knob rejects them by name.
 #

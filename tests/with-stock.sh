@@ -212,7 +212,7 @@ mkdir -p "$GSA_CONF_DIR"
 
 run() {
     local status=0
-    FIXTURE_OUTPUT=$(cd "$ws" && /usr/bin/sudo -n env \
+    FIXTURE_OUTPUT=$(cd "$ws" && /usr/bin/sudo -n env GSA_BUILD_HISTORY=off \
         "PATH=$ws/bin:$PATH" \
         "GSA_STATE_DIR=$GSA_STATE_DIR" "GSA_CONF_DIR=$GSA_CONF_DIR" \
         "GSA_FAKE_MAKEPKG_LOG=$GSA_FAKE_MAKEPKG_LOG" \

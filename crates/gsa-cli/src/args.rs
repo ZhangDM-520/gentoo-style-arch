@@ -523,6 +523,7 @@ pub const ACTIONS: &[ActionSpec] = &[
 pub enum Hidden {
     InstallDecide(Vec<String>),
     LaneJob(Vec<String>),
+    BuildHistoryUser(bool),
     FetchJob(Vec<String>),
     StaleLockCheck,
     LocalDbCheck(Vec<String>),
@@ -679,13 +680,15 @@ impl Invocation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Parsed {
     Help,
+    ExportBuildHistory,
     Invoke(Invocation),
     Hidden(Hidden),
 }
 
-const HIDDEN_SEAMS: [&str; 13] = [
+const HIDDEN_SEAMS: [&str; 14] = [
     "--install-decide",
     "--lane-job",
+    "--build-history-user",
     "--fetch-job",
     "--stale-lock-check",
     "--local-db-check",
@@ -739,6 +742,16 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     }
 
     let first = args[0].as_str();
+    if first == "-M"
+        && args
+            .get(1)
+            .is_some_and(|arg| arg == "--export-build-history")
+    {
+        if args.len() != 2 {
+            return Err("-M --export-build-history takes no arguments".into());
+        }
+        return Ok(Parsed::ExportBuildHistory);
+    }
     if first == "--help" || first == "-h" {
         return Ok(Parsed::Help);
     }
@@ -746,6 +759,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         if HIDDEN_SEAMS.contains(&first) {
             let rest: Vec<String> = args[1..].to_vec();
             let hidden = match first {
+                "--build-history-user" => match rest.as_slice() {
+                    [] => Hidden::BuildHistoryUser(false),
+                    [mode] if mode == "merge" => Hidden::BuildHistoryUser(true),
+                    _ => return Err("invalid build-history helper arguments".into()),
+                },
                 "--install-decide" => Hidden::InstallDecide(rest),
                 "--build-identity" => match rest.as_slice() {
                     [family] => Hidden::BuildIdentity(family.clone()),

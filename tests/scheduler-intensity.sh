@@ -110,13 +110,16 @@ $output"
         fail "the $level run recorded intensity $(rr2_scalar intensity <<<"$output"):
 $output"
     fi
-    plan_jobs=$(rr2_scalar normal-jobs <<<"$output")
     for id in "${ids[@]}"; do
+        assigned_jobs=$(awk -v pkg="$id" '$1=="INFO" && $2=="lane-start" && $3=="pkg=" pkg {
+            for (i=4; i<=NF; i++) if ($i ~ /^jobs=/) { sub(/^jobs=/,"",$i); print $i }
+        }' <<<"$output")
+        [[ $assigned_jobs =~ ^[1-9][0-9]*$ ]] || fail "missing lane-start assignment for $id"
         log="$fixture/state-$level/logs/$id.log"
         grep -F "fake makepkg $fixture/packages/$id" "$log" >/dev/null \
             || fail "$id did not build under $level:" "$log"
-        grep -F "GSA_BUILD_JOBS=$plan_jobs" "$log" >/dev/null \
-            || fail "lane $id did not export its GSA_BUILD_JOBS=$plan_jobs budget under $level:" "$log"
+        grep -F "GSA_BUILD_JOBS=$assigned_jobs" "$log" >/dev/null \
+            || fail "lane $id did not export its GSA_BUILD_JOBS=$assigned_jobs budget under $level:" "$log"
         grep -F "MAKEFLAGS=-s" "$log" >/dev/null \
             || fail "lane $id did not rewrite MAKEFLAGS (strip -jN, keep -s) under $level:" "$log"
         grep -F "NINJAFLAGS=unset" "$log" >/dev/null \
@@ -179,7 +182,7 @@ fi
 # The continuation must preserve the plan flavour (continuation rule: the
 # resolved --intensity value is mirrored; §H.2).
 suggest=$(rr2_continuation command <<<"$failing_output")
-if [[ $suggest != *'--intensity xhigh'* ]]; then
+if [[ $suggest != *'--intensity xhigh'* || $suggest != *'--jobs auto'* ]]; then
     fail "resume command did not preserve intensity:
 $suggest" "$fixture/state-failure/output.txt"
 fi

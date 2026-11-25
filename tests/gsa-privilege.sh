@@ -66,7 +66,7 @@ run_engine_root() {
     local had_errexit=0
     [[ $- == *e* ]] && had_errexit=1
     set +e
-    FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env \
+    FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env GSA_BUILD_HISTORY=off \
         PATH="$PATH" \
         GSA_STATE_DIR="$state" \
         GSA_BUILD_DIR="${GSA_BUILD_DIR:-$state/../build-cache}" \
@@ -85,7 +85,7 @@ run_engine_root_stripped() {
     local had_errexit=0
     [[ $- == *e* ]] && had_errexit=1
     set +e
-    FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER \
+    FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER GSA_BUILD_HISTORY=off \
         PATH="$PATH" \
         GSA_STATE_DIR="$state" \
         GSA_BUILD_DIR="${GSA_BUILD_DIR:-$state/../build-cache}" \
@@ -299,7 +299,7 @@ if [ -z "$only" ] || [ "$only" = h ]; then
         make_ws "$ws"
         make_stubs "$fixture/h/bin"
         set +e
-        FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env \
+        FIXTURE_OUTPUT=$(cd "$ws" && sudo -n env GSA_BUILD_HISTORY=off \
             SUDO_UID=0 SUDO_GID=0 SUDO_USER=root \
             PATH="$fixture/h/bin:$PATH" \
             GSA_STATE_DIR="$state" \
@@ -358,7 +358,7 @@ PKGB
 
         # (1) with the sudo identity — the case that always worked
         set +e
-        out=$(cd "$ws" && sudo -n env \
+        out=$(cd "$ws" && sudo -n env GSA_BUILD_HISTORY=off \
             PATH="$PATH" GSA_CONF_DIR="$conf" GSA_STATE_DIR="$state" \
             "$engine" -Md --state-dir "$state" 2>&1)
         rc=$?
@@ -373,7 +373,7 @@ PKGB
         # (2) stripped of the sudo identity — a bare root shell. Without an
         # owner-agnostic probe every mirror reads as `dubious ownership`.
         set +e
-        out=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER \
+        out=$(cd "$ws" && sudo -n env -u SUDO_UID -u SUDO_GID -u SUDO_USER GSA_BUILD_HISTORY=off \
             PATH="$PATH" GSA_CONF_DIR="$conf" GSA_STATE_DIR="$state" \
             "$engine" -Md --state-dir "$state" 2>&1)
         rc=$?

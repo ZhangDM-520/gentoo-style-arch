@@ -382,6 +382,7 @@ in its true form only (§H.2).
 | `gsa -Ms [name…] [--add\|--remove <ref…>]` | named sets: list sets and members; user sets are the kv-store/`config/sets` union (§C.2) — `--add`/`--remove` edit the kv side. Computed sets (`@preserved-rebuild`, `@stale`, `@live-rebuild`) are listed but not editable — **`@preserved-rebuild` is Phase 4** |
 | `gsa -Mw [--add\|--remove <ref…>]` | world: the explicitly wanted set. Default lists it; `--add`/`--remove` edit it (remove = deselect) |
 | `gsa -Mh [--prune] [--show <run-id>]` | run history: list recorded run records and their continuations; `--show` renders one; `--prune` enforces the bounded retention. Every stored row names the record format it was written in (§H.1) |
+| `gsa -M --export-build-history` | export the build user's versioned resource history to stdout, without a workspace or sudo. Takes no operands, never creates a file, and is never mirrored |
 
 The strength idiom `-Mc`/`-Mcc`/`-Mccc` is deliberately pacman's `-Sc`/`-Scc`
 cache-prune shape. `-Mcc`, `-Mccc` and `-Mm` are confirmation-gated on their
@@ -509,7 +510,7 @@ Engine environment inputs (the roster `gsa --help` must print; rendered from
 `crates/gsa-cli/src/help.rs`, the single layout source): `GSA_CONF`,
 `GSA_CONF_DIR`, `GSA_STATE_DIR`, `GSA_BUILD_DIR`, `GSA_RECIPES_DIR`,
 `GSA_RECIPE_CHECKOUT`, `GSA_LANES`, `GSA_JOBS`, `GSA_INTENSITY`,
-`GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_TARGET_CPU`,
+`GSA_CPU_THREADS`, `GSA_MEMORY_GIB`, `GSA_BUILD_HISTORY`, `GSA_TARGET_CPU`,
 `GSA_VCS_SKIP_TOLERANCE`, and `NO_COLOR` (the standard colour opt-out; the
 `--color` flag beats it, and the machine channel is never coloured, §L.9).
 `TERM` is read the way every terminal program reads it (colour only when it
@@ -1130,6 +1131,7 @@ requires each such file to be byte-identical to the engine's own output.
 | --- | --- | --- |
 | `--install-decide` | `gsa --install-decide <checked\|force> <archive…>` | prints decision rows (§E) on stdout and touches nothing else: no pacman, sudo, flock, or makepkg. rc 0 plan / 1 refusal / 2 bad usage |
 | `--lane-job` | `gsa --lane-job <pkg> <result-path> <jobs> <flags…>` | the lane child entry: one package, one result file. Positional payload, control characters rejected, invalid flag/job rejected with rc 2 and a message naming the argument. Writes exactly one result row through the typed codec (§F.2) |
+| `--build-history-user` | `gsa --build-history-user [merge]` | build-user-only helper for the supervisor. Reads the user's history to stdout or merges versioned samples from stdin under a file lock |
 | `--fetch-job` | `gsa --fetch-job <pkg> <result-path> …` | live (`docs/plans/plan.md` §2.1): one-shot fetch child, `makepkg --verifysource` as the only fetch/verify engine. Publishes `ok\|failed\|skipped` + kebab reason (`not-a-candidate`, `vcs-only`, `verify-failed`, `sig-key-unknown`, …) — the vocabulary and the stage-aware classification rule are `docs/adr/0004-prefetch-advisory.md`. Advisory: it never writes a run-record row and never changes the run rc (`docs/plans/plan.md` §3.3) |
 | `--stale-lock-check` | `gsa --stale-lock-check` | the production lock probe without a run, for BOTH locks a run must take: `db.lck` (`db-path:`/`lock:`/`status:`/`holder:`, holder identification via `/proc/*/fd`, never `db.lck` deletion) and the §K.3 run lock (`run-lock:`/`run-status:`/`run-holder:` — absent/free/held, the holder's pid and whether it is a live gsa run, and the exact `rm` for a genuinely stale lock; the state root resolves through §J.3's ladder, no flag). The `db.lck` rows are byte-identical to the pre-2026-11-15 probe; the run-lock rows follow them and never change the `db.lck` verdict |
 | `--local-db-check` | `gsa --local-db-check [health\|runs]` | the production pacman local-DB health probe without a run (`health`, the default) or a run-history dump (`runs`); `--state-dir` applies |
@@ -1593,7 +1595,8 @@ renders `-`), `env-required:` (ambient variables the resume must set). Continuat
 arguments come from ONE flag-rule table with an explicit not-mirrored list;
 `--dry-run`, `--leaf`, `--skip`, `--skip-built`, `--vcs-skip-tolerance`,
 `--no-sync`, `--allow-broken-rustc`, `--fail-fast`, and the resolved
-`--lanes`/`--jobs`/`--intensity` values are mirrored as explicit flags;
+`--lanes`/`--jobs`/`--intensity` values are mirrored as explicit flags.
+Automatic worker sizing mirrors `--jobs auto` so a resumed build can adapt;
 prune strengths, one-shot actions (`-Q*`, `-Sy`, `-Ua`, `-M*`), and hidden
 seams are never mirrored. **The update spellings are the exception:** `-Su`
 and `-Syu` mirror as themselves (H9 — a `-Syu` continuation that downgraded
@@ -1621,9 +1624,10 @@ nothing. A `GSA_BUILD_DIR` that answered the question stays an
 root is excluded from that list.) Never
 mirrored: the prune-strength `c` and `-Mc`/`-Mcc`/`-Mccc`; one-shot actions
 (`-Q*`, `-Sy`, `-Su`, `-Syu`, `-Ua`, `-M*`) and their sub-flags (`--fix`,
-`--prune`, `--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`);
+`--prune`, `--backfill`, `--tail`, `--keep`, `--show`, `--add`, `--remove`,
+`--export-build-history`);
 `--noconfirm`, `--quiet`, `--verbose`, `--machine`, `--color`; and every hidden seam (`--install-decide`,
-`--lane-job`, `--fetch-job`, `--stale-lock-check`, `--local-db-check`,
+`--lane-job`, `--build-history-user`, `--fetch-job`, `--stale-lock-check`, `--local-db-check`,
 `--install-register`, `--register-ignorepkg`, `--qa-check`). **`--leaf` is
 mirrored only as the bare flag when true (gap G4): `--leaf=no`/`--leaf=yes`
 are not spellings §B.8 defines and must never appear in `command:` — a
@@ -2104,9 +2108,8 @@ Selection is mandatory; build order is meaningful; under `-S` each package is
 installed before its consumers compile; `core` members run alone with a
 separate memory-aware job budget; the `build-tools` band dispatches its members
 before other ready packages but never over build-order edges; resource budgets
-are host-derived (intensity profiles) and never hand-predicted — the plan line
-the run prints is the truth. A deferral parks one recipe and never stops
-dispatch; a failure parks a cone (§I).
+are host-derived. The run prints its baseline and each lane’s worker count.
+A deferral parks one recipe and never stops dispatch; a failure parks a cone (§I).
 
 *Amendment (2026-11-25).* Intensity scales detected CPU threads and memory
 after the configured reserve: `low` 35%, `medium` 75% (default), `high` 95%,
@@ -2116,6 +2119,17 @@ lanes, sized at four scaled threads and four scaled GiB per lane). See
 retired `max` value is rejected for new invocations. Historical format-2
 records remain readable. Select a supported level before replaying a saved
 continuation that carries `--intensity max`.
+
+*Amendment (2026-11-25, adaptive workers).* Dispatch reserves one CPU slot
+and estimated memory per worker across active lanes. It admits ready lanes
+in existing dispatch order and reserves one worker per admitted lane before
+sharing extra workers. Core still runs alone. An idle scheduler may start
+its first ready lane with one worker when the estimate exceeds the budget.
+Explicit normal-job limits still apply. Format-2 job scalars describe the
+baseline; lane-start reports the assigned count. History is advisory,
+snapshotted at run start, and separate from run records and privileged
+state. Successful measured lanes merge their usage into build-user history.
+See [portability](portability.md) for measurement, precedence and fallback.
 
 ### K.3 Transactions and signals
 

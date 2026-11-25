@@ -113,7 +113,7 @@ pacman -Qo "$GSA_TEST_GSA_BIN" 2>/dev/null | sed 's/^/  owned by: /' || true
 # file, so the parent can report everything alphabetically at the end.
 run_one() {
     local fixture=$1
-    if GSA_BUILD_DIR="$work/build-cache/$fixture" \
+    if GSA_BUILD_HISTORY=off GSA_BUILD_DIR="$work/build-cache/$fixture" \
         bash "$root/tests/$fixture" >"$work/$fixture.out" 2>&1; then
         printf '0\n' >"$work/$fixture.rc"
     else

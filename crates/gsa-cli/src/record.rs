@@ -91,6 +91,7 @@ pub const NOT_MIRRORED: &[&str] = &[
     "--add",
     "--remove",
     "--noconfirm",
+    "--export-build-history",
     // Parse-deferred globals (§B.8) — absent from any live spelling, so a
     // continuation must never carry them either.
     "--quiet",
@@ -101,6 +102,7 @@ pub const NOT_MIRRORED: &[&str] = &[
     "--color",
     "--install-decide",
     "--lane-job",
+    "--build-history-user",
     "--fetch-job",
     "--stale-lock-check",
     "--local-db-check",
@@ -379,7 +381,14 @@ fn mirror_flags(inv: &Invocation, budget: Option<&gsa_sched::budget::Budget>) ->
     }
     if let Some(budget) = budget {
         out.push_str(&format!(" --lanes {}", budget.lanes));
-        out.push_str(&format!(" --jobs {}", budget.normal_jobs));
+        if budget
+            .resources
+            .is_some_and(|resources| resources.explicit_jobs.is_none())
+        {
+            out.push_str(" --jobs auto");
+        } else {
+            out.push_str(&format!(" --jobs {}", budget.normal_jobs));
+        }
         out.push_str(&format!(" --intensity {}", budget.intensity));
     }
     out
@@ -1037,6 +1046,7 @@ mod tests {
     /// profile name from this one value (there is no second derivation).
     fn test_budget(intensity: &'static str) -> gsa_sched::budget::Budget {
         gsa_sched::budget::Budget {
+            resources: None,
             threads: 8,
             memory_gib: 16,
             intensity,
@@ -1964,6 +1974,8 @@ mod tests {
             "--add",
             "--remove",
             "--noconfirm",
+            "--export-build-history",
+            "--build-history-user",
         ] {
             assert!(
                 NOT_MIRRORED.contains(&spelling),

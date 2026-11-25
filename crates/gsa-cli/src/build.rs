@@ -628,7 +628,7 @@ fn run_build_with(
     }
 
     // ── dispatch nodes: the selection in canonical build order ────────────
-    let nodes = build_nodes(&root, &graph, &selection, &pre, &latents);
+    let nodes = build_nodes(&root, &graph, &selection, &pre, &latents, err);
     let batches = build_batches(&graph, &selection);
 
     let _ = writeln!(out, "{}", render::parallelism_line(&budget));
@@ -1762,6 +1762,35 @@ fn override_value(
     Ok((value, format!("config {name}")))
 }
 
+fn history_key(
+    id: &str,
+    record: &gsa_model::TopologyRecord,
+    root: &std::path::Path,
+    err: &mut dyn Write,
+) -> Option<gsa_sched::resources::Key> {
+    if !gsa_sched::resources::History::enabled() {
+        return None;
+    }
+    let recipe = match gsa_model::read::required(&root.join(&record.path).join("PKGBUILD")) {
+        Ok(recipe) => recipe,
+        Err(error) => {
+            let _ = writeln!(err, "gsa: build history: {error}");
+            return None;
+        }
+    };
+    let selected = gsa_recipe::toolchain::select(
+        id,
+        gsa_model::toolchain::override_value(),
+        record.toolchain(),
+        &recipe,
+    )
+    .ok()?;
+    Some(gsa_sched::resources::Key::new(
+        id,
+        selected.toolchain.as_str(),
+    ))
+}
+
 /// The scheduling nodes: the selection in canonical build order, with
 /// build-order edges resolved to selection-local indices (prerequisites
 /// outside the selection are assumed installed — §C.3), `core` /
@@ -1777,6 +1806,7 @@ fn build_nodes(
     selection: &Selection,
     pre: &std::collections::BTreeMap<String, crate::prepare::NodePlan>,
     latents: &[String],
+    err: &mut dyn Write,
 ) -> Vec<SupNode> {
     let mut node_of: HashMap<usize, usize> = HashMap::new();
     for (node_idx, (_, id)) in selection.listed.iter().enumerate() {
@@ -1803,6 +1833,7 @@ fn build_nodes(
         nodes.push(SupNode {
             id: id.clone(),
             recipe_dir: root.join(&record.path),
+            history_key: history_key(id.as_str(), record, root, err),
             core: record.groups.contains(&Group::Core),
             build_tools: record.groups.contains(&Group::BuildTools),
             prereqs,
@@ -1825,6 +1856,7 @@ fn build_nodes(
         nodes.push(SupNode {
             id: RecipeId::new(id).expect("latents come from the topology"),
             recipe_dir: root.join(&record.path),
+            history_key: history_key(id.as_str(), record, root, err),
             core: record.groups.contains(&Group::Core),
             build_tools: record.groups.contains(&Group::BuildTools),
             prereqs,
@@ -2468,6 +2500,7 @@ mod tests {
 
     fn budget() -> Budget {
         Budget {
+            resources: None,
             threads: 12,
             memory_gib: 30,
             intensity: "xhigh",

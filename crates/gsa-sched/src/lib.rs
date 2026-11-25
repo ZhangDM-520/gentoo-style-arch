@@ -20,5 +20,6 @@ pub mod codec;
 pub mod lock;
 pub mod machine;
 pub mod progress;
+pub mod resources;
 pub mod signals;
 pub mod supervisor;

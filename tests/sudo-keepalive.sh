@@ -335,7 +335,7 @@ if command -v script >/dev/null 2>&1; then
     make_install_conf "$fixture/state-tty-cold/pacman.conf" # this case's IgnorePkg registration target (never the host's)
     pty_rc=0
     pty_output=$(
-        script -qec "cd '$fixture' && /usr/bin/sudo -n env \
+        script -qec "cd '$fixture' && /usr/bin/sudo -n env GSA_BUILD_HISTORY=off \
 PATH='$fixture/bin:$PATH' \
 GSA_STATE_DIR='$fixture/state-tty-cold' \
 GSA_FAKE_SUDO_MODE=cold GSA_FAKE_SUDO_LOG='$fixture/state-tty-cold/sudo.log' \

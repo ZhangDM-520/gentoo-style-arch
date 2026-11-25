@@ -990,13 +990,41 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             let _ = write!(out, "{}", help_text());
             RC_OK
         }
+        Ok(Parsed::ExportBuildHistory | Parsed::Hidden(Hidden::BuildHistoryUser(false))) => {
+            match gsa_sched::resources::export(out) {
+                Ok(()) => RC_OK,
+                Err(error) => {
+                    let _ = writeln!(err, "gsa: build history: {error}");
+                    RC_REFUSED
+                }
+            }
+        }
+        Ok(Parsed::Hidden(Hidden::BuildHistoryUser(true))) => {
+            match gsa_sched::resources::merge(&mut std::io::stdin().lock()) {
+                Ok(()) => RC_OK,
+                Err(error) => {
+                    let _ = writeln!(err, "gsa: build history: {error}");
+                    RC_REFUSED
+                }
+            }
+        }
         Ok(Parsed::Hidden(Hidden::LaneJob(args))) => {
             // The lane child entry (contract §D.1): one package, one result
             // file; its exit code IS its lane outcome code (§G.2).
             if let Some(rc) = bare_root_refusal(err) {
                 return rc;
             }
-            gsa_build::lane::run_lane_job(&args, err)
+            use std::io::Read as _;
+            let mut protocol = [0];
+            let connected = std::env::var_os(gsa_sched::resources::ACCOUNT_ENV).is_some();
+            if connected && std::io::stdin().read_exact(&mut protocol).is_err() {
+                return RC_REFUSED;
+            }
+            let rc = gsa_build::lane::run_lane_job(&args, err);
+            if protocol == [1] && out.write_all(&[1]).and_then(|()| out.flush()).is_ok() {
+                let _ = std::io::stdin().read_exact(&mut protocol);
+            }
+            rc
         }
         Ok(Parsed::Hidden(Hidden::FetchJob(args))) => {
             // The fetch child entry (contract §D.1): one recipe, one typed

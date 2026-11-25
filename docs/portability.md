@@ -51,27 +51,42 @@ core_jobs         = max(1, min(cpu_budget,
 When converting scaled memory to whole lanes or job slots, allow one
 floating-point step at the integer boundary for decimal inputs.
 
-The same profile on a 24-thread workstation and an 8-thread laptop yields
-different lane and job counts by design: the intent is to raise independent
-package throughput without multiplying the memory allowance by the lane
-count. Because every term is host-derived, **never predict a plan — read the
-`parallelism:` line the run prints**:
+The `parallelism:` line and format-2 `normal-jobs:` and `core-jobs:`
+scalars show these baseline estimates. The lane-start event shows the
+actual worker count assigned at dispatch. Dry runs show the baseline and
+leave build history untouched.
 
-```
-parallelism: N CPU threads, M GiB available, intensity <profile>, K lane(s), normal -j…, core -j…
-```
+### Adaptive worker assignment
 
-That line is the only truth; the run record's `lanes:`/`normal-jobs:`/
-`core-jobs:` scalars carry the same resolved numbers.
+The scheduler reserves one worker per ready lane in dispatch order, then
+distributes the remaining workers in rounds. Each worker reserves one CPU
+slot and its package's estimated memory per worker. Active lanes keep their
+reservations until they finish. When the machine is idle, the first ready
+package can always start with one worker. Core packages still run alone,
+and the `build-tools` priority band still observes dependency order. Adaptive reservations use whole bytes, rounding
+capacity down and estimates up, so a decimal baseline can yield one fewer
+worker at an exact boundary.
 
-### Scheduling rules the plan does not express
+On hosts with delegated cgroup v2 memory accounting, a successful build can record peak memory,
+CPU time, elapsed time,
+and assigned workers. The estimate is the highest peak bytes per assigned
+worker among the five latest samples for the same recipe ID, architecture,
+and toolchain family. The worker count can grow to twice the largest
+recorded count. Each run uses the history it read at startup. If accounting
+is unavailable, builds continue using available history and baselines. Accounting
+uses a child of the caller’s cgroup when memory accounting is available there.
+A systemd unit can also use `Delegate=memory` and
+`DelegateSubgroup=gsa-supervisor` with the memory controller enabled for the
+unit’s children. Apply resource controls to the delegated unit so they cover
+both the supervisor and the build lanes. The scheduler skips sibling
+accounting when it detects a narrower limit on the supervisor subgroup.
 
-- **Core runs alone.** A `core` package gets the separate `core_jobs` budget
-  above and runs in its own lane, never sharing dispatch with normal packages
-  (contract §K.2).
-- **The `build-tools` band.** Members of the `build-tools` group dispatch
-  before other ready packages — a priority band only, never over a
-  build-order edge (contract §K.2).
+The build user's `~/.local/state/gsa/build-history.tsv` wins per recipe key
+over `/usr/share/gsa/build-history.tsv`. When neither has a sample, the
+scheduler uses the configured core or normal memory baseline. Set
+`GSA_BUILD_HISTORY` to an absolute file path for a separate history or to
+`off` to use baselines without reading or recording samples. The suffix
+`.gsa-lock` is reserved for history locks.
 
 ### Overrides
 
@@ -85,10 +100,10 @@ GSA_INTENSITY=low gsa -S @git
 A flag beats its env twin (`--lanes`/`--jobs`/`--intensity` over
 `GSA_LANES`/`GSA_JOBS`/`GSA_INTENSITY`); `--lanes`/`--jobs` accept `N` or
 `auto`, `--intensity` a profile name. An explicit `--jobs` (or `GSA_JOBS`)
-BELOW the automatic per-lane ceiling is honoured; ABOVE it the value is
-clamped to that ceiling and the clamp is announced on stderr with the value
-used — the ceiling shares the
-scaled CPU and memory budgets across the resolved lanes. An explicit `--lanes` (or
+sets a maximum for normal lanes. Requests above the baseline per-lane
+ceiling are clamped and announced on stderr. Actual assignments can be
+lower when active reservations or package history call for it. Core packages
+retain their separate budget. An explicit `--lanes` (or
 `GSA_LANES`) above the selection's package count is clamped to one lane per
 package and announced the same way; the automatic lane count already includes
 that bound. Explicit lane counts can exceed the automatic lane limit.

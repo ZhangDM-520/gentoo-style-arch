@@ -146,12 +146,23 @@ pub fn host_facts() -> Result<HostFacts, String> {
 /// record's `lanes`/`normal-jobs`/`core-jobs` scalars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Budget {
+    pub resources: Option<ResourceBudget>,
     pub threads: u32,
     pub memory_gib: u32,
     pub intensity: &'static str,
     pub lanes: u32,
     pub normal_jobs: u32,
     pub core_jobs: u32,
+}
+
+/// Run-wide capacity and fallbacks for adaptive dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceBudget {
+    pub cpu: u32,
+    pub memory: u64,
+    pub normal_bytes: u64,
+    pub core_bytes: u64,
+    pub explicit_jobs: Option<u32>,
 }
 
 impl Budget {
@@ -213,7 +224,18 @@ impl Budget {
             .min(memory_jobs(baselines.core_memory_per_job_gib))
             .max(1);
 
+        let bytes = |gib: f64| (gib * (1u64 << 30) as f64).ceil().max(1.0) as u64;
         Ok(Budget {
+            resources: Some(ResourceBudget {
+                cpu: cpu_budget,
+                memory: (scaled_memory / 100.0 * (1u64 << 30) as f64).floor() as u64,
+                normal_bytes: bytes(baselines.memory_per_job_gib),
+                core_bytes: bytes(baselines.core_memory_per_job_gib),
+                explicit_jobs: match jobs_override {
+                    Override::Value(_) => Some(normal_jobs),
+                    Override::Auto => None,
+                },
+            }),
             threads,
             memory_gib,
             intensity,

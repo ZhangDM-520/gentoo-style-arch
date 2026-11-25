@@ -793,6 +793,10 @@ the three planning defaults):
 - `GSA_INTENSITY` — default intensity level (`low` 35%, `medium` 75%,
   `high` 95%, `xhigh` 110% of CPU and usable memory). Defaults to
   `intensity` in `config/build-defaults.conf`, or `medium` if unset.
+- `GSA_BUILD_HISTORY` — build history location. Defaults to
+  `~/.local/state/gsa/build-history.tsv` for the build user. Use an absolute
+  file path for a separate history or `off` to use baseline estimates only.
+  The suffix `.gsa-lock` is reserved.
 - `GSA_CPU_THREADS` — overrides the detected CPU thread count the parallelism
   plan is computed from; must be a positive integer (anything else is a usage
   error). Default: CPU detection.
@@ -999,6 +1003,7 @@ strengths, one-shot actions and hidden seams never replay) — read the table
 there rather than a copy here. Environment inputs are warned about through
 `env-required:`, never baked into the command; the resolved
 `--lanes`/`--jobs`/`--intensity` values are mirrored as explicit flags.
+Automatic sizing replays with `--jobs auto`.
 
 Fixtures assert on the record, never on prose, through the strict `format: 2`
 parser `tests/lib/rr-v2.bash rr2_body` (contract §H.2's 2026-10-14
@@ -1329,3 +1334,20 @@ G="<build_dir>"; /usr/bin/rm -rf "$G/build" "$G/pkg" "$G/tmp" && mkdir -p "$G/bu
 ```
 
 `pkgs/` is kept as rollback evidence. Do this with no run in flight.
+
+
+### Export build resource history
+
+Run representative builds with history enabled, then export as the build
+user:
+
+```sh
+gsa -M --export-build-history > build-history.tsv
+```
+
+Review the sample set before packaging it as
+`/usr/share/gsa/build-history.tsv`. Each row contains the recipe ID,
+architecture, toolchain family, workers, peak bytes, CPU microseconds and
+elapsed microseconds. The export contains the user's samples. See
+[portability](portability.md#adaptive-worker-assignment) for how the
+scheduler applies them.

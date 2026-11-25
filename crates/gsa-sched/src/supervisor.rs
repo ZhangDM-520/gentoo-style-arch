@@ -22,6 +22,7 @@ use gsa_model::{OutcomeRow, RecipeId, RowStatus};
 use crate::budget::Budget;
 use crate::codec::{self, LaneResult};
 use crate::machine::{Machine, Node, NodePhase, ParkRequest, Policy, Recorded};
+use crate::resources::{self, Estimate, History, Sample, Scope};
 use crate::signals::{self, install_handlers, signal_group, signal_lane_code, SIGKILL};
 use gsa_fetch::candidacy::FetchCandidacy;
 use gsa_fetch::child as fetch_child;
@@ -34,6 +35,7 @@ use gsa_fetch::window::{PkgFetchState, PrefetchWindow};
 pub struct SupNode {
     pub id: RecipeId,
     pub recipe_dir: PathBuf,
+    pub history_key: Option<resources::Key>,
     pub core: bool,
     pub build_tools: bool,
     pub prereqs: Vec<usize>,
@@ -352,6 +354,7 @@ enum Event {
         /// The signal that killed the lane child, when its exit status says
         /// so (`None`: it exited on its own, or wait(2) had no signal).
         killed_by: Option<i32>,
+        sample: Option<Sample>,
     },
     FetchDone {
         index: usize,
@@ -362,6 +365,8 @@ enum Event {
 
 struct ActiveLane {
     pid: u32,
+    jobs: u32,
+    memory: u64,
     term_sent: bool,
 }
 
@@ -706,7 +711,12 @@ fn write_current_pointer(setup: &RunSetup, err: &mut dyn Write) -> Result<(), St
 /// the lane writes its own per-package log. The child handle is owned by a
 /// waiter thread that blocks in `wait(2)` — readiness is delivered by the
 /// kernel, never polled.
-fn spawn_lane(setup: &RunSetup, index: usize, jobs: u32) -> Result<Child, String> {
+fn spawn_lane(
+    setup: &RunSetup,
+    index: usize,
+    jobs: u32,
+    accounting: bool,
+) -> Result<Child, String> {
     let node = &setup.nodes[index];
     let mut cmd = Command::new(&setup.exe);
     cmd.arg("--lane-job")
@@ -718,10 +728,16 @@ fn spawn_lane(setup: &RunSetup, index: usize, jobs: u32) -> Result<Child, String
         .env("GSA_BUILD_JOBS", jobs.to_string())
         .env("GSA_STATE_DIR", &setup.state_dir)
         .env("GIT_CONFIG_COUNT", "0")
+        .env_remove(resources::ACCOUNT_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
+    if accounting {
+        cmd.env(resources::ACCOUNT_ENV, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+    }
     // §B.11: the run's --toolchain rides to the lane as engine output, the
     // same way GSA_BUILD_JOBS does, so the lane child resolves the family a
     // decision already made instead of re-deriving it. Set ALWAYS — an
@@ -806,6 +822,9 @@ struct SupCtx<'a> {
     setup: &'a mut RunSetup,
     machine: &'a mut Machine,
     active: &'a mut HashMap<usize, ActiveLane>,
+    user_history: History,
+    system_history: History,
+    accounting: bool,
     remediation: &'a mut Option<Remediation>,
     prefetch: &'a mut Option<Prefetcher>,
     events: &'a mut dyn FnMut(&SupEvent),
@@ -819,6 +838,60 @@ struct SupCtx<'a> {
 impl<'a> SupCtx<'a> {
     fn emit(&mut self, event: &SupEvent) {
         (self.events)(event);
+    }
+
+    fn dispatch_budget(&self) -> Option<(usize, u32, u64)> {
+        let mut ready = self
+            .machine
+            .pick()
+            .into_iter()
+            .filter(|&index| self.machine.can_dispatch(index));
+        let first = ready.next()?;
+        let first_is_core = self.setup.nodes[first].core;
+        let Some(resources) = self.setup.budget.resources else {
+            let jobs = if first_is_core {
+                self.setup.budget.core_jobs
+            } else {
+                self.setup.budget.normal_jobs
+            };
+            return Some((first, jobs, 0));
+        };
+        let slots = (self.setup.budget.lanes as usize).saturating_sub(self.active.len());
+        let candidates: Vec<_> = std::iter::once(first)
+            .chain(ready.filter(|&index| !first_is_core && !self.setup.nodes[index].core))
+            .take(slots)
+            .map(|index| {
+                let node = &self.setup.nodes[index];
+                let mut estimate = node
+                    .history_key
+                    .as_ref()
+                    .and_then(|key| self.user_history.preferred(&self.system_history, key))
+                    .unwrap_or(Estimate {
+                        bytes: if node.core {
+                            resources.core_bytes
+                        } else {
+                            resources.normal_bytes
+                        },
+                        max_workers: u32::MAX,
+                    });
+                if !node.core {
+                    if let Some(limit) = resources.explicit_jobs {
+                        estimate.max_workers = estimate.max_workers.min(limit);
+                    }
+                }
+                (index, estimate)
+            })
+            .collect();
+        let cpu = self
+            .active
+            .values()
+            .fold(resources.cpu, |free, lane| free.saturating_sub(lane.jobs));
+        let memory = self.active.values().fold(resources.memory, |free, lane| {
+            free.saturating_sub(lane.memory)
+        });
+        resources::allocate(cpu, memory, self.active.is_empty(), &candidates)
+            .into_iter()
+            .next()
     }
 
     fn apply_install_halt(&mut self, reason: &str, stop_dispatch: bool) {
@@ -1289,10 +1362,31 @@ pub fn run(
         .as_ref()
         .map(|cfg| Prefetcher::new(cfg, machine.len()));
 
+    let track_history = setup.budget.resources.is_some() && History::enabled();
+    let mut load_history = |source: &str, result: Result<History, String>| {
+        result.unwrap_or_else(|error| {
+            events(&SupEvent::Diagnostic(format!(
+                "build history ({source}): {error}"
+            )));
+            History::default()
+        })
+    };
+    let (user_history, system_history) = if track_history {
+        (
+            load_history("user", History::user(&setup.exe)),
+            load_history("system", History::system()),
+        )
+    } else {
+        (History::default(), History::default())
+    };
+
     let mut ctx = SupCtx {
         setup: &mut setup,
         machine: &mut machine,
         active: &mut active,
+        user_history,
+        system_history,
+        accounting: track_history && gsa_model::privilege::effective_uid() == 0,
         remediation: &mut remediation,
         prefetch: &mut prefetch,
         events,
@@ -1384,24 +1478,30 @@ pub fn run(
             if ctx.interrupted.is_some() {
                 break;
             }
-            let Some(index) = ctx
-                .machine
-                .pick()
-                .into_iter()
-                .find(|&i| ctx.machine.can_dispatch(i))
-            else {
+            let Some((index, jobs, memory)) = ctx.dispatch_budget() else {
                 break;
-            };
-            let jobs = if ctx.machine.node(index).core {
-                ctx.setup.budget.core_jobs
-            } else {
-                ctx.setup.budget.normal_jobs
             };
             rotate_lane_log(ctx.setup, index, ctx.err);
             let log_offset = log_start_offset(ctx.setup, index);
-            match spawn_lane(ctx.setup, index, jobs) {
+            let accounting = ctx.accounting && ctx.setup.nodes[index].history_key.is_some();
+            let previous = accounting
+                .then(|| Scope::path(std::process::id()))
+                .flatten();
+            match spawn_lane(ctx.setup, index, jobs, accounting) {
                 Ok(mut child) => {
                     let pid = child.id();
+                    let scope = if accounting {
+                        Scope::attach(pid, previous)
+                    } else {
+                        None
+                    };
+                    if accounting && scope.is_none() {
+                        ctx.accounting = false;
+                        ctx.emit(&SupEvent::Diagnostic(
+                            "build history: lane accounting unavailable; skipping measurements"
+                                .into(),
+                        ));
+                    }
                     if let Err(error) = write_started(ctx.setup, index, pid, log_offset, ctx.err) {
                         ctx.emit(&SupEvent::Diagnostic(format!("lane-state: {error}")));
                     }
@@ -1413,20 +1513,31 @@ pub fn run(
                         index,
                         ActiveLane {
                             pid,
+                            jobs,
+                            memory,
                             term_sent: false,
                         },
                     );
                     let core = ctx.machine.node(index).core;
                     ctx.emit(&SupEvent::Started { index, jobs, core });
+                    if accounting {
+                        // Scope attachment can take time. Register the PID
+                        // before draining signals so an interrupt covers it.
+                        ctx.drain_signals(&rx, &tx, &mut buffered);
+                        if ctx.interrupted.is_some() {
+                            drop(child.stdin.take());
+                        } else if let Some(input) = child.stdin.as_mut() {
+                            let _ = input.write_all(&[u8::from(scope.is_some())]);
+                        }
+                    }
                     let waiter_tx = tx.clone();
                     let waiter_index = index;
                     std::thread::spawn(move || {
-                        let killed_by = child.wait().ok().and_then(|status| {
-                            std::os::unix::process::ExitStatusExt::signal(&status)
-                        });
+                        let (killed_by, sample) = resources::wait(child, scope, jobs);
                         let _ = waiter_tx.send(Event::LaneDone {
                             index: waiter_index,
                             killed_by,
+                            sample,
                         });
                     });
                 }
@@ -1539,7 +1650,11 @@ pub fn run(
             };
 
         match event {
-            Event::LaneDone { index, killed_by } => {
+            Event::LaneDone {
+                index,
+                killed_by,
+                sample,
+            } => {
                 ctx.active.remove(&index);
                 if ctx.machine.is_settled(index) {
                     let message = format!(
@@ -1559,6 +1674,20 @@ pub fn run(
                     .unwrap_or(false);
                 let settled_code: Option<gsa_model::LaneOutcome>;
                 let result = reap_result(ctx.setup, index, ctx.err);
+                if !was_interrupted
+                    && killed_by.is_none()
+                    && result
+                        .as_ref()
+                        .is_some_and(|result| result.code == gsa_model::LaneOutcome::Ok)
+                {
+                    if let (Some(sample), Some(key)) =
+                        (sample, ctx.setup.nodes[index].history_key.clone())
+                    {
+                        if let Err(error) = History::save(&ctx.setup.exe, key, sample) {
+                            ctx.emit(&SupEvent::Diagnostic(format!("build history: {error}")));
+                        }
+                    }
+                }
                 match result {
                     Some(result) => {
                         let is_signal_report = matches!(
@@ -1912,6 +2041,7 @@ mod tests {
             run_id: format!("test-{name}-{}", std::process::id()),
             exe: stub.clone(),
             budget: Budget {
+                resources: None,
                 threads: 1,
                 memory_gib: 1,
                 intensity: "low",
@@ -1924,6 +2054,7 @@ mod tests {
             nodes: vec![SupNode {
                 id: RecipeId::new("p1").expect("p1 is a valid id"),
                 recipe_dir: dir.join("root/packages/p1"),
+                history_key: None,
                 core: false,
                 build_tools: false,
                 prereqs: Vec::new(),
@@ -2167,6 +2298,7 @@ mod tests {
         setup.nodes.push(SupNode {
             id: RecipeId::new("p2").expect("p2 is a valid id"),
             recipe_dir: dir.join("root/packages/p2"),
+            history_key: None,
             core: false,
             build_tools: false,
             prereqs: Vec::new(),
@@ -2255,6 +2387,7 @@ mod tests {
             setup.nodes.push(SupNode {
                 id: id.clone(),
                 recipe_dir: dir.join("root/packages").join(id.as_str()),
+                history_key: None,
                 core: false,
                 build_tools: false,
                 prereqs: Vec::new(),
@@ -2328,6 +2461,7 @@ mod tests {
         setup.nodes.push(SupNode {
             id: p2.clone(),
             recipe_dir: dir.join("root/packages/p2"),
+            history_key: None,
             core: false,
             build_tools: false,
             prereqs: Vec::new(),
@@ -2407,6 +2541,7 @@ mod tests {
         setup.nodes.push(SupNode {
             id: p2,
             recipe_dir: dir.join("root/packages/p2"),
+            history_key: None,
             core: false,
             build_tools: false,
             prereqs: Vec::new(),

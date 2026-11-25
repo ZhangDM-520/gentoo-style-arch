@@ -40,6 +40,7 @@ pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
     ("GSA_LANES", "default for --lanes (the flag beats it)"),
     ("GSA_JOBS", "default for --jobs (the flag beats it)"),
     ("GSA_INTENSITY", "default for --intensity (the flag beats it)"),
+    ("GSA_BUILD_HISTORY", "build history file (absolute path) or off"),
     ("GSA_CPU_THREADS", "override the scheduler CPU thread count"),
     ("GSA_MEMORY_GIB", "override scheduler memory in GiB"),
     (
@@ -131,6 +132,7 @@ run as the build user, and -Mm requires the build user (§B.10).",
     Section {
         head: "Maintain verbs (contract §B.7; side-car self-healing only — never /usr or /var/lib/pacman):",
         blocks: &[
+            ("gsa -M --export-build-history", "export your build resource samples"),
             ("gsa -Ma", "report drift in recipes, packages and runtime state"),
             ("gsa -Md [--fix]", "report runtime-state discrepancies; apply repairs with --fix"),
             ("gsa -Mi [--prune|--backfill]", "report IgnorePkg drift; prune stale entries or backfill missing ones"),
@@ -432,6 +434,7 @@ mod tests {
             "GSA_LANES",
             "GSA_JOBS",
             "GSA_INTENSITY",
+            "GSA_BUILD_HISTORY",
             "GSA_CPU_THREADS",
             "GSA_MEMORY_GIB",
             "GSA_TARGET_CPU",

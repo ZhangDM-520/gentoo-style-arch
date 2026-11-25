@@ -34,6 +34,9 @@
 # print it) — one fact, one home; a new knob is declared in the change that
 # introduces it (docs/gsa-contract.md §D.2).
 
+# Direct fixtures also keep synthetic measurements out of the user's history.
+export GSA_BUILD_HISTORY="${GSA_BUILD_HISTORY:-off}"
+
 # Repo root from this file's own location: tests/lib/fixture-lib.bash → repo.
 _gsa_lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 gsa_repo_root=$(cd "$_gsa_lib_dir/../.." && pwd)
