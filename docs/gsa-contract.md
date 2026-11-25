@@ -177,7 +177,7 @@ row-only: a zero-row capture is scriptable and never grows a synthetic row.
 Pinned by `tests/gsa-query.sh` §h.
 
 *Amendment (2026-11-25, query tables).* On the human rendering, `-Ql`
-aligns package names and paths, `-Qu` aligns recipe and version columns,
+aligns package names and wraps long paths within their column, `-Qu` aligns recipe and version columns,
 and `-Qr` aligns finding kind, subject, and detail. They use the shared
 colour and width rules (§L.9). Machine rows keep their existing shape,
 including byte-for-byte pacman stdout for `-Ql`. Pacman stderr and exit
@@ -2238,12 +2238,11 @@ dispatch; a failure parks a cone (§I).
    "presentation follows the terminal"**: `--color=always` is an explicit
    request for the human rendering, so it crosses a pipe too (the machine
    vocabulary has no colour to ask for); `--machine` still wins. `-Qb`
-   stays the verbatim wire row and is never styled. **The mode is a RUN
-   concept** (2026-11-11): `--machine` selects the event grammar for the
-   verbs that emit events (`-S`/`-B`/`-U`/`-M` runs); the listing and query
-   verbs (`-Q*`, `-Sl`, `-Ml`) render one stable row vocabulary and have no
-   event stream, so the flag is accepted and changes nothing — `gsa --help`
-   says exactly that, and no listing grows a second format for it.
+   stays the verbatim wire row and is never styled. **Event formatting and table presentation**.
+   `--machine` selects the structured event grammar for command paths that
+   emit events (`-S`/`-B`/`-U`/`-M` runs). For queries with human tables it
+   selects the stable flat rows, even with `--color=always`. Row-only
+   listings keep their stdout format.
 10. **Smoke tests run the INSTALLED engine** (owner decision 2026-10-23):
    "it works" means the packaged `gsa` binary behaves. Every smoke check and
    the fixture battery (`tests/run-all.sh`) default to `command -v gsa` and

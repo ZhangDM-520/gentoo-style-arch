@@ -470,32 +470,60 @@ fn write_query_table<const N: usize>(
     out: &mut dyn Write,
     rows: impl IntoIterator<Item = [String; N]>,
     roles: [style::Role; N],
+    wrap_last_column: bool,
 ) -> std::io::Result<()> {
     let rows: Vec<_> = rows
         .into_iter()
         .map(|row| row.map(|cell| style::sanitize_data(&cell)))
         .collect();
-    let mut remaining = crate::dashboard::terminal_width() - 1;
-    let widths: [usize; N] = std::array::from_fn(|index| {
-        let columns_left = N - index - 1;
-        if columns_left == 0 {
-            return remaining;
-        }
-        let natural = rows
-            .iter()
+    let budget = style::terminal_width()
+        .unwrap_or(80)
+        .saturating_sub(1)
+        .max(2);
+    let gap = if budget >= 3 * N - 1 { 2 } else { 0 };
+    let natural: [usize; N] = std::array::from_fn(|index| {
+        rows.iter()
             .map(|row| style::visible_width(&row[index]))
             .max()
-            .unwrap_or(0);
-        let width = natural.min((remaining - 2 * columns_left) / (columns_left + 1));
-        remaining -= width + 2;
-        width
+            .unwrap_or(0)
     });
+    let widths = if natural.iter().sum::<usize>() + gap * (N - 1) <= budget {
+        natural
+    } else {
+        let mut remaining = budget - gap * (N - 1);
+        std::array::from_fn(|index| {
+            let columns_left = N - index - 1;
+            let width = if columns_left == 0 {
+                remaining
+            } else {
+                natural[index].min(remaining.saturating_sub(2) / (columns_left + 1))
+            };
+            remaining -= width;
+            width
+        })
+    };
     for row in rows {
         for (index, cell) in row.iter().enumerate() {
+            if wrap_last_column && index + 1 == N && style::visible_width(cell) > widths[index] {
+                let indent = widths[..index].iter().sum::<usize>() + gap * index;
+                let (chunk, mut rest) = style::split_visible(cell, widths[index]);
+                write!(out, "{}", style::paint(roles[index], &chunk))?;
+                while !rest.is_empty() {
+                    let (chunk, tail) = style::split_visible(&rest, widths[index]);
+                    write!(
+                        out,
+                        "\n{:indent$}{}",
+                        "",
+                        style::paint(roles[index], &chunk)
+                    )?;
+                    rest = tail;
+                }
+                continue;
+            }
             let fitted = style::truncate_middle(cell, widths[index]);
             write!(out, "{}", style::paint(roles[index], &fitted))?;
             if index + 1 < N {
-                let padding = widths[index] - style::visible_width(&fitted) + 2;
+                let padding = widths[index] - style::visible_width(&fitted) + gap;
                 write!(out, "{:padding$}", "")?;
             }
         }
@@ -587,6 +615,7 @@ pub fn query_revdep(
         out,
         rows,
         [style::Role::Warn, style::Role::Bold, style::Role::Dim],
+        false,
     )
     .map_err(|e| e.to_string())
 }
@@ -1154,6 +1183,7 @@ pub fn query_updates(
                 style::Role::Dim,
                 style::Role::Dim,
             ],
+            false,
         )
         .map_err(|e| e.to_string());
     }
@@ -1205,7 +1235,7 @@ pub fn pacman_delegate(
             let (package, path) = line.split_once(' ').unwrap_or((line, ""));
             [package.to_owned(), path.to_owned()]
         });
-        write_query_table(out, rows, [style::Role::Bold, style::Role::Info])
+        write_query_table(out, rows, [style::Role::Bold, style::Role::Info], true)
             .map_err(|e| e.to_string())?;
     } else {
         out.write_all(&output.stdout).map_err(|e| e.to_string())?;

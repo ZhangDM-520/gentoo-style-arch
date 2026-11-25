@@ -364,14 +364,8 @@ if [ -z "$only" ] || [ "$only" = d ]; then
         [ "$FIXTURE_RC" -eq 0 ] || fail "d: -Ql rc=$FIXTURE_RC want the pacman rc 0: $FIXTURE_OUTPUT"
         grep -Fx -- '-Ql foo' "$log" >/dev/null \
             || fail "d: -Ql never reached pacman verbatim: $(cat "$log" 2>&1)"
-        grep -Fx 'foo /usr/bin/foo with spaces' <<<"$FIXTURE_OUTPUT" >/dev/null \
+        [ "$FIXTURE_OUTPUT" = $'foo /usr/bin/foo with spaces\nlong-package /usr/bin/bar' ] \
             || fail "d: pacman's stdout must pass through: $FIXTURE_OUTPUT"
-        COLUMNS=80 GSA_CONF="$conf" GSA_STATE_DIR="$state" GSA_FAKE_PACMAN_LOG="$log" \
-            run_engine_user "$ws" -Ql foo --color=always
-        [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "d: human -Ql has no colour"
-        plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
-        grep -Fx 'foo           /usr/bin/foo with spaces' <<<"$plain" >/dev/null ||
-            fail "d: human -Ql does not align paths or preserve spaces: $plain"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" GSA_FAKE_PACMAN_LOG="$log" \
             run_engine_user "$ws" -Qo /nope || true
         [ "$FIXTURE_RC" -eq 1 ] || fail "d: -Qo must pass the pacman rc 1 through, got rc=$FIXTURE_RC: $FIXTURE_OUTPUT"
@@ -420,23 +414,11 @@ if [ -z "$only" ] || [ "$only" = e ]; then
         if grep -q 'fresh-demo' <<<"$FIXTURE_OUTPUT"; then
             fail "e: a recipe at its tracked version is not stale: $FIXTURE_OUTPUT"
         fi
-        COLUMNS=80 GSA_CONF="$conf" GSA_STATE_DIR="$state" \
-            run_engine_user "$ws" -Qu --color=always
-        [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "e: human -Qu has no colour"
-        plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
-        grep -Fx 'stale-demo    tracked=2.0.0-1  installed=-          built=1.0.0-1' <<<"$plain" >/dev/null ||
-            fail "e: human -Qu columns do not align: $plain"
-
         printf '%%NAME%%\nrefused-demo\n\n%%VERSION%%\n1.0.0-1\n\n%%DEPENDS%%\nmissing=1\n' \
             >"$db/local/refused-demo-1.0.0-1/desc"
         GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qr --machine --color=always
         [ "$FIXTURE_OUTPUT" = 'exact-pin refused-demo missing=1 dangling' ] ||
             fail "e: machine -Qr row changed: $FIXTURE_OUTPUT"
-        GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qr --color=always
-        [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "e: human -Qr has no colour"
-        plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
-        [ "$plain" = 'exact-pin  refused-demo  missing=1 dangling' ] ||
-            fail "e: human -Qr columns do not align: $plain"
     )
 fi
 

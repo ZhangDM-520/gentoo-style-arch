@@ -276,3 +276,56 @@ if grep -q $'\x1b\[' "$fixture/g/out.txt"; then
     fail "g: TERM=unknown emitted an escape (colour or cursor control): $(cat "$fixture/g/out.txt")"
 fi
 assert_one_width "$fixture/g/out.txt" 'g (TERM=unknown)'
+
+# ── h. file, stale and revdep tables align their columns ───────────────────
+(
+    ws="$fixture/query-tables/ws"
+    state="$fixture/query-tables/state"
+    db="$fixture/query-tables/db"
+    make_workspace "$ws" 1 1 low
+    add_package "$ws" stale-demo "$(printf 'pkgver=2.0.0\npkgrel=1\narch=(any)')"
+    add_package "$ws" refused-demo "$(printf 'pkgver=2.0.0\npkgrel=1\narch=(any)')"
+    : >"$ws/packages/stale-demo/stale-demo-1.0.0-1-any.pkg.tar.zst"
+    : >"$ws/packages/refused-demo/refused-demo-2.0.0-1-any.pkg.tar.zst"
+    mkdir -p "$db/local/refused-demo-1.0.0-1"
+    printf '%%NAME%%\nrefused-demo\n\n%%VERSION%%\n1.0.0-1\n' \
+        >"$db/local/refused-demo-1.0.0-1/desc"
+    : >"$db/local/refused-demo-1.0.0-1/files"
+    make_stubs "$ws/bin" "$db"
+    export PATH="$ws/bin:$PATH"
+    cat >"$ws/bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'foo /usr/bin/foo with spaces' 'long-package /usr/bin/bar'
+EOF
+    chmod +x "$ws/bin/pacman"
+    COLUMNS=80 GSA_CONF="$conf" GSA_STATE_DIR="$state" \
+        run_engine_user "$ws" -Ql foo --color=always
+    [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "d: human -Ql has no colour"
+    plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
+    grep -Fx 'foo           /usr/bin/foo with spaces' <<<"$plain" >/dev/null ||
+        fail "d: human -Ql does not align paths or preserve spaces: $plain"
+    COLUMNS=80 GSA_CONF="$conf" GSA_STATE_DIR="$state" \
+        run_engine_user "$ws" -Qu --color=always
+    [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "e: human -Qu has no colour"
+    plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
+    grep -Fx 'stale-demo    tracked=2.0.0-1  installed=-          built=1.0.0-1' <<<"$plain" >/dev/null ||
+        fail "e: human -Qu columns do not align: $plain"
+
+    printf '%%NAME%%\nrefused-demo\n\n%%VERSION%%\n1.0.0-1\n\n%%DEPENDS%%\nmissing=1\n' \
+        >"$db/local/refused-demo-1.0.0-1/desc"
+    GSA_CONF="$conf" GSA_STATE_DIR="$state" run_engine_user "$ws" -Qr --color=always
+    [[ $FIXTURE_OUTPUT == *$'\e['* ]] || fail "e: human -Qr has no colour"
+    plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
+    [ "$plain" = 'exact-pin  refused-demo  missing=1 dangling' ] ||
+        fail "e: human -Qr columns do not align: $plain"
+
+    COLUMNS=10 GSA_CONF="$conf" GSA_STATE_DIR="$state" \
+        run_engine_user "$ws" -Ql foo --color=always
+    plain=$(sed -E $'s/\e\\[[0-9;]*m//g' <<<"$FIXTURE_OUTPUT")
+    while IFS= read -r line; do
+        (( ${#line} <= 9 )) || fail "h: -Ql row exceeds the terminal: $line"
+    done <<<"$plain"
+    paths=$(cut -c 5- <<<"$plain" | tr -d '\n')
+    [ "$paths" = '/usr/bin/foo with spaces/usr/bin/bar' ] ||
+        fail "h: narrow -Ql must display the complete paths: $plain"
+)

@@ -66,7 +66,7 @@ run as the build user, and -Mm requires the build user (§B.10).",
         head: "Output modes (-S/-B/-U/-M):",
         blocks: &[
             ("--machine", "emit LEVEL event k=v lines (INFO, WARNING or ERROR); default for captured stdout"),
-            ("-Q*, -Sl, -Ml", "stable row vocabulary on stdout in either mode; -Sl can note a range clamp on stderr"),
+            ("-Q*, -Sl, -Ml", "--machine keeps a stable row vocabulary on stdout; -Sl can note a range clamp on stderr"),
         ],
     },
     Section {
