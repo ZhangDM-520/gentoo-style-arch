@@ -31,167 +31,161 @@ struct Section {
 /// continuation's `env-required:` line. `GSA_BUILD_JOBS` is engine OUTPUT
 /// (exported per lane), deliberately absent.
 pub(crate) const ENV_INPUTS: &[(&str, &str)] = &[
-    ("GSA_CONF", "replaces the auto-read gsa.conf layers (/etc/gsa/gsa.conf, ~/.config/gsa/gsa.conf) with exactly one file — fixture and hermetic control"),
-    ("GSA_CONF_DIR", "replaces the whole configuration-directory resolution (/etc/gsa then ~/.config/gsa) with exactly one directory holding gsa.conf and the per-compiler makepkg bodies — fixture and hermetic control"),
-    ("GSA_STATE_DIR", "the state root (the --state-dir chain above)"),
-    ("GSA_BUILD_DIR", "redirects the build cache (makepkg BUILDDIR/PKGDIR/PKGDEST; default: the build user's ~/.cache/gsa); setting it also answers the build-dir prompt silently — the flag --build-dir beats it"),
+    ("GSA_CONF", "use one gsa.conf in place of the system and user files"),
+    ("GSA_CONF_DIR", "use one directory for gsa.conf and per-compiler makepkg config"),
+    ("GSA_STATE_DIR", "default for --state-dir"),
+    ("GSA_BUILD_DIR", "default for --build-dir; also suppresses its prompt"),
     ("GSA_RECIPES_DIR", "redirects the canonical recipe store (gsa.conf `recipe_dir`; default: the build user's ~/.local/share/gsa/recipes — never below the state root)"),
     ("GSA_RECIPE_CHECKOUT", "the recipe repository checkout the real-tree checks read (absolute or ~/… path; unset on an engine-only checkout, where those checks skip loudly)"),
     ("GSA_LANES", "default for --lanes (the flag beats it)"),
     ("GSA_JOBS", "default for --jobs (the flag beats it)"),
     ("GSA_INTENSITY", "default for --intensity (the flag beats it)"),
-    ("GSA_CPU_THREADS", "budget override: the scheduler's CPU-thread truth"),
-    ("GSA_MEMORY_GIB", "budget override: the scheduler's memory truth, in GiB"),
+    ("GSA_CPU_THREADS", "override the scheduler CPU thread count"),
+    ("GSA_MEMORY_GIB", "override scheduler memory in GiB"),
     (
         "GSA_TARGET_CPU",
         "CPU tuning passed through to recipes (the engine reads nothing; a resume preserves it)",
     ),
     ("GSA_VCS_SKIP_TOLERANCE", "the --skip waive threshold (the flag beats it)"),
-    ("NO_COLOR", "any non-empty value turns the human rendering's colour off (the --color flag beats it; the machine channel is never coloured)"),
-    ("CI", "any non-empty value other than 0/false marks an unattended run: no prompt is asked, even when the runner allocated a pty"),
+    ("NO_COLOR", "disable colour when non-empty; explicit --color takes precedence"),
+    ("CI", "suppress prompts when non-empty and set to a value other than 0 or false"),
 ];
 
 const SECTIONS: &[Section] = &[
     Section {
         head: "\
-gsa — native build-and-install orchestrator for the curated recipe set
-(contract docs/gsa-contract.md; build (-B), build+install (-S), fetch-only
-(-Sw), install-from-archives (-U) and maintain (-M) runs are live)
+gsa builds and installs packages from recipes. See docs/gsa-contract.md.
 
 Usage: gsa <FAMILY>[cluster] [long-modifiers] [targets…] [ranges…] [-- <pacman args…>]
 
-Privilege (contract §B.10, like pacman): -Q and every report/plan verb run
-unprivileged; -S/-B/-U and write-side -M verbs require root — rerun with
-sudo. Builds always run as your user (makepkg is dropped from the root run),
-and a root shell without a build user is refused with guidance.",
+Queries and plans run unprivileged. Writes generally require root. Builds
+run as the build user, and -Mm requires the build user (§B.10).",
         blocks: &[],
     },
     Section {
-        head: "Output modes (run families -S/-B/-U/-M; the default follows the terminal — a capture is a machine):",
+        head: "Output modes (-S/-B/-U/-M):",
         blocks: &[
-            ("--machine", "leveled machine lines — `LEVEL event k=v …` (LEVEL is INFO, WARNING or ERROR), direct-action fields (the default when stdout is captured); row vocabularies and the `format: 2` run record are identical in both modes"),
-            ("-Q*, -Sl, -Ml", "already one stable row vocabulary on stdout: no event stream, so --machine changes nothing (a capture reads the same rows). A stderr note can still announce an ANSWERED range clamp (§C.3) — that note is prose about the request, never a row, so parse stdout alone"),
+            ("--machine", "emit LEVEL event k=v lines (INFO, WARNING or ERROR); default for captured stdout"),
+            ("-Q*, -Sl, -Ml", "stable row vocabulary on stdout in either mode; -Sl can note a range clamp on stderr"),
         ],
     },
     Section {
         head: "Families (exactly one per invocation; lowercase letters form the cluster):",
         blocks: &[
-            ("-Q", "query the installed database and the side-car (read-only; pacman queries stay pacman)"),
-            ("-S", "build + install the selection (each package installed before its consumers compile)"),
-            ("-B", "build-only: archives to the build cache (PKGDEST), nothing installed"),
-            ("-U", "install from archives: nothing is built"),
-            ("-M", "maintain engine state: audit, doctor, IgnorePkg closure, logs, mirrors, prune strengths, sets/world, run history"),
+            ("-Q", "query installed packages and engine state"),
+            ("-S", "build + install"),
+            ("-B", "build archives"),
+            ("-U", "install archives"),
+            ("-M", "maintain engine state"),
             ("gsa fetch", "exactly gsa -Sw"),
         ],
     },
     Section {
         head: "Command surface — query (-Q …; read-only, unprivileged):",
         blocks: &[
-            ("gsa -Q", "list installed packages, with side-car columns (abi-token, built version, binpkg instances) where a side-car row exists"),
-            ("gsa -Qi <ref…>", "merged info: pacman fields, the side-car record (abi-token, subscriptions in/out, binpkg instances, VCS baseline), recipe metadata and the topology record"),
-            ("gsa -Qs <pattern…>", "search installed names/descriptions (pacman -Qs semantics)"),
+            ("gsa -Q", "list installed packages with ABI token, built version and archive count when recorded"),
+            ("gsa -Qi <ref…>", "show pacman, engine, recipe and topology details"),
+            ("gsa -Qs <pattern…>", "search installed names and descriptions"),
             ("gsa -Qg [name…]", "groups/sets and their members (all with counts by default)"),
-            ("gsa -Ql <ref…>", "list owned files (pacman -Ql — delegated verbatim)"),
-            ("gsa -Qo <path…>", "file owner (pacman -Qo — delegated verbatim)"),
+            ("gsa -Ql <ref…>", "list package files (pacman -Ql)"),
+            ("gsa -Qo <path…>", "find the package owning a file (pacman -Qo)"),
             ("gsa -Qu", "stale set: recipes whose tracked version moved past what is installed (or newest built instance if uninstalled)"),
-            ("gsa -Qb [ref…]", "binpkg index rows: the retained built instances the side-car DB records (hash-bound, §J.4)"),
-            ("gsa -Qp <archive…>", "archive probe: the archive's .PKGINFO matched against its index row, hash/size agreement reported"),
+            ("gsa -Qb [ref…]", "list retained archives from the binpkg index"),
+            ("gsa -Qp <archive…>", "check package metadata, hash and size against the binpkg index"),
             ("gsa -Qa <ref…>", "ABI report: derived token, abi-rev= override if any, subscriptions recorded against it"),
             ("gsa -Qr", "revdep report over the installed-ELF index: unresolved DT_NEEDED, preserved-lib survivors, exact-pin leftovers"),
-            ("gsa -Qt", "resolved topology records, one per line: id|path|groups|edges|tags (the tooling channel)"),
+            ("gsa -Qt", "print topology rows as id|path|groups|edges|tags"),
         ],
     },
     Section {
         head: "Command surface — build + install (-S …):",
         blocks: &[
-            ("gsa -S <targets…> [ranges…]", "build the selection and install each package's archives before its consumers compile (install-before-dependents; checked install)"),
-            ("gsa -Sf …", "force install: always run pacman -U, no checked skip (a checked install stands down when the installed version is identical-or-newer and its install date is not older than the archive — version and dates, never a content comparison)"),
-            ("gsa -Sc …", "prune strength 1 first (src/pkg/build trees and archives), then build + install"),
+            ("gsa -S <targets…> [ranges…]", "build and install each package before its consumers build"),
+            ("gsa -Sf …", "force install, bypassing the already-current check"),
+            ("gsa -Sc …", "prune build trees and archives, then build + install"),
             ("gsa -S --dry-run <targets…> [ranges…]", "build-order plan without building"),
-            ("gsa -Sl [targets…] [ranges…]", "ordered selection listing with range indices (-Bl same; nothing is built or installed)"),
-            ("gsa -Sw <targets…> [ranges…]", "fetch and verify the selection's sources through makepkg --verifysource — no build, no install; verdict rows are advisory (§D). Takes --state-dir PATH and --toolchain gcc|clang (the fetch is handed the SAME engine-owned makepkg composite the following build will use, so the two runs agree about the source cache and the family); every other build-run modifier is a usage error naming what -Sw takes"),
-            ("gsa -Sy [targets…] [ranges…]", "version-sync pass only: provider queries, transactional recipe rewrites left UNCOMMITTED (review with 'git diff', then commit), the run-level disposition block (rule 18 anchoring), and the run record — a deferral or refusal leaves a record and its history row, never a bare 'nothing to do'"),
-            ("gsa -Su [targets…] [ranges…]", "update the stale set (tracked version past installed, or newest built instance if uninstalled) with NO sync pass — the committed versions build as-is (pacman -Su semantics)"),
+            ("gsa -Sl [targets…] [ranges…]", "list the selection in build order with range indices (-Bl also works)"),
+            ("gsa -Sw <targets…> [ranges…]", "fetch and verify sources only (accepts --state-dir PATH and --toolchain gcc|clang)"),
+            ("gsa -Sy [targets…] [ranges…]", "sync versions only, leaving recipe changes uncommitted"),
+            ("gsa -Su [targets…] [ranges…]", "build and install stale recipes using committed versions (no sync)"),
             ("gsa -Syu [targets…] [ranges…]", "sync first (-Sy), then build+install the stale set"),
         ],
     },
     Section {
         head: "Command surface — build-only (-B …):",
         blocks: &[
-            ("gsa -B <targets…> [ranges…]", "build the selection to archives in the build cache (PKGDEST). The ENGINE installs nothing and opens no transaction, but makepkg's own dependency check still runs through the engine's pacman shim: a house dependency that is not installed fails the build loudly (and installing it is a separate `-S`/`-U` run)"),
-            ("gsa -B --dry-run <targets…> [ranges…]", "the same plan shape for build-only"),
+            ("gsa -B <targets…> [ranges…]", "build archives to PKGDEST; workspace dependencies must already be installed"),
+            ("gsa -B --dry-run <targets…> [ranges…]", "show the build-only plan"),
         ],
     },
     Section {
         head: "Command surface — install from archives (-U …; nothing is built):",
         blocks: &[
-            ("gsa -U <ref…|archive-path…>", "install the named packages' newest complete archive sets (or the named paths) in ONE pacman -U transaction"),
+            ("gsa -U <ref…|archive-path…>", "install newest complete archive sets or explicit paths in one transaction"),
             ("gsa -Ua", "install every index-complete archive set in the workspace in one transaction (force mode)"),
             ("gsa -Uf", "force: bypass the same-version already-installed skip"),
-            ("gsa -U --leaf <ref…|archive-path…>", "install exactly the named archives: an ABI wave still prints its abi-wave rows but adds no member and refuses none"),
+            ("gsa -U --leaf <ref…|archive-path…>", "install only named archives; report the ABI wave without expanding it"),
             ("-- <pacman args…>", "forwarded verbatim to every pacman -U of an install run (-S/-U), e.g. -Ua -- --overwrite '*'"),
         ],
     },
     Section {
         head: "Maintain verbs (contract §B.7; side-car self-healing only — never /usr or /var/lib/pacman):",
         blocks: &[
-            ("gsa -Ma", "audit report: legacy paths, package drift, stale runtime artifacts, recipe-contract lints (report-only; exit 0, read the report)"),
-            ("gsa -Md [--fix]", "doctor: runtime-state reconciliation report; --fix applies the named side-car repairs"),
-            ("gsa -Mi [--prune|--backfill]", "IgnorePkg closure of the target pacman.conf: default reports drift; --prune removes stale entries, --backfill adds missing ones"),
-            ("gsa -Ml [--tail <ref>] [--keep N]", "per-package log browse/tail; --keep N is the log-retention prune"),
-            ("gsa -Mm", "shared-source mirrors: dedupe VCS clones into canonical mirrors (asks first: prints its targets and stops rc 3 without --noconfirm)"),
-            ("gsa -Mc <targets…>", "prune strength 1: src/pkg/build trees and archives of the selection"),
-            ("gsa -Mcc", "prune strength 2: every built archive in the workspace plus its VCS-revision sidecar (symlinks are never deleted or followed; prints its target list and stops rc 3 without --noconfirm)"),
-            ("gsa -Mccc", "prune strength 3: additionally pulled sources (prints its target list and stops rc 3 without --noconfirm)"),
-            ("gsa -Ms [name…] [--add|--remove <ref…>]", "named sets: list sets and members; user sets are managed in the kv store against config/sets/ (computed sets are not editable)"),
+            ("gsa -Ma", "report drift in recipes, packages and runtime state"),
+            ("gsa -Md [--fix]", "report runtime-state discrepancies; apply repairs with --fix"),
+            ("gsa -Mi [--prune|--backfill]", "report IgnorePkg drift; prune stale entries or backfill missing ones"),
+            ("gsa -Ml [--tail <ref>] [--keep N]", "browse, tail or prune package logs"),
+            ("gsa -Mm", "deduplicate VCS clones into shared mirrors"),
+            ("gsa -Mc <targets…>", "prune selected build trees and archives"),
+            ("gsa -Mcc", "prune all workspace archives and their VCS sidecars; leave symlinks intact"),
+            ("gsa -Mccc", "also prune downloaded sources"),
+            ("gsa -Ms [name…] [--add|--remove <ref…>]", "list sets and edit user-set membership"),
             ("gsa -Mw [--add|--remove <ref…>]", "world: the explicitly wanted set"),
-            ("gsa -Mh [--prune] [--show <run-id>]", "run history: list recorded runs and their continuations; --show re-renders one; --prune enforces the bounded retention"),
+            ("gsa -Mh [--prune] [--show <run-id>]", "list, show or prune run records"),
         ],
     },
     Section {
-        head: "Every other spelling answers with a 'deferred to a later phase' usage error (rc 2); nothing is stubbed with fake results.
-
-Selection targets (contract §C; exact lookup only — a typo is never auto-corrected):",
+        head: "Selection targets (contract §C; exact lookup only — a typo is never auto-corrected):",
         blocks: &[
             ("recipe id", "mesa-git"),
             ("recipe path", "packages/git/mesa-git"),
             ("case-variant id", "Mesa-Git (matched and announced)"),
-            ("snapshot alias", "<id>-snapshot for a recipe whose primary VCS source is #commit=-pinned — an input spelling only: the recipe keeps its -git id and a floating recipe is refused (rc 2, the ref it tracks is named)"),
+            ("snapshot alias", "<id>-snapshot for a recipe whose primary VCS source is commit-pinned"),
             ("pacman pkgname", "zen-browser (split outputs included; announced)"),
-            ("group / user set", "@<group> over the computed groups ({groups}), or a named user set @<set> ('gsa -Ms' manages user sets)"),
+            ("group / user set", "{groups} or @<set> (manage user sets with gsa -Ms)"),
             ("index ranges", "22..38, 22.., ..15 — 1-based over the -Sl listing of the same selection; a bare range is a usage error"),
-            ("standalone PKGBUILD", "a PKGBUILD file path, a directory holding one, or a URL of one: staged into its own one-node workspace and built there — gsa + the recipe, no project clone required (build/install/fetch/maintain runs and their --dry-run plan; never mixed with workspace references, and query/report verbs do not take them yet)"),
+            ("standalone PKGBUILD", "PKGBUILD path, containing directory or URL; use it alone for build, install, fetch or maintain"),
         ],
     },
     Section {
-        head: "A selection expands to its transitive consumers that the installed world contains (the reverse build-order closure): a recipe installed nowhere cannot link against a change, so it is not built and its prerequisites are not installed — -Sl names the consumers it skipped. --leaf suppresses the expansion and keeps exactly what you named — the ABI wave included: its abi-wave rows still print, its members join no plan.
+        head: "Selection includes transitive consumers with installed outputs. -Sl reports skipped consumers.
 
 Long modifiers (contract §B.8). A build run accepts:",
         blocks: &[
             ("--dry-run", "build-order plan without building"),
-            ("--leaf", "suppress consumer expansion — keep exactly what you named (the ABI wave stays diagnostic: no addition, no refusal)"),
-            ("--skip", "skip-if-fresh resume: claim a complete verified-fresh archive set; waiver reasons freshness-waived / abi-provider-waived ride the record rows"),
-            ("--skip-built", "claim anything already built — newest complete set at any version, no upstream probes; a recipe commit newer than the set rebuilds"),
+            ("--leaf", "keep the named selection; report the ABI wave without expanding it"),
+            ("--skip", "reuse verified-fresh archives; record freshness-waived / abi-provider-waived when applicable"),
+            ("--skip-built", "reuse the newest complete archive set without upstream probes; rebuild after a newer recipe commit"),
             ("--vcs-skip-tolerance N", "the --skip waive threshold, positive integers only; beats GSA_VCS_SKIP_TOLERANCE"),
-            ("--no-sync", "build the committed version and sums as-is: no provider query, no anchoring, no rewrite"),
+            ("--no-sync", "build with committed versions and checksums"),
             ("--allow-broken-rustc", "skip the rustc sanity probe — escape hatch for runs that compile no Rust, never a way past a real ABI mismatch"),
             ("--fail-fast", "stop dispatch on the first failure; cone-stop is the default"),
             ("--lanes N|auto", "concurrent build lanes"),
             ("--jobs N|auto", "makepkg jobs per lane"),
             ("--intensity LEVEL", "scheduler intensity profile"),
-            ("--toolchain gcc|clang", "the run's compiler family: selects which engine-owned makepkg body (/etc/gsa/<family>-makepkg.conf) every lane is given; beats a recipe's `toolchain=` topology tag, which beats the PKGBUILD inference"),
-            ("--state-dir PATH", "the state-root override (§J.3): --state-dir beats GSA_STATE_DIR beats the gsa.conf layers (/etc/gsa/gsa.conf and ~/.config/gsa/gsa.conf, user over system) beats /var/lib/gsa"),
-            ("--build-dir PATH", "the build-cache root this run's makepkg writes under (§J.2: BUILDDIR/PKGDIR/PKGDEST); --build-dir beats GSA_BUILD_DIR beats gsa.conf build_dir beats the build user's ~/.cache/gsa. A build run with neither the flag nor GSA_BUILD_DIR asks on a TTY"),
-            ("--no-build-dir-prompt", "do not ask: resolve the build root silently from GSA_BUILD_DIR, gsa.conf build_dir or the built-in default"),
+            ("--toolchain gcc|clang", "compiler family; overrides the topology tag and PKGBUILD inference"),
+            ("--state-dir PATH", "state root; precedence is flag, GSA_STATE_DIR, gsa.conf, /var/lib/gsa"),
+            ("--build-dir PATH", "build cache; precedence is flag, GSA_BUILD_DIR, gsa.conf, ~/.cache/gsa (build user)"),
+            ("--no-build-dir-prompt", "resolve the build cache without asking on a terminal"),
             ("--no-prefetch", "opt out of the advisory fetch-ahead"),
             ("--prefetch-ahead N", "fetch-ahead window, default 8"),
-            ("--color auto|always|never", "colour for the human rendering (every verb): auto is the default and colours only a terminal; --machine always wins, --color=never and NO_COLOR turn it off, --color=always turns it on even in a pipe (an explicit flag beats NO_COLOR); the machine channel is never coloured"),
+            ("--color auto|always|never", "auto colours terminals, always also colours pipes, never disables colour; --machine takes precedence"),
         ],
     },
     Section {
         head: "--skip and --skip-built are different claims and cannot combine. The side-car queries (-Qb/-Qp) accept --state-dir PATH.
 
-An install run additionally accepts --config PATH, --no-register-ignorepkg, --with PKG (-S only) and -- <pacman args…>; the -U family takes the first, second and last:",
+Install modifiers (-S and -U, with --with available only for -S):",
         blocks: &[
             (
                 "--config PATH",
@@ -200,7 +194,7 @@ An install run additionally accepts --config PATH, --no-register-ignorepkg, --wi
             ("--no-register-ignorepkg", "skip the dynamic IgnorePkg registration, loudly"),
             (
                 "--with PKG",
-                "a repo package that joins the SAME install transaction of a -S run (repeatable; --with=a,b is the same set): the only coverage an installed out-of-tree consumer of a moved soname can have. The name resolves to its current repo archive (cached, else downloaded) and its own links are verified; it joins the step whose ABI gate needs it, and a plan shows what would resolve without downloading anything",
+                "add a repo package to the -S install step that needs it for ABI compatibility (repeatable or comma-separated)",
             ),
             (
                 "-- <pacman args…>",
@@ -209,7 +203,8 @@ An install run additionally accepts --config PATH, --no-register-ignorepkg, --wi
         ],
     },
     Section {
-        head: "A maintain run (-M) accepts its verb's sub-flags (§B.7): --fix, --prune, --backfill, --tail <ref>, --keep N, --show <run-id>, --add, --remove, --noconfirm (the engine's own confirmations — -Mcc/-Mccc/-Mm — never a pacman question), and (-Mi) --config PATH; --dry-run renders a mutating verb's plan and rows without touching anything.
+        head: "For -M, --dry-run previews changes and -Mi accepts --config PATH.
+-Mcc/-Mccc/-Mm list targets and require --noconfirm on unattended runs.
 
 Deferred (parse and refuse, so the message names them): --quiet, --verbose.
 
@@ -217,7 +212,9 @@ Engine environment inputs (GSA_BUILD_JOBS is engine OUTPUT, exported per lane �
         blocks: ENV_INPUTS,
     },
     Section {
-        head: "Exit codes (contract §G): 0 success; 1 build failure under --fail-fast; 2 usage error (bad flags, unknown reference with nearest candidates, invalid range, empty selection, malformed config record, deferred spelling); 3 refusal (the run refused to start or aborted at a fail-closed gate); 4 cone-stop run with >=1 failure (the parked cone is in the run record); 5 deferral-only (>=1 deferred/parked row, no failure); 130 interrupted — the full run record (plan, outcomes, continuation) is emitted first.",
+        head: "Exit codes (contract §G)
+  0 success, 1 fail-fast build failure, 2 usage error, 3 refusal
+  4 cone-stop failure, 5 deferral only, 130 interrupted (emits the run record)",
         blocks: &[],
     },
 ];
