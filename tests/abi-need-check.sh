@@ -164,6 +164,7 @@ make_lib "$tmp/a/usr/lib" libgso.so.1 libgso.so.1
 make_bin "$tmp/a/usr/bin" consumer libgso.so.1
 make_bin "$tmp/a/usr/bin" libc-consumer libc.so.6
 make_pkgroot "$tmp/a" pkg-clean libgso.so
+printf 'depends = zlib\n' >>"$tmp/a/.PKGINFO"
 status=0
 run out err -- "$tmp/a" || status=$?
 [[ $status == 0 ]] || fail "clean batch exited $status: $err"
@@ -172,6 +173,8 @@ run out err -- "$tmp/a" || status=$?
 # ── 2. fatal: a needed soname nothing resolves ───────────────────────────
 make_bin "$tmp/b/usr/bin" broken libz.so.999
 make_pkgroot "$tmp/b" pkg-fatal
+# zlib is a DECLARED dependency, so its family's absence is a real finding.
+printf 'depends = zlib\n' >>"$tmp/b/.PKGINFO"
 status=0
 run out err -- "$tmp/b" || status=$?
 [[ $status == 1 ]] || fail "fatal case exited $status (want 1): $err"
@@ -1188,5 +1191,53 @@ out=$(printf 'sndio\n' | env "${drop_env[@]}" "$tmp/pacman" -U \
 [[ $status == 0 ]] || fail "phase 3 ran under a -U install (want 0), got $status: $out"
 [[ $out == *'sndio: skipped (local file install'* ]] || fail "missing -U stand-down note: $out"
 [[ $out != *'need-rebuild'* ]] || fail "a -U install produced rebuild rows: $out"
+
+# ── 23. hook mode: a DECLARED dependency is fatal, an undeclared one is not ─
+# The hook sees stock sync payloads whose binaries link an OPTIONAL feature's
+# provider this host never installed (hwloc's lstopo -> libcairo/libX11,
+# glibc's memusagestat -> libgd). Aborting every pacman transaction on those
+# made the host unusable, so hook mode exempts a name whose library FAMILY is
+# absent AND that the payload's own `.PKGINFO` does not declare — and it says
+# so on stderr. A declared dependency keeps the fail-closed finding, an
+# unreadable `.PKGINFO` keeps it too, and an explicit scan is untouched.
+mkdir -p "$tmp/d1/usr/bin" "$tmp/d2/usr/bin"
+make_bin "$tmp/d1/usr/bin" declared-consumer libabsent-fixture.so.9
+make_pkgroot "$tmp/d1" pkg-declared
+printf 'depends = libabsent-fixture\n' >>"$tmp/d1/.PKGINFO"
+make_bin "$tmp/d2/usr/bin" optional-consumer libunused-fixture.so.9
+make_pkgroot "$tmp/d2" pkg-optional
+tar --zstd -cf "$tmp/cache/pkg-declared-1.0.0-1-any.pkg.tar.zst" -C "$tmp/d1" .
+tar --zstd -cf "$tmp/cache/pkg-optional-1.0.0-1-any.pkg.tar.zst" -C "$tmp/d2" .
+status=0
+out=$(printf 'pkg-declared\npkg-optional\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>"$tmp/d23.err") || status=$?
+[[ $status == 1 ]] || fail "hook mode lost a DECLARED dependency (want 1), got $status: $out"
+[[ $out == *"'declared-consumer' needs 'libabsent-fixture.so.9'"* ]] ||
+    fail "a declared dependency's finding went quiet: $out"
+[[ $out != *"'optional-consumer' needs"* ]] ||
+    fail "an undeclared optional provider stayed fatal: $out"
+grep -F 'optional-consumer' "$tmp/d23.err" >/dev/null ||
+    fail "the optional exemption is silent (no stderr line): $(cat "$tmp/d23.err")"
+# Alone, the exempted package is a clean run (rc 0) — the warning is not a
+# finding, so it must not hold the transaction.
+status=0
+out=$(printf 'pkg-optional\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 0 ]] || fail "an undeclared optional provider failed the hook (want 0), got $status: $out"
+[[ $out == *'pkg-optional: clean'* ]] ||
+    fail "the exempted package did not report clean: $out"
+
+# The same payload scanned EXPLICITLY keeps the strict contract.
+status=0
+run out err -- --quiet "$tmp/d2" || status=$?
+[[ $status == 1 ]] || fail "an explicit scan exempted an absent family (want 1), got $status: $out"
+
+# An unreadable `.PKGINFO` cannot prove optionality: fail closed.
+rm -f "$tmp/d2/.PKGINFO"
+tar --zstd -cf "$tmp/cache/pkg-optional-1.0.0-1-any.pkg.tar.zst" -C "$tmp/d2" .
+status=0
+out=$(printf 'pkg-optional\n' |
+    GSA_ABI_NEED_CHECK_CACHE="$tmp/cache" "$tool" --from-names 2>/dev/null) || status=$?
+[[ $status == 1 ]] || fail "an unreadable .PKGINFO was read as 'optional' (want 1), got $status: $out"
 
 printf 'abi-need-check fixture: ok\n' 

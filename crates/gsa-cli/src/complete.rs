@@ -254,6 +254,14 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
 
     let family = family_in(preceding);
 
+    // `-Qp <archive…>` and `-Qo <path…>` are filesystem positions (§B.3,
+    // §D.1): the shell owns them, so never offer recipe ids or group names —
+    // a filename may legally begin with `@`, so this has to precede the
+    // group branch.
+    if family == Some(Family::Q) && matches!(action_in(preceding), Some('p' | 'o')) {
+        return Answer::Files;
+    }
+
     if partial.starts_with('@') {
         let mut out: Vec<(String, String)> = gsa_model::Group::ROSTER
             .into_iter()
@@ -300,12 +308,6 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
         ));
         out.retain(|(value, _)| value.starts_with(partial));
         return Answer::Values(out);
-    }
-
-    // `-Qp <archive…>` and `-Qo <path…>` are filesystem positions (§B.3,
-    // §D.1): the shell owns them, so never offer recipe ids.
-    if family == Some(Family::Q) && matches!(action_in(preceding), Some('p' | 'o')) {
-        return Answer::Files;
     }
 
     // `-U` takes archives as well as refs: a path-looking word is the shell's.
@@ -592,6 +594,13 @@ mod tests {
                 answer(&words(&[action, ""]), no_names),
                 Answer::Files,
                 "{action} offered names instead of files"
+            );
+            // A filename may begin with `@`: the path branch must precede
+            // group completion.
+            assert_eq!(
+                answer(&words(&[action, "@/tmp"]), no_names),
+                Answer::Files,
+                "{action} offered groups for a path"
             );
         }
     }

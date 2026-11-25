@@ -70,6 +70,16 @@ set -uo pipefail
 # core 4.1.0 case — without spawning gsa or pacman. A clean transaction
 # collects no stems and therefore reads no index.
 #
+# An unresolved name whose library FAMILY has no member on the host (no
+# `ld.so.cache` row, no file in the loader's default dirs) is a provider that
+# was never installed, not a soname this host moved past — BUT that is only
+# conclusive when the payload does not DECLARE it: the payload's own
+# `.PKGINFO` `depends` names the family, or the `.PKGINFO` is unreadable, and
+# the finding stays fatal. Only in the pacman HOOK mode (`--from-names`) is an
+# absent, UNdeclared family exempted, and it is never silent: the hook prints
+# an `optional` line so the operator can see what it let through. An explicit
+# scan (`archive|pkgdir`) keeps the strict unresolved-is-fatal contract.
+#
 # Exit status: 0 clean, 1 fatal findings, 2 usage or environment error.
 # --quiet suppresses the clean lines; findings are always printed.
 
@@ -773,11 +783,45 @@ findings=0
 idx=0
 declare -A missing_stems=()
 declare -a clean_lines=()
+# Per-package `.PKGINFO` `depends`, lowercased and version-stripped: the
+# EVIDENCE that an absent library family is a broken dependency rather than
+# an optional feature whose provider was never installed.
+declare -A hard_deps=()
+declare -A deps_known=()
 load_abi_exclusions
+
+# family_declared PKG STEM — does the payload DEPEND on this library family?
+# The dependency list names packages (`zlib`, `libx11`, `cairo`), so the
+# comparison normalises both sides: drop the `.so*` suffix and a leading
+# `lib`. An unreadable `.PKGINFO` is "declared": rule 71 and the fail-closed
+# default both forbid reading an unknown as an absent.
+family_declared() {
+    local pkg=$1 stem=$2 want dep name
+    [[ -n ${deps_known[$pkg]:-} ]] || return 0
+    want=${stem,,}
+    want=${want%%.so*}
+    want=${want#lib}
+    for dep in ${hard_deps[$pkg]:-}; do
+        name=${dep#lib}
+        [[ $dep == "${stem,,}" || $name == "$want" || $name == "$want"-* ]] && return 0
+    done
+    return 1
+}
 
 for root in "${roots[@]}"; do
     pkg=${pkgnames[$idx]}
     blob=${factblobs[$idx]}
+    if [[ -r $root/.PKGINFO ]]; then
+        deps_known[$pkg]=1
+        dep=''
+        while IFS= read -r dep; do
+            dep=${dep%%[<>=]*}
+            dep=${dep%,*}
+            dep=${dep,,}
+            dep=${dep//[[:space:]]/}
+            [[ -n $dep ]] && hard_deps[$pkg]+=" $dep"
+        done < <(sed -n 's/^depends = //p' "$root/.PKGINFO" 2>/dev/null)
+    fi
     idx=$((idx + 1))
     pkg_findings=0
     pkg_needed=0
@@ -906,7 +950,13 @@ for root in "${roots[@]}"; do
                 # path-style name is still the vanished-provider case, and a
                 # family the transaction itself provides stays fatal.
                 if ((exempt_absent)) && [[ $needed != /* ]] && ((provide_match == 0)) &&
-                    ((own_family == 0)) && ! host_stem_present "$stem"; then
+                    ((own_family == 0)) && ! host_stem_present "$stem" &&
+                    ! family_declared "$pkg" "$stem"; then
+                    # Undeclared and absent: an optional feature whose provider
+                    # was never installed (hwloc's lstopo -> cairo/X11, glibc's
+                    # memusagestat -> libgd). Never silent: the hook names it.
+                    printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (optional: no installed provider, and the package does not declare it)\n" \
+                        "$pkg" "${relpath##*/}" "$needed" >&2
                     continue
                 fi
                 printf "abi-need-check: %s: '%s' needs '%s' — no file resolves it (fatal)\n" \

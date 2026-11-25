@@ -565,7 +565,27 @@ fn run_build_with(
     //    no prerequisite: a run whose every node is pre-settled (skip /
     //    defer) spawns no makepkg and must not refuse.
     if pre.len() < selection.listed.len() {
-        if let Some(tool) = gsa_build::prereq::missing() {
+        // The families this run can build with: the override wins, then each
+        // selected record's declared `toolchain=` tag, then the default. The
+        // linker prerequisite is judged against THEIR effective configuration,
+        // never the shipped body alone (a site that links with lld must not be
+        // refused for a missing mold).
+        let override_family = gsa_model::toolchain::override_value();
+        let default_family = override_family.unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT);
+        let mut families: Vec<gsa_model::toolchain::Toolchain> = Vec::new();
+        let mut push = |family: gsa_model::toolchain::Toolchain| {
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        };
+        push(default_family);
+        for (_, id) in &selection.listed {
+            let declared = graph
+                .index_of(id.as_str())
+                .and_then(|idx| graph.record(idx).toolchain());
+            push(override_family.or(declared).unwrap_or(default_family));
+        }
+        if let Some(tool) = gsa_build::prereq::missing(&families) {
             let _ = writeln!(
                 err,
                 "gsa: this host cannot start a build: `{}` is not on PATH — {} — install it (pacman -S {}){}",
