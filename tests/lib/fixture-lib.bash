@@ -35,7 +35,7 @@
 # introduces it (docs/gsa-contract.md §D.2).
 
 # Direct fixtures also keep synthetic measurements out of the user's history.
-export GSA_BUILD_HISTORY="${GSA_BUILD_HISTORY:-off}"
+export GSA_BUILD_HISTORY=off
 
 # Repo root from this file's own location: tests/lib/fixture-lib.bash → repo.
 _gsa_lib_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

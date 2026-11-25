@@ -219,11 +219,13 @@ pub fn answer(words: &[String], names: impl FnOnce() -> Names) -> Answer {
         &words[..words.len() - 1]
     };
 
-    if preceding.len() == 1 && preceding[0] == "-M" && "--export-build-history".starts_with(partial)
+    if preceding.len() == 1
+        && preceding[0] == "-M"
+        && crate::args::EXPORT_BUILD_HISTORY_FLAG.starts_with(partial)
     {
         return Answer::Values(vec![(
-            "--export-build-history".into(),
-            "export the build user's resource samples".into(),
+            crate::args::EXPORT_BUILD_HISTORY_FLAG.into(),
+            crate::args::EXPORT_BUILD_HISTORY_DESCRIPTION.into(),
         )]);
     }
 

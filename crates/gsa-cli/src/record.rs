@@ -91,7 +91,7 @@ pub const NOT_MIRRORED: &[&str] = &[
     "--add",
     "--remove",
     "--noconfirm",
-    "--export-build-history",
+    crate::args::EXPORT_BUILD_HISTORY_FLAG,
     // Parse-deferred globals (§B.8) — absent from any live spelling, so a
     // continuation must never carry them either.
     "--quiet",
@@ -1974,7 +1974,7 @@ mod tests {
             "--add",
             "--remove",
             "--noconfirm",
-            "--export-build-history",
+            crate::args::EXPORT_BUILD_HISTORY_FLAG,
             "--build-history-user",
         ] {
             assert!(

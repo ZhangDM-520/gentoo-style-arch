@@ -10,7 +10,7 @@ fail() { printf '%s\n%s\n' "$1" "${FIXTURE_OUTPUT:-}" >&2; exit 1; }
 
 export GSA_TEST_ENGINE=gsa
 make_workspace "$scratch" auto auto medium
-add_package "$scratch" p1
+add_package "$scratch" gsa-history-fixture-unique
 export GSA_BUILD_HISTORY="$scratch/history.tsv"
 export GSA_CPU_THREADS=12 GSA_MEMORY_GIB=12
 export PATH="$scratch/bin:$PATH"
@@ -21,8 +21,12 @@ set -eu
 printf "fixture makepkg started\n"
 sleep "${GSA_FAKE_BUILD_SECONDS:-0}"
 python3 -c 'memory = bytearray(64 * 1024 * 1024); memory[::4096] = bytes([1]) * (len(memory) // 4096)'
-case ${GSA_FAKE_FAIL_PACKAGE:-} in p1) exit 1 ;; esac
-: >p1-1.0.0-1-any.pkg.tar.zst
+case ${GSA_FAKE_FAIL_PACKAGE:-} in gsa-history-fixture-unique) exit 1 ;; esac
+if [[ -e .leave-worker ]]; then
+    sleep 30 &
+    printf '%s\n' "$!" >.worker-pid
+fi
+: >gsa-history-fixture-unique-1.0.0-1-any.pkg.tar.zst
 STUB
 chmod +x "$scratch/bin/makepkg"
 
@@ -31,7 +35,7 @@ run_engine_user "$scratch" -M --export-build-history
     fail "export of absent history must be empty and read-only"
 run_engine_user "$scratch" --complete -M --export-build
 [[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == --export-build-history* ]] || fail "export command completion"
-run_engine_user "$scratch" -B --dry-run --leaf --state-dir "$scratch/dry" p1
+run_engine_user "$scratch" -B --dry-run --leaf --state-dir "$scratch/dry" gsa-history-fixture-unique
 [[ $FIXTURE_RC == 0 && ! -e $GSA_BUILD_HISTORY ]] || fail "dry run wrote history"
 
 # Two independent helper processes must merge without losing either key.
@@ -48,7 +52,7 @@ wait "$second_merger"
 
 # A custom history path cannot alias a lock inode.
 candidate=${GSA_TEST_GSA_BIN:-gsa}
-sample=$(printf 'gsa-build-history-v1\np1\t%s\tgcc\t1\t4096\t1\t1\n' "$(uname -m)")
+sample=$(printf 'gsa-build-history-v1\ngsa-history-fixture-unique\t%s\tgcc\t1\t4096\t1\t1\n' "$(uname -m)")
 GSA_BUILD_HISTORY="$scratch/build-history.lock" "$candidate" \
     --build-history-user merge <<<"$sample" || fail "custom filename collided with the old lock"
 [[ $(cat "$scratch/build-history.lock") == "$sample" ]] || fail "custom history was not saved"
@@ -71,12 +75,18 @@ GSA_BUILD_HISTORY="$scratch/reserved.gsa-lock" run_engine_user "$scratch" -M --e
         fail "history did not report bounded contention"
 )
 
-GSA_BUILD_HISTORY=off run_engine "$scratch" -B --leaf --state-dir "$scratch/off" p1
-[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=p1 core=0 jobs=2'* && ! -e $GSA_BUILD_HISTORY ]] ||
+GSA_BUILD_HISTORY=off run_engine "$scratch" -B --leaf --state-dir "$scratch/off" gsa-history-fixture-unique
+[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=gsa-history-fixture-unique core=0 jobs=2'* && ! -e $GSA_BUILD_HISTORY ]] ||
     fail "baseline fallback with history disabled"
 
-run_engine "$scratch" -B --leaf --state-dir "$scratch/one" p1
-[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=p1 core=0 jobs=2'* ]] || fail "initial baseline assignment"
+seeded="$scratch/seeded.tsv"
+printf '%s\ngsa-history-fixture-unique\t%s\tgcc\t2\t67108864\t1\t1\n' gsa-build-history-v1 "$(uname -m)" >"$seeded"
+GSA_BUILD_HISTORY="$seeded" run_engine "$scratch" -B --leaf --state-dir "$scratch/seeded" gsa-history-fixture-unique
+[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=gsa-history-fixture-unique core=0 jobs=4'* ]] ||
+    fail "existing user history did not affect the worker count"
+
+run_engine "$scratch" -B --leaf --state-dir "$scratch/one" gsa-history-fixture-unique
+[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=gsa-history-fixture-unique core=0 jobs=2'* ]] || fail "initial baseline assignment"
 if [[ ! -f $GSA_BUILD_HISTORY ]]; then
     [[ $FIXTURE_OUTPUT == *'lane_accounting_unavailable'* ]] || fail "successful build did not sample its scope"
     printf 'scheduler history fixture: accounting unavailable, fallback PASS\n'
@@ -84,31 +94,45 @@ if [[ ! -f $GSA_BUILD_HISTORY ]]; then
 fi
 
 [[ -O $GSA_BUILD_HISTORY ]] || fail "history is not owned by the build user"
-awk -F '\t' 'NR==2 { valid=$1=="p1" && $4==2 && $5>=67108864 && $6>0 && $7>0 }
+awk -F '\t' 'NR==2 { valid=$1=="gsa-history-fixture-unique" && $4==2 && $5>=67108864 && $6>0 && $7>0 }
     END { exit !(NR==2 && valid) }' "$GSA_BUILD_HISTORY" ||
     fail "history must account for the memory-using descendant"
 run_engine_user "$scratch" -M --export-build-history
 [[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == "$(cat "$GSA_BUILD_HISTORY")" ]] || fail "export differs from user history"
 
-run_engine "$scratch" -B --leaf --state-dir "$scratch/two" p1
-[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=p1 core=0 jobs=4'* ]] || fail "learned worker assignment"
+run_engine "$scratch" -B --leaf --state-dir "$scratch/two" gsa-history-fixture-unique
+[[ $FIXTURE_RC == 0 && $FIXTURE_OUTPUT == *'pkg=gsa-history-fixture-unique core=0 jobs=4'* ]] || fail "learned worker assignment"
 before=$(cat "$GSA_BUILD_HISTORY")
-GSA_FAKE_FAIL_PACKAGE=p1 run_engine "$scratch" -B --leaf --state-dir "$scratch/fail" p1
+touch "$scratch/packages/gsa-history-fixture-unique/.leave-worker"
+run_engine "$scratch" -B --leaf --state-dir "$scratch/leftover" gsa-history-fixture-unique
+rm "$scratch/packages/gsa-history-fixture-unique/.leave-worker"
+worker=$(cat "$scratch/packages/gsa-history-fixture-unique/.worker-pid")
+# A killed, reparented worker can remain a zombie until its parent reaps it.
+if kill -0 "$worker" 2>/dev/null; then
+    worker_state=$(ps -o stat= -p "$worker" || :)
+    [[ -z $worker_state || $worker_state == Z* ]] || {
+        kill "$worker"
+        fail "accounting scope left a live worker"
+    }
+fi
+[[ $FIXTURE_RC == 0 && $(cat "$GSA_BUILD_HISTORY") == "$before" ]] || fail "leftover worker polluted history"
+
+GSA_FAKE_FAIL_PACKAGE=gsa-history-fixture-unique run_engine "$scratch" -B --leaf --state-dir "$scratch/fail" gsa-history-fixture-unique
 [[ $FIXTURE_RC == 4 && $(cat "$GSA_BUILD_HISTORY") == "$before" ]] || fail "a failed build polluted history"
 (
-    GSA_FAKE_BUILD_SECONDS=10 run_engine "$scratch" -B --leaf --state-dir "$scratch/interrupted" p1
+    GSA_FAKE_BUILD_SECONDS=10 run_engine "$scratch" -B --leaf --state-dir "$scratch/interrupted" gsa-history-fixture-unique
     printf '%s\n' "$FIXTURE_RC" >"$scratch/interrupt-rc"
     printf '%s\n' "$FIXTURE_OUTPUT" >"$scratch/interrupt-output"
 ) &
 interrupted_run=$!
 for ((attempt=0; attempt<200; attempt++)); do
-    started=$(find "$scratch/interrupted/runs" -name 'p1.started' -print -quit 2>/dev/null || :)
-    if [[ -n $started ]] && grep -q "fixture makepkg started" "$scratch/interrupted/logs/p1.log"; then
+    started=$(find "$scratch/interrupted/runs" -name 'gsa-history-fixture-unique.started' -print -quit 2>/dev/null || :)
+    if [[ -n $started ]] && grep -q "fixture makepkg started" "$scratch/interrupted/logs/gsa-history-fixture-unique.log"; then
         break
     fi
     sleep .05
 done
-[[ -n $started ]] && grep -q "fixture makepkg started" "$scratch/interrupted/logs/p1.log" ||
+[[ -n $started ]] && grep -q "fixture makepkg started" "$scratch/interrupted/logs/gsa-history-fixture-unique.log" ||
     fail "interrupted build never started"
 supervisor=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "${started%/*}/run.open")
 [[ $supervisor =~ ^[1-9][0-9]*$ ]] || fail "missing supervisor PID"

@@ -357,26 +357,8 @@ impl Scope {
             .file_name()
             .is_some_and(|name| name == "gsa-supervisor")
         {
-            for control in [
-                "memory.max",
-                "memory.high",
-                "memory.swap.max",
-                "pids.max",
-                "cpu.max",
-            ] {
-                let value = fs::read_to_string(previous.join(control));
-                match value {
-                    Ok(value) if value.split_whitespace().next() == Some("max") => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => return None,
-                }
-            }
-            for control in ["cpuset.cpus", "cpuset.mems", "io.max"] {
-                match fs::read_to_string(previous.join(control)) {
-                    Ok(value) if value.trim().is_empty() => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => return None,
-                }
+            if !Self::can_leave_supervisor(&previous) {
+                return None;
             }
             previous.parent()?
         } else {
@@ -394,6 +376,39 @@ impl Scope {
             path,
             started: Instant::now(),
         })
+    }
+
+    fn can_leave_supervisor(path: &Path) -> bool {
+        let io_weight = match fs::read_to_string(path.join("io.weight")) {
+            Ok(value) => value.trim() == "default 100",
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+        io_weight
+            && [
+                ("memory.max", Some("max")),
+                ("memory.high", Some("max")),
+                ("memory.min", Some("0")),
+                ("memory.low", Some("0")),
+                ("memory.swap.max", Some("max")),
+                ("memory.zswap.max", Some("max")),
+                ("memory.zswap.writeback", Some("1")),
+                ("pids.max", Some("max")),
+                ("cpu.max", Some("max")),
+                ("cpu.uclamp.max", Some("max")),
+                ("cpu.uclamp.min", Some("0.00")),
+                ("cpu.weight", Some("100")),
+                ("io.latency", None),
+                ("cpuset.cpus", None),
+                ("cpuset.mems", None),
+                ("io.max", None),
+            ]
+            .into_iter()
+            .all(|(control, unrestricted)| {
+                match fs::read_to_string(path.join(control)) {
+                    Ok(value) => value.split_whitespace().next() == unrestricted,
+                    Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+                }
+            })
     }
 
     pub fn path(pid: u32) -> Option<PathBuf> {
@@ -422,20 +437,47 @@ impl Scope {
             elapsed_usec,
         })
     }
+
+    fn finish(self, jobs: u32, succeeded: bool) -> Result<Option<Sample>, String> {
+        let result = || -> std::io::Result<Option<Sample>> {
+            let events = fs::read_to_string(self.path.join("cgroup.events"))?;
+            let empty = events.lines().any(|line| line == "populated 0");
+            let sample = (succeeded && empty).then(|| self.sample(jobs)).flatten();
+            if !empty {
+                fs::write(self.path.join("cgroup.kill"), b"1")?;
+            }
+            let deadline = Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                match fs::remove_dir(&self.path) {
+                    Ok(()) => break,
+                    Err(error)
+                        if !empty
+                            && error.kind() == std::io::ErrorKind::ResourceBusy
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(sample)
+        };
+        result().map_err(|error| format!("lane accounting scope {}: {error}", self.path.display()))
+    }
 }
 
-pub fn wait(mut child: Child, scope: Option<Scope>, jobs: u32) -> (Option<i32>, Option<Sample>) {
+pub fn wait(
+    mut child: Child,
+    scope: Option<Scope>,
+    jobs: u32,
+) -> (Option<i32>, Result<Option<Sample>, String>) {
     use std::os::unix::process::ExitStatusExt;
-    let sample = scope.as_ref().and_then(|scope| {
-        let mut marker = [0];
-        child.stdout.take()?.read_exact(&mut marker).ok()?;
-        (marker == [1]).then(|| scope.sample(jobs)).flatten()
-    });
-    drop(child.stdin.take());
-    let signal = child.wait().ok().and_then(|status| status.signal());
-    if let Some(scope) = scope {
-        let _ = fs::remove_dir(scope.path);
-    }
+    let status = child.wait().ok();
+    let signal = status.as_ref().and_then(std::process::ExitStatus::signal);
+    let sample = match scope {
+        Some(scope) => scope.finish(jobs, status.is_some_and(|status| status.success())),
+        None => Ok(None),
+    };
     (signal, sample)
 }
 
@@ -448,6 +490,22 @@ mod tests {
             bytes,
             max_workers: u32::MAX,
         }
+    }
+
+    #[test]
+    fn supervisor_zswap_controls_keep_lanes_in_the_leaf() {
+        let dir = std::env::temp_dir().join(format!("gsa-zswap-test-{}", std::process::id()));
+        fs::create_dir(&dir).unwrap();
+        assert!(Scope::can_leave_supervisor(&dir));
+        for (name, unrestricted) in [("memory.zswap.max", "max"), ("memory.zswap.writeback", "1")] {
+            let control = dir.join(name);
+            fs::write(&control, unrestricted).unwrap();
+            assert!(Scope::can_leave_supervisor(&dir));
+            fs::write(&control, "0").unwrap();
+            assert!(!Scope::can_leave_supervisor(&dir), "ignored {name}");
+            fs::remove_file(control).unwrap();
+        }
+        fs::remove_dir(dir).unwrap();
     }
 
     #[test]

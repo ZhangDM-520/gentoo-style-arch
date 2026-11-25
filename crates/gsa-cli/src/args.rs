@@ -76,6 +76,11 @@ pub fn action_is_terminal(family: Family, letter: char) -> bool {
         .any(|action| action.family == family && action.letter == letter && action.terminal)
 }
 
+pub const EXPORT_BUILD_HISTORY_COMMAND: &str = "gsa -M --export-build-history";
+pub const EXPORT_BUILD_HISTORY_FLAG: &str =
+    EXPORT_BUILD_HISTORY_COMMAND.split_at("gsa -M ".len()).1;
+pub const EXPORT_BUILD_HISTORY_DESCRIPTION: &str = "export your build resource samples";
+
 /// One long modifier the action pass accepts (contract §B.8).
 ///
 /// This table is the ROSTER: `parse` looks a `--name` up here before it
@@ -745,10 +750,10 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     if first == "-M"
         && args
             .get(1)
-            .is_some_and(|arg| arg == "--export-build-history")
+            .is_some_and(|arg| arg == EXPORT_BUILD_HISTORY_FLAG)
     {
         if args.len() != 2 {
-            return Err("-M --export-build-history takes no arguments".into());
+            return Err(format!("-M {EXPORT_BUILD_HISTORY_FLAG} takes no arguments"));
         }
         return Ok(Parsed::ExportBuildHistory);
     }

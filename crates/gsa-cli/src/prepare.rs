@@ -1468,21 +1468,30 @@ pub(crate) fn selected_toolchain(
     record: &gsa_model::TopologyRecord,
     recipe_dir: &Path,
 ) -> Result<gsa_model::toolchain::Toolchain, String> {
-    let pkgbuild = recipe_dir.join("PKGBUILD");
-    let source = std::fs::read_to_string(&pkgbuild)
-        .map_err(|e| format!("cannot read {}: {e}", pkgbuild.display()))?;
+    Ok(
+        resolve_toolchain(pkg, record, recipe_dir)?.unwrap_or_else(|| {
+            gsa_model::toolchain::override_value()
+                .or_else(|| record.toolchain())
+                .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT)
+        }),
+    )
+}
+
+/// An ambiguous recipe has no resolved family until an override is supplied.
+pub(crate) fn resolve_toolchain(
+    pkg: &str,
+    record: &gsa_model::TopologyRecord,
+    recipe_dir: &Path,
+) -> Result<Option<gsa_model::toolchain::Toolchain>, String> {
+    let source = gsa_model::read::required(&recipe_dir.join("PKGBUILD"))?;
     Ok(gsa_recipe::toolchain::select(
         pkg,
         gsa_model::toolchain::override_value(),
         record.toolchain(),
         &source,
     )
-    .map(|selected| selected.toolchain)
-    .unwrap_or_else(|_| {
-        gsa_model::toolchain::override_value()
-            .or_else(|| record.toolchain())
-            .unwrap_or(gsa_model::toolchain::Toolchain::DEFAULT)
-    }))
+    .ok()
+    .map(|selected| selected.toolchain))
 }
 
 #[cfg(test)]

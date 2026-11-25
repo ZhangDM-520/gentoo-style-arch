@@ -2128,7 +2128,7 @@ its first ready lane with one worker when the estimate exceeds the budget.
 Explicit normal-job limits still apply. Format-2 job scalars describe the
 baseline; lane-start reports the assigned count. History is advisory,
 snapshotted at run start, and separate from run records and privileged
-state. Successful measured lanes merge their usage into build-user history.
+state. Successful measured lanes merge their usage into build-user history. When an accounting scope remains populated after its lane exits, the scheduler attempts to terminate its remaining processes and discards the sample. Cleanup failures are reported and stop further dispatch.
 See [portability](portability.md) for measurement, precedence and fallback.
 
 ### K.3 Transactions and signals

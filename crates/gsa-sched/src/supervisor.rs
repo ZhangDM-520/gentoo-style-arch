@@ -354,7 +354,7 @@ enum Event {
         /// The signal that killed the lane child, when its exit status says
         /// so (`None`: it exited on its own, or wait(2) had no signal).
         killed_by: Option<i32>,
-        sample: Option<Sample>,
+        sample: Result<Option<Sample>, String>,
     },
     FetchDone {
         index: usize,
@@ -734,9 +734,7 @@ fn spawn_lane(
         .stderr(Stdio::null())
         .process_group(0);
     if accounting {
-        cmd.env(resources::ACCOUNT_ENV, "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped());
+        cmd.env(resources::ACCOUNT_ENV, "1").stdin(Stdio::piped());
     }
     // §B.11: the run's --toolchain rides to the lane as engine output, the
     // same way GSA_BUILD_JOBS does, so the lane child resolves the family a
@@ -1526,8 +1524,8 @@ pub fn run(
                         ctx.drain_signals(&rx, &tx, &mut buffered);
                         if ctx.interrupted.is_some() {
                             drop(child.stdin.take());
-                        } else if let Some(input) = child.stdin.as_mut() {
-                            let _ = input.write_all(&[u8::from(scope.is_some())]);
+                        } else if let Some(mut input) = child.stdin.take() {
+                            let _ = input.write_all(&[1]);
                         }
                     }
                     let waiter_tx = tx.clone();
@@ -1674,6 +1672,12 @@ pub fn run(
                     .unwrap_or(false);
                 let settled_code: Option<gsa_model::LaneOutcome>;
                 let result = reap_result(ctx.setup, index, ctx.err);
+                let sample = sample.unwrap_or_else(|error| {
+                    ctx.emit(&SupEvent::Diagnostic(format!("build history: {error}")));
+                    ctx.machine.stop_dispatch();
+                    ctx.dispatch_halted = true;
+                    None
+                });
                 if !was_interrupted
                     && killed_by.is_none()
                     && result

@@ -132,7 +132,7 @@ run as the build user, and -Mm requires the build user (§B.10).",
     Section {
         head: "Maintain verbs (contract §B.7; side-car self-healing only — never /usr or /var/lib/pacman):",
         blocks: &[
-            ("gsa -M --export-build-history", "export your build resource samples"),
+            (crate::args::EXPORT_BUILD_HISTORY_COMMAND, crate::args::EXPORT_BUILD_HISTORY_DESCRIPTION),
             ("gsa -Ma", "report drift in recipes, packages and runtime state"),
             ("gsa -Md [--fix]", "report runtime-state discrepancies; apply repairs with --fix"),
             ("gsa -Mi [--prune|--backfill]", "report IgnorePkg drift; prune stale entries or backfill missing ones"),

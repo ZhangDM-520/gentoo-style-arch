@@ -376,6 +376,7 @@ if want c; then
         runlog="$fixture/c/run.log"
         export GSA_FAKE_STALL_PACKAGE=slow
         export GSA_FAKE_RELEASE_FILE="$release"
+        export GSA_CPU_THREADS=24 GSA_MEMORY_GIB=24
         (
             cd "$ws"
             # W5 §B.10: a direct engine invocation must model run_engine's

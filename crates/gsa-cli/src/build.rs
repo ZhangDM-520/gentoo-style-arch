@@ -1771,24 +1771,13 @@ fn history_key(
     if !gsa_sched::resources::History::enabled() {
         return None;
     }
-    let recipe = match gsa_model::read::required(&root.join(&record.path).join("PKGBUILD")) {
-        Ok(recipe) => recipe,
+    match prepare::resolve_toolchain(id, record, &root.join(&record.path)) {
+        Ok(family) => family.map(|family| gsa_sched::resources::Key::new(id, family.as_str())),
         Err(error) => {
             let _ = writeln!(err, "gsa: build history: {error}");
-            return None;
+            None
         }
-    };
-    let selected = gsa_recipe::toolchain::select(
-        id,
-        gsa_model::toolchain::override_value(),
-        record.toolchain(),
-        &recipe,
-    )
-    .ok()?;
-    Some(gsa_sched::resources::Key::new(
-        id,
-        selected.toolchain.as_str(),
-    ))
+    }
 }
 
 /// The scheduling nodes: the selection in canonical build order, with

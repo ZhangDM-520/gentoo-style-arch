@@ -73,8 +73,8 @@ and assigned workers. The estimate is the highest peak bytes per assigned
 worker among the five latest samples for the same recipe ID, architecture,
 and toolchain family. The worker count can grow to twice the largest
 recorded count. Each run uses the history it read at startup. If accounting
-is unavailable, builds continue using available history and baselines. Accounting
-uses a child of the caller’s cgroup when memory accounting is available there.
+is unavailable, builds continue using available history and baselines. If a lane leaves processes in its accounting scope, the scheduler terminates
+them and discards that sample. Accounting uses a child of the caller’s cgroup when memory accounting is available there.
 A systemd unit can also use `Delegate=memory` and
 `DelegateSubgroup=gsa-supervisor` with the memory controller enabled for the
 unit’s children. Apply resource controls to the delegated unit so they cover
